@@ -15,6 +15,7 @@
 //! [`RibbonHost`] trait implementation, the same pattern `menu::MenuHost`
 //! uses.
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RibbonMode {
     Draft,
     Edit,
