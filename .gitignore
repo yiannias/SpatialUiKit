@@ -1,2 +1,5 @@
 /target
 Cargo.lock
+*.dwl
+*.dwl2
+*.bak
