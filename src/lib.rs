@@ -5,3 +5,4 @@
 //! on either app's domain crates.
 
 pub mod menu;
+pub mod passive_panel;
