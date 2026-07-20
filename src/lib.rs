@@ -6,3 +6,4 @@
 
 pub mod menu;
 pub mod passive_panel;
+pub mod ribbon;
