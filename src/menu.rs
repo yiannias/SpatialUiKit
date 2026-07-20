@@ -177,11 +177,19 @@ impl<A, Ctx> MenuNode<A, Ctx> {
 /// can't provide generically: icon lookup/drawing and shortcut-label
 /// resolution (command-registry override lookups, platform-specific
 /// reformatting like macOS's ⌘/⌥/⇧ glyphs).
-pub trait MenuHost<Ctx> {
+///
+/// Deliberately **not** generic over `Ctx`: a `MenuHost` is built fresh each
+/// frame by the caller (so it can freely borrow that frame's icon atlas /
+/// key-override table), whereas `Ctx` itself must stay an owned, lifetime-free
+/// type so a `Vec<MenuNode<A, Ctx>>` can be cached once (e.g. behind a
+/// `LazyLock`) across frames -- see each consuming app's `menu_tree` module
+/// for why that caching matters (id/label leaking happens once, not per
+/// frame).
+pub trait MenuHost {
     /// Resolve the display string for an item's shortcut, given its
     /// `command_id` (registry-backed, override-aware) or `literal_shortcut`
     /// (placeholder string) -- exactly one is normally `Some`.
-    fn shortcut_label(&self, ctx: &Ctx, command_id: Option<&str>, literal_shortcut: Option<&str>) -> String;
+    fn shortcut_label(&self, command_id: Option<&str>, literal_shortcut: Option<&str>) -> String;
 
     /// Draw one menu item's row (icon + label + shortcut, left-to-right) and
     /// return its `Response`, respecting `enabled`.
@@ -206,7 +214,7 @@ fn colorize(label: &str, color: &MenuColor) -> egui::RichText {
 fn render_node<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
-    host: &impl MenuHost<Ctx>,
+    host: &impl MenuHost,
     node: &MenuNode<A, Ctx>,
     actions: &mut Vec<A>,
 ) {
@@ -266,7 +274,7 @@ fn render_node<A: Clone, Ctx>(
                 return;
             }
 
-            let shortcut = host.shortcut_label(ctx, *command_id, *literal_shortcut);
+            let shortcut = host.shortcut_label(*command_id, *literal_shortcut);
             let resp = host.item_button(ui, *enabled, *icon, label, &shortcut);
             let resp = if let Some(hint) = disabled_hint {
                 resp.on_disabled_hover_text(*hint)
@@ -292,7 +300,7 @@ pub fn render_menu_bar<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     tree: &[MenuNode<A, Ctx>],
     ctx: &Ctx,
-    host: &impl MenuHost<Ctx>,
+    host: &impl MenuHost,
 ) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
 
