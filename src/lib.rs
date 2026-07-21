@@ -4,6 +4,7 @@
 //! app-supplied action type and context type, and this crate never depends
 //! on either app's domain crates.
 
+pub mod dock;
 pub mod menu;
 pub mod passive_panel;
 pub mod ribbon;
