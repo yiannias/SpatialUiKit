@@ -102,6 +102,13 @@ pub enum FieldControl<A, Ctx> {
         on_change: Box<dyn Fn(String) -> A + Send + Sync>,
         on_browse: Box<dyn Fn(String) -> A + Send + Sync>,
     },
+    /// A single button with no editable value of its own -- for a field row
+    /// that navigates elsewhere (e.g. "open the full keybindings panel")
+    /// rather than reading/writing a setting.
+    Action {
+        button_label: &'static str,
+        on_click: Box<dyn Fn(&Ctx) -> A + Send + Sync>,
+    },
 }
 
 impl<A, Ctx> Field<A, Ctx> {
@@ -162,6 +169,22 @@ impl<A, Ctx> Field<A, Ctx> {
                 value: Box::new(value),
                 options,
                 on_change: Box::new(on_change),
+            },
+        ))
+    }
+
+    pub fn action(
+        id: &'static str,
+        label: &'static str,
+        button_label: &'static str,
+        on_click: impl Fn(&Ctx) -> A + Send + Sync + 'static,
+    ) -> SettingsNode<A, Ctx> {
+        SettingsNode::Field(Self::base(
+            id,
+            label,
+            FieldControl::Action {
+                button_label,
+                on_click: Box::new(on_click),
             },
         ))
     }
@@ -430,6 +453,11 @@ fn render_field_row<A: Clone, Ctx>(
                             actions.push(on_browse(picked));
                         }
                     });
+                }
+                FieldControl::Action { button_label, on_click } => {
+                    if ui.button(*button_label).clicked() {
+                        actions.push(on_click(ctx));
+                    }
                 }
             }
 
