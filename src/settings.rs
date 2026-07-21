@@ -212,24 +212,72 @@ pub trait SettingsHost {
     fn browse_path(&self, ui: &mut egui::Ui, current: &str) -> Option<String>;
 }
 
+/// Search box for the nav pane, pinned above the tree per the sketch's "🔍
+/// Search" box. The app owns `query`'s storage (e.g. `egui::Memory`'s
+/// per-frame temp data, keyed by a stable `Id` -- no persistence to disk
+/// needed, it's ephemeral UI state); this just draws the widget. Feed the
+/// same string into [`render_nav`]'s `filter` param.
+pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
+    ui.horizontal(|ui| {
+        ui.label("\u{1f50d}");
+        ui.add(egui::TextEdit::singleline(query).hint_text("Search").desired_width(f32::INFINITY));
+    });
+}
+
+fn label_contains(label: &str, filter_lower: &str) -> bool {
+    label.to_ascii_lowercase().contains(filter_lower)
+}
+
+/// Whether `node` or any of its descendants (by label) matches `filter_lower`
+/// (already-lowercased) -- used by [`render_nav`] to decide whether a
+/// `Section` row (or one of its ancestors) should still show while filtering.
+fn node_matches<A, Ctx>(node: &SettingsNode<A, Ctx>, filter_lower: &str) -> bool {
+    match node {
+        SettingsNode::Section { label, children, .. } | SettingsNode::Group { label, children } => {
+            label_contains(label, filter_lower) || children.iter().any(|c| node_matches(c, filter_lower))
+        }
+        SettingsNode::Field(f) => label_contains(f.label, filter_lower),
+    }
+}
+
 /// Render the left-hand navigation outline for a settings tree: one row per
 /// `Section` (nested sections indent), skipping `Group`/`Field` entries so
 /// the nav stays a table of contents rather than mirroring every control.
 /// Returns the `id` of the section the user clicked this frame, if any --
 /// the caller feeds that into [`render_content`]'s `scroll_to` to jump the
 /// content pane there.
+///
+/// `filter`: when non-empty, a `Section` row (and its subtree) only shows if
+/// its own label or some descendant's label contains it (case-insensitive).
+/// The content pane is deliberately *not* filtered the same way -- it stays
+/// the sketch's single continuous document; search only narrows which nav
+/// rows you can jump from, matching the sketch's own "search box narrows
+/// the tree" framing rather than hiding content.
 pub fn render_nav<A, Ctx>(
     ui: &mut egui::Ui,
     tree: &[SettingsNode<A, Ctx>],
+    filter: &str,
+) -> Option<&'static str> {
+    let filter_lower = filter.to_ascii_lowercase();
+    render_nav_filtered(ui, tree, &filter_lower)
+}
+
+fn render_nav_filtered<A, Ctx>(
+    ui: &mut egui::Ui,
+    tree: &[SettingsNode<A, Ctx>],
+    filter_lower: &str,
 ) -> Option<&'static str> {
     let mut clicked = None;
     for node in tree {
         if let SettingsNode::Section { id, label, children } = node {
+            if !filter_lower.is_empty() && !node_matches(node, filter_lower) {
+                continue;
+            }
             if ui.selectable_label(false, *label).clicked() {
                 clicked = Some(*id);
             }
             ui.indent(*id, |ui| {
-                if let Some(child_clicked) = render_nav(ui, children) {
+                if let Some(child_clicked) = render_nav_filtered(ui, children, filter_lower) {
                     clicked = Some(child_clicked);
                 }
             });
@@ -238,12 +286,35 @@ pub fn render_nav<A, Ctx>(
     clicked
 }
 
+/// A bordered, content-sized header box, matching the sketch's rounded-rect
+/// boxes around each section/group header in the content pane (as opposed
+/// to a plain heading label spanning the full width). Returns the frame's
+/// response so callers can `scroll_to_rect` it.
+fn framed_header(ui: &mut egui::Ui, label: &str, text_size: f32) -> egui::Response {
+    egui::Frame::new()
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(4)
+        .inner_margin(egui::Margin::symmetric(10, 4))
+        .show(ui, |ui| {
+            ui.label(egui::RichText::new(label).strong().size(text_size));
+        })
+        .response
+}
+
 /// Render the single continuously-scrolling content pane: every `Section`
 /// and `Group` as a header followed by its fields, all in one column. When
 /// `scroll_to` names a `Section` id, that header's rect is scrolled into
 /// view this frame (see the sketch's "spatial continuity" rationale in
 /// `docs/Sketches/Prefs Panel.md` -- clicking the nav walks you to a
 /// section, it doesn't isolate it).
+///
+/// Formatting matters here as much as content: a tree meant to hold dozens
+/// to hundreds of fields is unusable if every field is its own free-floating
+/// `label + widget` line with no shared alignment. So runs of consecutive
+/// sibling [`SettingsNode::Field`]s are batched into a single two-column
+/// `egui::Grid` (label column, control column) -- every field in that run
+/// lines up, rather than each one picking its own label width. A `Group` or
+/// `Section` breaks the run (and starts its own grid for its own fields).
 pub fn render_content<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
@@ -252,36 +323,69 @@ pub fn render_content<A: Clone, Ctx>(
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
 ) {
-    for node in tree {
-        match node {
+    let mut i = 0;
+    while i < tree.len() {
+        match &tree[i] {
             SettingsNode::Section { id, label, children } => {
-                let resp = ui.heading(*label);
+                ui.add_space(10.0);
+                let resp = framed_header(ui, *label, 16.0);
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
+                ui.add_space(8.0);
                 render_content(ui, ctx, host, children, scroll_to, actions);
-                ui.add_space(12.0);
+                ui.add_space(18.0);
+                i += 1;
             }
             SettingsNode::Group { label, children } => {
-                ui.strong(*label);
-                render_content(ui, ctx, host, children, scroll_to, actions);
                 ui.add_space(6.0);
+                framed_header(ui, *label, 14.0);
+                ui.add_space(6.0);
+                render_content(ui, ctx, host, children, scroll_to, actions);
+                ui.add_space(12.0);
+                i += 1;
             }
-            SettingsNode::Field(field) => render_field(ui, ctx, host, field, actions),
+            SettingsNode::Field(_) => {
+                let start = i;
+                while i < tree.len() && matches!(tree[i], SettingsNode::Field(_)) {
+                    i += 1;
+                }
+                let grid_id = match &tree[start] {
+                    SettingsNode::Field(f) => f.id,
+                    _ => unreachable!(),
+                };
+                egui::Grid::new(grid_id)
+                    .num_columns(2)
+                    .spacing([18.0, 10.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        for node in &tree[start..i] {
+                            if let SettingsNode::Field(field) = node {
+                                render_field_row(ui, ctx, host, field, actions);
+                            }
+                        }
+                    });
+            }
         }
     }
 }
 
-fn render_field<A: Clone, Ctx>(
+fn render_field_row<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
     host: &impl SettingsHost,
     field: &Field<A, Ctx>,
     actions: &mut Vec<A>,
 ) {
-    ui.horizontal(|ui| {
-        ui.add_enabled_ui(field.enabled, |ui| {
+    ui.add_enabled_ui(field.enabled, |ui| {
+        ui.scope(|ui| {
+            ui.set_min_width(190.0);
             ui.label(field.label);
+        });
+    });
+
+    ui.add_enabled_ui(field.enabled, |ui| {
+        ui.vertical(|ui| {
             match &field.control {
                 FieldControl::Toggle { value, on_change } => {
                     let mut val = value(ctx);
@@ -291,7 +395,7 @@ fn render_field<A: Clone, Ctx>(
                 }
                 FieldControl::Text { value, on_change } => {
                     let mut val = value(ctx);
-                    if ui.text_edit_singleline(&mut val).changed() {
+                    if ui.add(egui::TextEdit::singleline(&mut val).desired_width(220.0)).changed() {
                         actions.push(on_change(val));
                     }
                 }
@@ -303,6 +407,7 @@ fn render_field<A: Clone, Ctx>(
                     let current = value(ctx);
                     egui::ComboBox::from_id_salt(field.id)
                         .selected_text(current)
+                        .width(220.0)
                         .show_ui(ui, |ui| {
                             for opt in *options {
                                 if ui.selectable_label(current == *opt, *opt).clicked() {
@@ -316,23 +421,27 @@ fn render_field<A: Clone, Ctx>(
                     on_change,
                     on_browse,
                 } => {
-                    let mut val = value(ctx);
-                    if ui.text_edit_singleline(&mut val).changed() {
-                        actions.push(on_change(val));
-                    }
-                    if let Some(picked) = host.browse_path(ui, &value(ctx)) {
-                        actions.push(on_browse(picked));
-                    }
+                    ui.horizontal(|ui| {
+                        let mut val = value(ctx);
+                        if ui.add(egui::TextEdit::singleline(&mut val).desired_width(180.0)).changed() {
+                            actions.push(on_change(val));
+                        }
+                        if let Some(picked) = host.browse_path(ui, &value(ctx)) {
+                            actions.push(on_browse(picked));
+                        }
+                    });
                 }
+            }
+
+            if let Some(hint) = field.disabled_hint {
+                if !field.enabled {
+                    ui.label(egui::RichText::new(hint).small().weak());
+                }
+            } else if let Some(text) = field.hover {
+                ui.label(egui::RichText::new(text).small().weak());
             }
         });
     });
 
-    if let Some(hint) = field.disabled_hint {
-        if !field.enabled {
-            ui.label(hint);
-        }
-    } else if let Some(text) = field.hover {
-        ui.label(text);
-    }
+    ui.end_row();
 }
