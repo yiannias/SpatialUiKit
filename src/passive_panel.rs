@@ -284,8 +284,14 @@ pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedE
     };
 
     if show_history {
+        // `min_height` (not just `max_height`) forces this region to always
+        // occupy the full `feed_h` allotted to it -- otherwise a short feed
+        // leaves empty space *below* the scroll area, between it and the
+        // prompt row the caller renders next, instead of the prompt sitting
+        // flush at the bottom with history above it.
         egui::ScrollArea::vertical()
             .id_salt("passive_panel_feed")
+            .min_scrolled_height(feed_h)
             .max_height(feed_h)
             .stick_to_bottom(true)
             .show(ui, |ui| {
@@ -297,7 +303,6 @@ pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedE
     }
 
     let visible_rows = ((feed_h / 16.0).floor() as usize).clamp(1, 3);
-    let mut any_fading = false;
     let recent: Vec<(&FeedEntry, f32)> = feed
         .iter()
         .rev()
@@ -311,12 +316,22 @@ pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedE
             Some((e, a))
         })
         .collect();
-    for (entry, a) in recent.iter().rev() {
-        if *a < 1.0 {
-            any_fading = true;
-        }
-        style_label(ui, &entry.text, feed_color(entry.kind).gamma_multiply(*a));
-    }
+    // Bottom-up + fixed-size allocation: the visible rows anchor to the
+    // *bottom* of the `feed_h` region (right above the prompt row the caller
+    // renders next), with any leftover space pushed above the oldest visible
+    // row instead of appearing below everything.
+    let any_fading = ui
+        .allocate_ui_with_layout(egui::vec2(ui.available_width(), feed_h), egui::Layout::bottom_up(egui::Align::Min), |ui| {
+            let mut any_fading = false;
+            for (entry, a) in recent.iter() {
+                if *a < 1.0 {
+                    any_fading = true;
+                }
+                style_label(ui, &entry.text, feed_color(entry.kind).gamma_multiply(*a));
+            }
+            any_fading
+        })
+        .inner;
     if any_fading || !recent.is_empty() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
     }
