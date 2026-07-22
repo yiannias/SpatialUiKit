@@ -87,3 +87,29 @@ pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
         }
     });
 }
+
+/// Single text size shared by every label in the passive panel (feed
+/// entries, undo/redo summary, cursor readout, annunciator captions) --
+/// Chris, 2026-07-22: "there look to be various different text sizes in the
+/// passive window... make them all the same." Multiply by
+/// [`current_text_scale`] at each call site.
+pub const PASSIVE_PANEL_TEXT_SIZE: f32 = 10.0;
+
+/// Current text-scale ratio in effect, derived from how far the live
+/// `TextStyle::Body` size has diverged from egui's own default -- lets code
+/// that still needs a raw pixel size (a custom `painter.text` call, or a
+/// `RichText` size not backed by a named `TextStyle`) respond to
+/// [`apply_text_scale`] without threading a scale value through every call
+/// site's signature. Multiply a hardcoded literal by this.
+pub fn current_text_scale(ui: &egui::Ui) -> f32 {
+    let default_body = egui::Style::default()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        .unwrap_or(14.0);
+    if default_body <= 0.0 {
+        return 1.0;
+    }
+    let live_body = ui.style().text_styles.get(&egui::TextStyle::Body).map(|f| f.size).unwrap_or(default_body);
+    live_body / default_body
+}

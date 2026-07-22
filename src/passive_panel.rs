@@ -211,7 +211,10 @@ pub fn annunciator_response(
 
     let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.min.y + 15.0), egui::vec2(15.0, 15.0));
     let caption_pos = egui::pos2(rect.center().x, rect.max.y - 8.5);
-    let font = egui::FontId::monospace(8.5);
+    // Bypasses egui's style system entirely (raw `painter.text`), so scale
+    // it manually against the app's text-size setting -- see
+    // `crate::theme::current_text_scale`'s doc comment.
+    let font = egui::FontId::monospace(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
     if lit {
         // Back-illumination: wide translucent underpaints beneath the crisp
         // stroke, and a soft halo behind the caption.
@@ -273,7 +276,7 @@ pub fn panel_window(content_size: egui::Vec2, frame: egui::Frame, pending_pos: O
 /// animation actually advances frame to frame.
 pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedEntry>, show_history: bool, feed_h: f32, monospace: bool) {
     let style_label = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
-        let mut rt = egui::RichText::new(text).color(color).size(11.0);
+        let mut rt = egui::RichText::new(text).color(color).size(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
         if monospace {
             rt = rt.monospace();
         }

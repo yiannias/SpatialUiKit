@@ -5,6 +5,7 @@
 //! on either app's domain crates.
 
 pub mod dock;
+pub mod fonts;
 pub mod idle_input;
 pub mod menu;
 pub mod passive_panel;
