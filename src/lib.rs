@@ -10,3 +10,4 @@ pub mod menu;
 pub mod passive_panel;
 pub mod ribbon;
 pub mod settings;
+pub mod theme;

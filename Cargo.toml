@@ -6,6 +6,7 @@ description = "Shared egui UI chrome mechanics for SpatialSketchPad and SpatialD
 
 [dependencies]
 egui = "0.35"
+serde = { version = "1", features = ["derive"] }
 # Exact pin, not a caret range: `dock.rs`'s `detect_tab_drag` workaround was
 # reverse-engineered against 0.20.1's specific internal drag-response
 # handling (see dock.rs's module doc). An incidental minor bump could

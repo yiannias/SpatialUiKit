@@ -324,6 +324,70 @@ fn framed_header(ui: &mut egui::Ui, label: &str, text_size: f32) -> egui::Respon
         .response
 }
 
+/// Draws a rounded "elbow" tree connector from the vertical trunk line at
+/// `trunk_x` out to a child header vertically centered at `target_y`, then a
+/// straight run over to `target_x` -- a small quarter-circle-ish bend
+/// (cubic Bézier, control points at the standard ~0.5523*r circle-arc
+/// offset) instead of a sharp right angle, per the "little bend" look Chris
+/// asked for (2026-07-21) over egui's default straight `indent_has_left_vline`.
+fn draw_elbow(painter: &egui::Painter, trunk_x: f32, trunk_top: f32, target_y: f32, target_x: f32, stroke: egui::Stroke) {
+    const K: f32 = 0.5523;
+    let r = 8.0_f32.min((target_x - trunk_x - 2.0).max(1.0)).min((target_y - trunk_top).max(1.0));
+    let bend_start = egui::pos2(trunk_x, target_y - r);
+    let bend_end = egui::pos2(trunk_x + r, target_y);
+    let bezier = egui::epaint::CubicBezierShape::from_points_stroke(
+        [
+            bend_start,
+            egui::pos2(trunk_x, target_y - r + r * K),
+            egui::pos2(trunk_x + r - r * K, target_y),
+            bend_end,
+        ],
+        false,
+        egui::Color32::TRANSPARENT,
+        stroke,
+    );
+    painter.add(bezier);
+    painter.line_segment([bend_end, egui::pos2(target_x, target_y)], stroke);
+}
+
+/// Indents `children` under a parent Section/Group header, one nesting
+/// level, drawing a vertical trunk line down to the last immediate child
+/// Section/Group header and a curved elbow connector out to each one --
+/// replaces egui's plain `Ui::indent` (straight vline, sharp corner) with
+/// the tree-outline look. Fields don't get their own branch (too busy --
+/// they're already visually grouped by `render_content`'s shared grid).
+fn render_indented<A: Clone, Ctx>(
+    ui: &mut egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    ctx: &Ctx,
+    host: &impl SettingsHost,
+    children: &[SettingsNode<A, Ctx>],
+    scroll_to: Option<&'static str>,
+    actions: &mut Vec<A>,
+) {
+    let indent = ui.spacing().indent;
+    let mut child_rect = ui.available_rect_before_wrap();
+    child_rect.min.x += indent;
+    let top_y = child_rect.min.y;
+    let trunk_x = child_rect.min.x - indent * 0.5;
+
+    let mut child_ui = ui.new_child(egui::UiBuilder::new().id_salt(id_salt).max_rect(child_rect));
+    let mut branch_ys: Vec<f32> = Vec::new();
+    render_content_impl(&mut child_ui, ctx, host, children, scroll_to, actions, &mut branch_ys);
+    let child_min_rect = child_ui.min_rect();
+
+    if let Some(&last) = branch_ys.last() {
+        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
+        let painter = ui.painter();
+        painter.line_segment([egui::pos2(trunk_x, top_y), egui::pos2(trunk_x, last)], stroke);
+        for &y in &branch_ys {
+            draw_elbow(painter, trunk_x, top_y, y, child_rect.min.x, stroke);
+        }
+    }
+
+    ui.advance_cursor_after_rect(child_min_rect);
+}
+
 /// Render the single continuously-scrolling content pane: every `Section`
 /// and `Group` as a header followed by its fields, all in one column. When
 /// `scroll_to` names a `Section` id, that header's rect is scrolled into
@@ -338,6 +402,11 @@ fn framed_header(ui: &mut egui::Ui, label: &str, text_size: f32) -> egui::Respon
 /// `egui::Grid` (label column, control column) -- every field in that run
 /// lines up, rather than each one picking its own label width. A `Group` or
 /// `Section` breaks the run (and starts its own grid for its own fields).
+///
+/// Top-level entries (the three tiers -- Application-Wide/User/Project) each
+/// get a full grey bordered frame around header+content, not just the
+/// header box every nested Section/Group gets -- makes each tier read as
+/// its own card.
 pub fn render_content<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
@@ -346,25 +415,70 @@ pub fn render_content<A: Clone, Ctx>(
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
 ) {
+    for node in tree {
+        // Fixed width for every top-level tier card, computed once from the
+        // content pane's available width (rather than each `Frame` shrink-
+        // wrapping its own content) so all three tiers line up, and pulled
+        // in a bit from the scroll area's right edge so the card doesn't
+        // crowd/underlap the scrollbar.
+        const SCROLLBAR_GUTTER: f32 = 14.0;
+        let card_width = (ui.available_width() - SCROLLBAR_GUTTER).max(200.0);
+        match node {
+            SettingsNode::Section { id, label, children } => {
+                ui.add_space(10.0);
+                egui::Frame::new()
+                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                    .corner_radius(6)
+                    .inner_margin(egui::Margin::symmetric(12, 10))
+                    .show(ui, |ui| {
+                        ui.set_width(card_width - 24.0); // minus the inner_margin above
+                        let resp = framed_header(ui, label, 16.0);
+                        if scroll_to == Some(*id) {
+                            ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
+                        }
+                        ui.add_space(8.0);
+                        render_indented(ui, *id, ctx, host, children, scroll_to, actions);
+                    });
+                ui.add_space(18.0);
+            }
+            // Each app's tree root is a flat list of tier `Section`s, so
+            // `Group`/`Field` shouldn't appear here in practice -- handled
+            // via the plain (unframed) renderer for robustness.
+            _ => render_content_impl(ui, ctx, host, std::slice::from_ref(node), scroll_to, actions, &mut Vec::new()),
+        }
+    }
+}
+
+fn render_content_impl<A: Clone, Ctx>(
+    ui: &mut egui::Ui,
+    ctx: &Ctx,
+    host: &impl SettingsHost,
+    tree: &[SettingsNode<A, Ctx>],
+    scroll_to: Option<&'static str>,
+    actions: &mut Vec<A>,
+    branch_ys: &mut Vec<f32>,
+) {
     let mut i = 0;
     while i < tree.len() {
         match &tree[i] {
             SettingsNode::Section { id, label, children } => {
                 ui.add_space(10.0);
                 let resp = framed_header(ui, *label, 16.0);
+                branch_ys.push(resp.rect.center().y);
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
                 ui.add_space(8.0);
-                render_content(ui, ctx, host, children, scroll_to, actions);
+                render_indented(ui, *id, ctx, host, children, scroll_to, actions);
                 ui.add_space(18.0);
                 i += 1;
             }
             SettingsNode::Group { label, children } => {
                 ui.add_space(6.0);
-                framed_header(ui, *label, 14.0);
+                let resp = framed_header(ui, *label, 14.0);
+                branch_ys.push(resp.rect.center().y);
                 ui.add_space(6.0);
-                render_content(ui, ctx, host, children, scroll_to, actions);
+                render_indented(ui, *label, ctx, host, children, scroll_to, actions);
                 ui.add_space(12.0);
                 i += 1;
             }
