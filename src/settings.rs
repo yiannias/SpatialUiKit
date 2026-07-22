@@ -563,8 +563,16 @@ fn render_field_row<A: Clone, Ctx>(
                         if ui.add(egui::TextEdit::singleline(&mut val).desired_width(180.0)).changed() {
                             actions.push(on_change(val));
                         }
-                        if let Some(picked) = host.browse_path(ui, &value(ctx)) {
-                            actions.push(on_browse(picked));
+                        // `browse_path` opens a blocking native file dialog --
+                        // must only fire on an actual "..." button click, not
+                        // every frame this field renders (a bug this fixed:
+                        // the dialog previously reopened continuously the
+                        // instant the field was on screen, since there was no
+                        // button here gating the call at all).
+                        if ui.button("...").clicked() {
+                            if let Some(picked) = host.browse_path(ui, &value(ctx)) {
+                                actions.push(on_browse(picked));
+                            }
                         }
                     });
                 }
