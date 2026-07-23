@@ -563,8 +563,10 @@ fn render_field_row<A: Clone, Ctx>(
                         if ui.add(egui::TextEdit::singleline(&mut val).desired_width(180.0)).changed() {
                             actions.push(on_change(val));
                         }
-                        if let Some(picked) = host.browse_path(ui, &value(ctx)) {
-                            actions.push(on_browse(picked));
+                        if ui.button("...").clicked() {
+                            if let Some(picked) = host.browse_path(ui, &value(ctx)) {
+                                actions.push(on_browse(picked));
+                            }
                         }
                     });
                 }
