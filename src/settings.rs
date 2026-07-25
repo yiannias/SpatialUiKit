@@ -49,9 +49,25 @@ pub enum SettingsNode<A, Ctx> {
         children: Vec<SettingsNode<A, Ctx>>,
     },
     Field(Field<A, Ctx>),
+    /// Escape hatch for a control shape the declarative `Field` kinds don't
+    /// cover -- a variable-length list with per-row remove + an "add" capture
+    /// flow (e.g. SDB's pan/zoom trigger chip-lists). Renders as a raw
+    /// closure over the same `ui`/`ctx`/`actions` every `Field` gets; owns no
+    /// state itself (apps needing capture/edit state across frames should use
+    /// `ui.memory_mut` the way `Field`-based rows never need to).
+    Custom {
+        label: &'static str,
+        render: Box<dyn Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync>,
+    },
 }
 
 impl<A, Ctx> SettingsNode<A, Ctx> {
+    pub fn custom(
+        label: &'static str,
+        render: impl Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync + 'static,
+    ) -> Self {
+        SettingsNode::Custom { label, render: Box::new(render) }
+    }
     pub fn section(
         id: &'static str,
         label: &'static str,
@@ -260,6 +276,7 @@ fn node_matches<A, Ctx>(node: &SettingsNode<A, Ctx>, filter_lower: &str) -> bool
             label_contains(label, filter_lower) || children.iter().any(|c| node_matches(c, filter_lower))
         }
         SettingsNode::Field(f) => label_contains(f.label, filter_lower),
+        SettingsNode::Custom { label, .. } => label_contains(label, filter_lower),
     }
 }
 
@@ -480,6 +497,10 @@ fn render_content_impl<A: Clone, Ctx>(
                 ui.add_space(6.0);
                 render_indented(ui, *label, ctx, host, children, scroll_to, actions);
                 ui.add_space(12.0);
+                i += 1;
+            }
+            SettingsNode::Custom { render, .. } => {
+                render(ui, ctx, actions);
                 i += 1;
             }
             SettingsNode::Field(_) => {
