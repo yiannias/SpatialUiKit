@@ -183,7 +183,38 @@ pub fn annunciator_response(
     accent: egui::Color32,
     tip: &str,
 ) -> egui::Response {
-    let size = egui::vec2(58.0, 40.0);
+    annunciator_response_sized(ui, label, glyphs, lit, accent, tip, ANNUNCIATOR_SIZE)
+}
+
+/// The historical (and still default) annunciator cap size -- what
+/// [`annunciator_response`] uses, and what SSP's panel is laid out around.
+pub const ANNUNCIATOR_SIZE: egui::Vec2 = egui::vec2(58.0, 40.0);
+
+/// Below this cap height there is no room for both the icon and its caption,
+/// so [`annunciator_response_sized`] drops the caption and centers the icon
+/// (the label still reaches the user through the hover tooltip).
+const CAPTION_MIN_HEIGHT: f32 = 26.0;
+
+/// [`annunciator_response`] with an explicit cap `size`, so a caller can
+/// shrink the buttons to fit a panel the user has dragged skinnier instead of
+/// letting them overflow or clip. Every internal metric (corner radius, icon
+/// box, caption baseline, stroke widths) is derived from `size` rather than
+/// hardcoded, and the caption is dropped entirely below
+/// `CAPTION_MIN_HEIGHT`. Added for SDB's flowing passive bar (Chris,
+/// 2026-08-01: "the Ortho/Snap etc. buttons are too big... should flow in
+/// order to allow the user to adjust the height of the passive bar");
+/// `annunciator_response`/[`annunciator`] keep their exact previous look, so
+/// SSP is unaffected.
+pub fn annunciator_response_sized(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyphs: &[Glyph],
+    lit: bool,
+    accent: egui::Color32,
+    tip: &str,
+    size: egui::Vec2,
+) -> egui::Response {
+    let size = egui::vec2(size.x.max(18.0), size.y.max(14.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     if !ui.is_rect_visible(rect) {
         return resp;
@@ -205,32 +236,78 @@ pub fn annunciator_response(
     } else {
         egui::Color32::from_rgb(58, 58, 64)
     };
+    // Everything below is proportional to the cap so a shrunken button stays
+    // a scaled-down version of the full-size one rather than a clipped one.
+    let scale = (size.y / ANNUNCIATOR_SIZE.y).clamp(0.4, 1.0);
+    let radius = 7.0 * scale;
     let painter = ui.painter();
-    painter.rect_filled(rect, 7.0, fill);
-    painter.rect_stroke(rect, 7.0, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.rect_filled(rect, radius, fill);
+    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
 
-    let icon_rect = egui::Rect::from_center_size(egui::pos2(rect.center().x, rect.min.y + 15.0), egui::vec2(15.0, 15.0));
-    let caption_pos = egui::pos2(rect.center().x, rect.max.y - 8.5);
+    let with_caption = size.y >= CAPTION_MIN_HEIGHT;
+    let icon_side = if with_caption { 15.0 * scale } else { (size.y - 6.0).min(size.x - 6.0) };
+    let icon_center_y = if with_caption { rect.min.y + 15.0 * scale } else { rect.center().y };
+    let icon_rect =
+        egui::Rect::from_center_size(egui::pos2(rect.center().x, icon_center_y), egui::vec2(icon_side, icon_side));
+    let caption_pos = egui::pos2(rect.center().x, rect.max.y - 8.5 * scale);
     // Bypasses egui's style system entirely (raw `painter.text`), so scale
     // it manually against the app's text-size setting -- see
     // `crate::theme::current_text_scale`'s doc comment.
-    let font = egui::FontId::monospace(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
+    let font = egui::FontId::monospace(
+        crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale,
+    );
+    let stroke_w = 1.3 * scale.max(0.75);
     if lit {
         // Back-illumination: wide translucent underpaints beneath the crisp
         // stroke, and a soft halo behind the caption.
-        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.16), 4.2);
-        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.38), 2.6);
-        paint_icon(painter, icon_rect, glyphs, accent, 1.3);
-        let halo = accent.gamma_multiply(0.3);
-        for off in [egui::vec2(-1.0, 0.0), egui::vec2(1.0, 0.0), egui::vec2(0.0, -1.0), egui::vec2(0.0, 1.0)] {
-            painter.text(caption_pos + off, egui::Align2::CENTER_CENTER, label, font.clone(), halo);
+        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.16), stroke_w * 3.2);
+        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.38), stroke_w * 2.0);
+        paint_icon(painter, icon_rect, glyphs, accent, stroke_w);
+        if with_caption {
+            let halo = accent.gamma_multiply(0.3);
+            for off in [egui::vec2(-1.0, 0.0), egui::vec2(1.0, 0.0), egui::vec2(0.0, -1.0), egui::vec2(0.0, 1.0)] {
+                painter.text(caption_pos + off, egui::Align2::CENTER_CENTER, label, font.clone(), halo);
+            }
+            painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, accent);
         }
-        painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, accent);
     } else {
         let dim = egui::Color32::from_rgb(104, 104, 112);
-        paint_icon(painter, icon_rect, glyphs, dim, 1.3);
-        painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, dim);
+        paint_icon(painter, icon_rect, glyphs, dim, stroke_w);
+        if with_caption {
+            painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, dim);
+        }
     }
+    resp.on_hover_text(tip)
+}
+
+/// A text "capsule": a pill-shaped, clickable readout sized to its own text,
+/// styled to sit alongside the [`annunciator_response`] caps. Used for values
+/// that are *read* far more often than toggled and don't reduce to an on/off
+/// lamp -- SDB's drafting-scale readout ("1:40", `1/4" = 1'-0"`) is the first.
+/// Returns the raw `Response` so the caller can hang a click handler or a
+/// `context_menu` / popup off it.
+pub fn capsule(ui: &mut egui::Ui, text: &str, accent: egui::Color32, height: f32, tip: &str) -> egui::Response {
+    let scale = (height / ANNUNCIATOR_SIZE.y).clamp(0.4, 1.0);
+    let font = egui::FontId::monospace(
+        crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale.max(0.7),
+    );
+    let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), accent);
+    let pad_x = 9.0 * scale.max(0.6);
+    let size = egui::vec2(galley.size().x + pad_x * 2.0, height.max(14.0));
+    let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
+    if !ui.is_rect_visible(rect) {
+        return resp;
+    }
+    let radius = rect.height() * 0.5;
+    let painter = ui.painter();
+    painter.rect_filled(rect, radius, egui::Color32::from_rgb(24, 24, 27));
+    let border = if resp.hovered() {
+        egui::Color32::from_rgb(110, 110, 118)
+    } else {
+        egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 70)
+    };
+    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.galley(egui::pos2(rect.min.x + pad_x, rect.center().y - galley.size().y * 0.5), galley, accent);
     resp.on_hover_text(tip)
 }
 
