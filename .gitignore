@@ -3,3 +3,4 @@ Cargo.lock
 *.dwl
 *.dwl2
 *.bak
+.DS_Store
