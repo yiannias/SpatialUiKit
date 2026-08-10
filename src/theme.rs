@@ -88,12 +88,26 @@ pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
     });
 }
 
-/// Single text size shared by every label in the passive panel (feed
-/// entries, undo/redo summary, cursor readout, annunciator captions) --
-/// Chris, 2026-07-22: "there look to be various different text sizes in the
-/// passive window... make them all the same." Multiply by
+/// Single text size shared by every label in the command & status panel
+/// (feed entries, undo/redo summary, cursor readout, annunciator captions)
+/// -- Chris, 2026-07-22: "there look to be various different text sizes in
+/// the passive window... make them all the same." Multiply by
 /// [`current_text_scale`] at each call site.
-pub const PASSIVE_PANEL_TEXT_SIZE: f32 = 10.0;
+///
+/// Renamed from `PASSIVE_PANEL_TEXT_SIZE` on 2026-08-10, when SDB retired
+/// "passive" as product vocabulary (the panel takes command input and sets
+/// the drafting scale, so the word was wrong as well as vague).
+pub const COMMAND_STATUS_PANEL_TEXT_SIZE: f32 = 10.0;
+
+/// Former name of [`COMMAND_STATUS_PANEL_TEXT_SIZE`], kept so this stays an
+/// **additive** change: this crate is shared with SpatialSketchPad, whose
+/// build a removal would break, and a local working copy hides that from
+/// the consuming repo entirely. Prefer the new name in new code.
+///
+/// Note the `passive_panel` *module* in this crate is deliberately **not**
+/// renamed -- it is public API SSP consumes, so that one is a coordinated
+/// decision rather than a unilateral one.
+pub const PASSIVE_PANEL_TEXT_SIZE: f32 = COMMAND_STATUS_PANEL_TEXT_SIZE;
 
 /// Current text-scale ratio in effect, derived from how far the live
 /// `TextStyle::Body` size has diverged from egui's own default -- lets code
