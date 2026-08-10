@@ -22,6 +22,16 @@ Under active extraction from SSP, one subsystem at a time. See each consuming ap
 (SSP: `docs/decisions/0010-shared-ui-kit-crate.md`; SDB: `docs/decisions/00XX-shared-ui-kit-crate.md`)
 for the roadmap and what's landed so far.
 
+### Coordination briefs
+
+The two apps drift when one has UI attention and the other doesn't. When that happens, the app
+that moved writes the other a dated brief here — what needs a decision, what must be pulled, and
+which bugs it found that the sibling probably shares.
+
+- [`docs/2026-08-10-sdb-ui-changes-for-ssp.md`](docs/2026-08-10-sdb-ui-changes-for-ssp.md) —
+  SDB → SSP, covering ~2026-07-20 to 2026-08-10. Open items for SSP: the "Passive Panel" rename,
+  window draw-order scoping, and whether `DockHost` should own a `ScrollArea`.
+
 ## Modules
 
 - `menu` — declarative `MenuNode<A, Ctx>` tree + generic egui menu-bar renderer.
