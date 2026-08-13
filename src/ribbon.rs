@@ -48,6 +48,31 @@ pub struct RibbonGroup<A> {
     pub buttons: Vec<RibbonButton<A>>,
 }
 
+/// One module in a ribbon row -- generalizes `RibbonGroup` so a row can also
+/// carry a caller-rendered group (e.g. SDB's tool option fields: text edits,
+/// checkboxes, choice combos) that still gets the same group-box treatment
+/// -- separator before it, label below it -- as an icon-button group, so it
+/// reads as one more group in the row rather than a differently-styled
+/// insert. See SDB's `docs/design/ribbon-conditional-layout.md`, "Options
+/// field group".
+pub enum RibbonModule<'a, A> {
+    Buttons(RibbonGroup<A>),
+    Custom {
+        label: &'static str,
+        /// Width of the group's content area, in points. `Buttons` derives
+        /// this from its button count; a custom group has no such count to
+        /// derive it from, so the caller states it directly.
+        width: f32,
+        render: Box<dyn FnOnce(&mut egui::Ui) -> Vec<A> + 'a>,
+    },
+}
+
+impl<A> From<RibbonGroup<A>> for RibbonModule<'_, A> {
+    fn from(group: RibbonGroup<A>) -> Self {
+        RibbonModule::Buttons(group)
+    }
+}
+
 /// App-specific icon-button drawing, since it needs each app's own icon
 /// atlas. Mirrors `menu::MenuHost`.
 pub trait RibbonHost {
@@ -97,6 +122,39 @@ fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
     painter.add(shape);
 }
 
+/// Draws one icon-button group's content (buttons row + label), inside
+/// whatever `group_w`-wide top-down area the caller already allocated.
+/// Shared between `ribbon_panel` and `ribbon_panel_modules`'s `Buttons` arm.
+fn draw_button_group<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &impl RibbonHost, actions: &mut Vec<A>) {
+    ui.horizontal(|ui| {
+        for button in &group.buttons {
+            let resp = host.icon_button(ui, button.key, button.label, button.selected, button.enabled, button.disabled_hint);
+            let flash_id = egui::Id::new(("ribbon_flash", button.key));
+            if resp.clicked() {
+                actions.push(button.action.clone());
+                let now = ui.ctx().input(|i| i.time);
+                ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
+            }
+            // Activation flash: a brief amber pulse over the clicked button.
+            // Painted from egui temp data (not caller state) since it's pure
+            // presentation.
+            if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
+                let dt = ui.ctx().input(|i| i.time) - t0;
+                if dt < FLASH_SECS {
+                    let a = (1.0 - dt / FLASH_SECS) as f32;
+                    let amber = egui::Color32::from_rgb(255, 178, 82);
+                    ui.painter().rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
+                    ui.painter().rect_stroke(resp.rect, 6.0, egui::Stroke::new(1.5, amber.gamma_multiply(a)), egui::StrokeKind::Outside);
+                    ui.ctx().request_repaint();
+                } else {
+                    ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
+                }
+            }
+        }
+    });
+    ui.label(egui::RichText::new(group.label).size(10.0).color(egui::Color32::from_rgb(132, 133, 141)));
+}
+
 /// Render the mode tag + button groups. Returns the actions clicked this
 /// frame. One row, horizontally scrollable if the groups exceed the window
 /// width -- groups must never wrap onto extra rows (each group is measured
@@ -116,35 +174,50 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[Ri
                 let group_w = group.buttons.len() as f32 * 40.0 + (group.buttons.len().saturating_sub(1)) as f32 * spacing_x;
                 ui.allocate_ui_with_layout(egui::vec2(group_w, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
                     ui.spacing_mut().item_spacing.y = 1.0;
-                    ui.horizontal(|ui| {
-                        for button in &group.buttons {
-                            let resp = host.icon_button(ui, button.key, button.label, button.selected, button.enabled, button.disabled_hint);
-                            let flash_id = egui::Id::new(("ribbon_flash", button.key));
-                            if resp.clicked() {
-                                actions.push(button.action.clone());
-                                let now = ui.ctx().input(|i| i.time);
-                                ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
-                            }
-                            // Activation flash: a brief amber pulse over the
-                            // clicked button. Painted from egui temp data
-                            // (not caller state) since it's pure
-                            // presentation.
-                            if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
-                                let dt = ui.ctx().input(|i| i.time) - t0;
-                                if dt < FLASH_SECS {
-                                    let a = (1.0 - dt / FLASH_SECS) as f32;
-                                    let amber = egui::Color32::from_rgb(255, 178, 82);
-                                    ui.painter().rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
-                                    ui.painter().rect_stroke(resp.rect, 6.0, egui::Stroke::new(1.5, amber.gamma_multiply(a)), egui::StrokeKind::Outside);
-                                    ui.ctx().request_repaint();
-                                } else {
-                                    ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
-                                }
-                            }
-                        }
-                    });
-                    ui.label(egui::RichText::new(group.label).size(10.0).color(egui::Color32::from_rgb(132, 133, 141)));
+                    draw_button_group(ui, group, host, &mut actions);
                 });
+            }
+        });
+    });
+
+    actions
+}
+
+/// Render the mode tag + an ordered list of modules -- the generalized form
+/// of `ribbon_panel` that also accepts `RibbonModule::Custom` groups (tool
+/// option fields, category units, ...) alongside plain button groups, each
+/// drawn with the same group-box treatment so the row reads as one
+/// consistent set of groups. `ribbon_panel` itself is untouched so existing
+/// callers (SSP's ribbon) keep compiling unchanged.
+pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
+    let mut actions: Vec<A> = Vec::new();
+
+    egui::ScrollArea::horizontal().show(ui, |ui| {
+        ui.horizontal(|ui| {
+            mode_tag(ui, mode, 56.0);
+            for (i, module) in modules.into_iter().enumerate() {
+                if i > 0 {
+                    ui.separator();
+                }
+                match module {
+                    RibbonModule::Buttons(group) => {
+                        let spacing_x = ui.spacing().item_spacing.x;
+                        let group_w =
+                            group.buttons.len() as f32 * 40.0 + (group.buttons.len().saturating_sub(1)) as f32 * spacing_x;
+                        ui.allocate_ui_with_layout(egui::vec2(group_w, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            draw_button_group(ui, &group, host, &mut actions);
+                        });
+                    }
+                    RibbonModule::Custom { label, width, render } => {
+                        ui.allocate_ui_with_layout(egui::vec2(width, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
+                            ui.spacing_mut().item_spacing.y = 1.0;
+                            let acts = ui.horizontal(|ui| render(ui)).inner;
+                            actions.extend(acts);
+                            ui.label(egui::RichText::new(label).size(10.0).color(egui::Color32::from_rgb(132, 133, 141)));
+                        });
+                    }
+                }
             }
         });
     });
