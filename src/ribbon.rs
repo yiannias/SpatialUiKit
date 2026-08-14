@@ -2,10 +2,7 @@
 //! SpatialDrawingBoard (SDB's first ribbon -- it had none before this).
 //!
 //! Split the same way SSP's original `panels/ribbon/` was: this module is
-//! purely *how to draw* a mode tag + button groups (the "quiet workshop"
-//! visual treatment Chris picked 2026-07-12 -- flat borderless buttons,
-//! hairline separators, group names in small muted type, color reserved for
-//! state, and the activation-flash pulse on click). *What* buttons/groups
+//! purely *how to draw* a mode tag + button groups. *What* buttons/groups
 //! are visible for a given app state is app-specific business logic and
 //! stays in each app's own `panels/ribbon/context.rs`-equivalent, generic
 //! over that app's own `Action` type -- `RibbonButton<A>`/`RibbonGroup<A>`
@@ -14,6 +11,42 @@
 //! Icon drawing needs each app's own icon atlas, so it goes through a
 //! [`RibbonHost`] trait implementation, the same pattern `menu::MenuHost`
 //! uses.
+//!
+//! **2026-08-14, module-frame visual pass (SDB ribbon study, `docs/design/
+//! ribbon-conditional-layout.md`):** the original "quiet workshop" treatment
+//! (flat borderless buttons, a group's name in small type *below* its button
+//! row, a hairline `ui.separator()` between groups) is gone, replaced by
+//! [`module_frame`] -- a rounded-corner box around each group/module with a
+//! small vertical label along its left edge, the same rotated-text treatment
+//! [`mode_tag`] already used for DRAFT/EDIT/tool tags. Chris's reasoning
+//! (2026-08-14): a caption row under every group stacked a second text row
+//! under the ribbon's own menu-bar row -- a "wedding cake" of stacked text --
+//! and cost vertical space that bigger icons could use instead once
+//! `RibbonHost::button_size` (new, defaulted) lets a host grow its buttons to
+//! fill the row when it hides per-button captions (SDB's `ribbon_show_labels`
+//! toggle).
+//!
+//! **This is a breaking visual change for SpatialSketchPad**, whose own
+//! ribbon is a second, unmodified caller of [`ribbon_panel`] through this
+//! same path-dependency source. Chris, 2026-08-14: SSP's ribbon work is
+//! paused, and it's fine for this to land as either a silent visual change
+//! there or a documented stop-gap -- **it lands as the former**. Nothing
+//! about the compile surface changed (`RibbonButton`/`RibbonGroup`/
+//! `RibbonHost::icon_button` are untouched, and the new `button_size` trait
+//! method is defaulted), so SSP keeps building with zero code changes, but
+//! the next time anyone builds it, its ribbon will render group frames +
+//! vertical labels instead of captions-below at the same fixed 40x40 button
+//! size (the default `button_size()`) -- no icon growth, since that only
+//! happens for a host that overrides `button_size()`, which SSP's doesn't.
+//! **What a future SSP session should know:** if SSP wants the icon-growth
+//! half of this pass too (buttons filling the row when captions are hidden),
+//! it needs its own `ribbon_show_labels`-equivalent setting and a
+//! `RibbonHost::button_size` override on its own host type, mirroring
+//! `SdbRibbonHost`'s in `sdb_ui::panels::ribbon::render`. If the frame/label
+//! look itself needs tuning for SSP's UI (colors, `LABEL_STRIP_W`,
+//! `FRAME_RADIUS` below), those are file-local constants here, not
+//! per-host-configurable -- widen them to parameters if SSP's needs
+//! diverge from SDB's rather than forking the file.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RibbonMode {
@@ -85,10 +118,31 @@ pub trait RibbonHost {
         enabled: bool,
         disabled_hint: &str,
     ) -> egui::Response;
+
+    /// Per-button footprint, used to size each module's frame and the
+    /// overall ribbon row height (`row_h = button_size().y + FRAME_PAD*2`).
+    /// Defaults to the original fixed 40x40 button, so a host that doesn't
+    /// override this (SSP's, as of the 2026-08-14 module-frame pass above)
+    /// keeps its existing button size. A host that grows its icons to fill
+    /// the row when it hides per-button captions overrides this instead.
+    fn button_size(&self) -> egui::Vec2 {
+        egui::vec2(40.0, 40.0)
+    }
 }
 
 /// How long the clicked-button flash lasts, seconds.
 const FLASH_SECS: f64 = 0.28;
+
+/// Vertical margin inside a module frame, above and below the button row.
+const FRAME_PAD: f32 = 5.0;
+/// Width of a module frame's vertical-label strip.
+const LABEL_STRIP_W: f32 = 14.0;
+/// Horizontal gap between adjacent module frames (and between the mode tag
+/// and the first one).
+const FRAME_GAP: f32 = 6.0;
+const FRAME_RADIUS: f32 = 8.0;
+const FRAME_STROKE: egui::Color32 = egui::Color32::from_rgb(58, 59, 64);
+const FRAME_LABEL_COLOR: egui::Color32 = egui::Color32::from_rgb(122, 123, 130);
 
 fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
     let (text, color, bg) = match mode {
@@ -122,37 +176,69 @@ fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
     painter.add(shape);
 }
 
-/// Draws one icon-button group's content (buttons row + label), inside
-/// whatever `group_w`-wide top-down area the caller already allocated.
-/// Shared between `ribbon_panel` and `ribbon_panel_modules`'s `Buttons` arm.
-fn draw_button_group<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &impl RibbonHost, actions: &mut Vec<A>) {
-    ui.horizontal(|ui| {
-        for button in &group.buttons {
-            let resp = host.icon_button(ui, button.key, button.label, button.selected, button.enabled, button.disabled_hint);
-            let flash_id = egui::Id::new(("ribbon_flash", button.key));
-            if resp.clicked() {
-                actions.push(button.action.clone());
-                let now = ui.ctx().input(|i| i.time);
-                ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
-            }
-            // Activation flash: a brief amber pulse over the clicked button.
-            // Painted from egui temp data (not caller state) since it's pure
-            // presentation.
-            if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
-                let dt = ui.ctx().input(|i| i.time) - t0;
-                if dt < FLASH_SECS {
-                    let a = (1.0 - dt / FLASH_SECS) as f32;
-                    let amber = egui::Color32::from_rgb(255, 178, 82);
-                    ui.painter().rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
-                    ui.painter().rect_stroke(resp.rect, 6.0, egui::Stroke::new(1.5, amber.gamma_multiply(a)), egui::StrokeKind::Outside);
-                    ui.ctx().request_repaint();
-                } else {
-                    ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
-                }
+/// A group/module's content width -- `n` buttons at `button_w` each, with
+/// `n - 1` gaps of the ui's own item spacing between them. Shared by both
+/// entry points below and by `module_frame`'s caller, which needs this
+/// number before it can allocate the frame.
+fn group_content_width(button_count: usize, button_w: f32, spacing_x: f32) -> f32 {
+    button_count as f32 * button_w + button_count.saturating_sub(1) as f32 * spacing_x
+}
+
+/// Draws one module's rounded-corner frame, with a small vertical label
+/// along its left edge (the same rotated-text treatment [`mode_tag`] uses),
+/// then hands back a child `Ui` scoped to the interior content area for the
+/// caller to draw buttons/fields into. The frame's own space is allocated
+/// here, in the *caller's* `ui` -- the returned child `Ui` is a plain
+/// [`egui::Ui::new_child`] over that already-reserved rect, so drawing into
+/// it does not double-allocate.
+fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> egui::Ui {
+    let outer_size = egui::vec2(LABEL_STRIP_W + FRAME_PAD + content_w + FRAME_PAD, row_h);
+    let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
+    if ui.is_rect_visible(outer_rect) {
+        let painter = ui.painter();
+        painter.rect_stroke(outer_rect, FRAME_RADIUS, egui::Stroke::new(1.0, FRAME_STROKE), egui::StrokeKind::Inside);
+        let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
+        let galley = painter.layout_no_wrap(label.to_lowercase(), egui::FontId::monospace(9.0), FRAME_LABEL_COLOR);
+        // Rotated 90 CCW, same convention as `mode_tag`: reads bottom-to-top.
+        let pos = egui::pos2(label_rect.center().x - galley.size().y / 2.0, label_rect.center().y + galley.size().x / 2.0);
+        let shape = egui::epaint::TextShape::new(pos, galley, FRAME_LABEL_COLOR).with_angle(-std::f32::consts::FRAC_PI_2);
+        painter.add(shape);
+    }
+    let content_rect = egui::Rect::from_min_size(
+        outer_rect.min + egui::vec2(LABEL_STRIP_W + FRAME_PAD, 0.0),
+        egui::vec2(content_w, row_h),
+    );
+    ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(egui::Layout::left_to_right(egui::Align::Center)))
+}
+
+/// Draws one button group's row of icon buttons (no label -- the caller's
+/// [`module_frame`] already drew one) into `ui`, which is expected to already
+/// be scoped to the group's content area with a left-to-right layout.
+fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &impl RibbonHost, actions: &mut Vec<A>) {
+    for button in &group.buttons {
+        let resp = host.icon_button(ui, button.key, button.label, button.selected, button.enabled, button.disabled_hint);
+        let flash_id = egui::Id::new(("ribbon_flash", button.key));
+        if resp.clicked() {
+            actions.push(button.action.clone());
+            let now = ui.ctx().input(|i| i.time);
+            ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
+        }
+        // Activation flash: a brief amber pulse over the clicked button.
+        // Painted from egui temp data (not caller state) since it's pure
+        // presentation.
+        if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
+            let dt = ui.ctx().input(|i| i.time) - t0;
+            if dt < FLASH_SECS {
+                let a = (1.0 - dt / FLASH_SECS) as f32;
+                let amber = egui::Color32::from_rgb(255, 178, 82);
+                ui.painter().rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
+                ui.painter().rect_stroke(resp.rect, 6.0, egui::Stroke::new(1.5, amber.gamma_multiply(a)), egui::StrokeKind::Outside);
+                ui.ctx().request_repaint();
+            } else {
+                ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
             }
         }
-    });
-    ui.label(egui::RichText::new(group.label).size(10.0).color(egui::Color32::from_rgb(132, 133, 141)));
+    }
 }
 
 /// Render the mode tag + button groups. Returns the actions clicked this
@@ -162,20 +248,17 @@ fn draw_button_group<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: 
 /// all remaining width and stacks every group onto its own line).
 pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[RibbonGroup<A>], host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
+    let button_size = host.button_size();
+    let row_h = button_size.y + FRAME_PAD * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            mode_tag(ui, mode, 56.0);
-            for (i, group) in groups.iter().enumerate() {
-                if i > 0 {
-                    ui.separator();
-                }
-                let spacing_x = ui.spacing().item_spacing.x;
-                let group_w = group.buttons.len() as f32 * 40.0 + (group.buttons.len().saturating_sub(1)) as f32 * spacing_x;
-                ui.allocate_ui_with_layout(egui::vec2(group_w, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                    ui.spacing_mut().item_spacing.y = 1.0;
-                    draw_button_group(ui, group, host, &mut actions);
-                });
+            mode_tag(ui, mode, row_h);
+            for group in groups {
+                ui.add_space(FRAME_GAP);
+                let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
+                let mut child = module_frame(ui, group.label, content_w, row_h);
+                draw_button_row(&mut child, group, host, &mut actions);
             }
         });
     });
@@ -186,36 +269,28 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[Ri
 /// Render the mode tag + an ordered list of modules -- the generalized form
 /// of `ribbon_panel` that also accepts `RibbonModule::Custom` groups (tool
 /// option fields, category units, ...) alongside plain button groups, each
-/// drawn with the same group-box treatment so the row reads as one
-/// consistent set of groups. `ribbon_panel` itself is untouched so existing
-/// callers (SSP's ribbon) keep compiling unchanged.
+/// drawn with the same module-frame treatment so the row reads as one
+/// consistent set of modules.
 pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
+    let button_size = host.button_size();
+    let row_h = button_size.y + FRAME_PAD * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            mode_tag(ui, mode, 56.0);
-            for (i, module) in modules.into_iter().enumerate() {
-                if i > 0 {
-                    ui.separator();
-                }
+            mode_tag(ui, mode, row_h);
+            for module in modules {
+                ui.add_space(FRAME_GAP);
                 match module {
                     RibbonModule::Buttons(group) => {
-                        let spacing_x = ui.spacing().item_spacing.x;
-                        let group_w =
-                            group.buttons.len() as f32 * 40.0 + (group.buttons.len().saturating_sub(1)) as f32 * spacing_x;
-                        ui.allocate_ui_with_layout(egui::vec2(group_w, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.y = 1.0;
-                            draw_button_group(ui, &group, host, &mut actions);
-                        });
+                        let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
+                        let mut child = module_frame(ui, group.label, content_w, row_h);
+                        draw_button_row(&mut child, &group, host, &mut actions);
                     }
                     RibbonModule::Custom { label, width, render } => {
-                        ui.allocate_ui_with_layout(egui::vec2(width, 56.0), egui::Layout::top_down(egui::Align::Center), |ui| {
-                            ui.spacing_mut().item_spacing.y = 1.0;
-                            let acts = ui.horizontal(|ui| render(ui)).inner;
-                            actions.extend(acts);
-                            ui.label(egui::RichText::new(label).size(10.0).color(egui::Color32::from_rgb(132, 133, 141)));
-                        });
+                        let mut child = module_frame(ui, label, width, row_h);
+                        let acts = render(&mut child);
+                        actions.extend(acts);
                     }
                 }
             }
