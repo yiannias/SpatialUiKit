@@ -120,7 +120,7 @@ pub trait RibbonHost {
     ) -> egui::Response;
 
     /// Per-button footprint, used to size each module's frame and the
-    /// overall ribbon row height (`row_h = button_size().y + FRAME_PAD*2`).
+    /// overall ribbon row height (`row_h = button_size().y + GAP*2`).
     /// Defaults to the original fixed 40x40 button, so a host that doesn't
     /// override this (SSP's, as of the 2026-08-14 module-frame pass above)
     /// keeps its existing button size. A host that grows its icons to fill
@@ -133,19 +133,56 @@ pub trait RibbonHost {
 /// How long the clicked-button flash lasts, seconds.
 const FLASH_SECS: f64 = 0.28;
 
-/// Vertical margin inside a module frame, above and below the button row.
-const FRAME_PAD: f32 = 5.0;
-/// Width of a module frame's vertical-label strip.
-const LABEL_STRIP_W: f32 = 14.0;
-/// Horizontal gap between adjacent module frames (and between the mode tag
-/// and the first one).
-const FRAME_GAP: f32 = 6.0;
+/// The one gap dimension the whole row is built from -- top/bottom padding
+/// inside a module frame, the horizontal gap between adjacent frames (and
+/// between the mode tag and the first one), and (via `SdbRibbonHost`'s own
+/// panel margin, kept equal to this on purpose) the ribbon panel's own
+/// top/bottom/side margin. Chris, 2026-08-14, after the first module-frame
+/// pass shipped with mismatched numbers here: "the vertical and horizontal
+/// gaps... between frames are all about the same" is the thing that matters,
+/// more than the exact pixel count -- one constant is what keeps that true
+/// instead of three independent guesses drifting apart.
+const GAP: f32 = 8.0;
+/// Width of a module frame's vertical-label pill.
+const LABEL_STRIP_W: f32 = 16.0;
 const FRAME_RADIUS: f32 = 8.0;
 const FRAME_STROKE: egui::Color32 = egui::Color32::from_rgb(58, 59, 64);
-const FRAME_LABEL_COLOR: egui::Color32 = egui::Color32::from_rgb(122, 123, 130);
+/// A module label pill's own colors -- deliberately the same pair
+/// `RibbonMode::Draft`'s tag uses below. Chris, 2026-08-14: the mode tag's
+/// filled-pill look ("I like the graphical appearance of it") should be
+/// every module label's look, not a one-off treatment that stops at DRAFT/
+/// EDIT/tool tags while every other label sits in plain outline text.
+const MODULE_LABEL_FG: egui::Color32 = egui::Color32::from_rgb(141, 142, 150);
+const MODULE_LABEL_BG: egui::Color32 = egui::Color32::from_rgb(43, 44, 49);
+
+/// Draws a filled box with a small vertical (rotated 90° CCW) label inside
+/// it -- the shared drawing behind both the mode tag (DRAFT/EDIT/tool,
+/// `corner_radius` fully rounded, standalone) and every module's own label
+/// pill (`corner_radius` rounded only on the corners at its *outer* edge,
+/// square where it abuts the module's icon container -- see `module_frame`).
+fn vertical_label_pill(
+    ui: &egui::Ui,
+    rect: egui::Rect,
+    text: &str,
+    fg: egui::Color32,
+    bg: egui::Color32,
+    corner_radius: egui::CornerRadius,
+) {
+    if !ui.is_rect_visible(rect) {
+        return;
+    }
+    let painter = ui.painter();
+    painter.rect_filled(rect, corner_radius, bg);
+    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::monospace(9.0), fg);
+    // Rotated 90 CCW: reads bottom-to-top. The layout origin lands at the
+    // bottom-left of the rotated text run.
+    let pos = egui::pos2(rect.center().x - galley.size().y / 2.0, rect.center().y + galley.size().x / 2.0);
+    let shape = egui::epaint::TextShape::new(pos, galley, fg).with_angle(-std::f32::consts::FRAC_PI_2);
+    painter.add(shape);
+}
 
 fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
-    let (text, color, bg) = match mode {
+    let (text, fg, bg) = match mode {
         RibbonMode::Draft => (
             "DRAFT",
             egui::Color32::from_rgb(141, 142, 150),
@@ -163,17 +200,9 @@ fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
         ),
     };
     let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, height), egui::Sense::hover());
-    if !ui.is_rect_visible(rect) {
-        return;
-    }
-    let painter = ui.painter();
-    painter.rect_filled(rect, 6.0, bg);
-    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::monospace(9.0), color);
-    // Rotated 90 CCW: reads bottom-to-top. The layout origin lands at the
-    // bottom-left of the rotated text run.
-    let pos = egui::pos2(rect.center().x - galley.size().y / 2.0, rect.center().y + galley.size().x / 2.0);
-    let shape = egui::epaint::TextShape::new(pos, galley, color).with_angle(-std::f32::consts::FRAC_PI_2);
-    painter.add(shape);
+    // Standalone -- not attached to any icon container -- so it stays fully
+    // rounded, unlike a module's own label pill.
+    vertical_label_pill(ui, rect, text, fg, bg, egui::CornerRadius::same(6));
 }
 
 /// A group/module's content width -- `n` buttons at `button_w` each, with
@@ -184,28 +213,31 @@ fn group_content_width(button_count: usize, button_w: f32, spacing_x: f32) -> f3
     button_count as f32 * button_w + button_count.saturating_sub(1) as f32 * spacing_x
 }
 
-/// Draws one module's rounded-corner frame, with a small vertical label
-/// along its left edge (the same rotated-text treatment [`mode_tag`] uses),
-/// then hands back a child `Ui` scoped to the interior content area for the
-/// caller to draw buttons/fields into. The frame's own space is allocated
-/// here, in the *caller's* `ui` -- the returned child `Ui` is a plain
-/// [`egui::Ui::new_child`] over that already-reserved rect, so drawing into
-/// it does not double-allocate.
+/// Draws one module's rounded-corner frame, with a filled label pill along
+/// its left edge (see `vertical_label_pill`), then hands back a child `Ui`
+/// scoped to the interior content area for the caller to draw buttons/fields
+/// into. The frame's own space is allocated here, in the *caller's* `ui` --
+/// the returned child `Ui` is a plain [`egui::Ui::new_child`] over that
+/// already-reserved rect, so drawing into it does not double-allocate.
+///
+/// The label pill's corners are rounded only on its left (the frame's own
+/// outer edge, where the two curves are meant to read as one continuous
+/// corner) and square on its right, where it abuts the button row flush --
+/// Chris's sketch shows this exact condition and asked for it explicitly
+/// (2026-08-14): a rounded outside, a square inside where the label meets
+/// the icon container.
 fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> egui::Ui {
-    let outer_size = egui::vec2(LABEL_STRIP_W + FRAME_PAD + content_w + FRAME_PAD, row_h);
+    let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
+    let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
     if ui.is_rect_visible(outer_rect) {
-        let painter = ui.painter();
-        painter.rect_stroke(outer_rect, FRAME_RADIUS, egui::Stroke::new(1.0, FRAME_STROKE), egui::StrokeKind::Inside);
-        let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
-        let galley = painter.layout_no_wrap(label.to_lowercase(), egui::FontId::monospace(9.0), FRAME_LABEL_COLOR);
-        // Rotated 90 CCW, same convention as `mode_tag`: reads bottom-to-top.
-        let pos = egui::pos2(label_rect.center().x - galley.size().y / 2.0, label_rect.center().y + galley.size().x / 2.0);
-        let shape = egui::epaint::TextShape::new(pos, galley, FRAME_LABEL_COLOR).with_angle(-std::f32::consts::FRAC_PI_2);
-        painter.add(shape);
+        ui.painter().rect_stroke(outer_rect, FRAME_RADIUS, egui::Stroke::new(1.0, FRAME_STROKE), egui::StrokeKind::Inside);
+        let radius = FRAME_RADIUS as u8;
+        let pill_radius = egui::CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 };
+        vertical_label_pill(ui, label_rect, &label.to_lowercase(), MODULE_LABEL_FG, MODULE_LABEL_BG, pill_radius);
     }
     let content_rect = egui::Rect::from_min_size(
-        outer_rect.min + egui::vec2(LABEL_STRIP_W + FRAME_PAD, 0.0),
+        outer_rect.min + egui::vec2(LABEL_STRIP_W + GAP, 0.0),
         egui::vec2(content_w, row_h),
     );
     ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(egui::Layout::left_to_right(egui::Align::Center)))
@@ -249,13 +281,13 @@ fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &i
 pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[RibbonGroup<A>], host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
-    let row_h = button_size.y + FRAME_PAD * 2.0;
+    let row_h = button_size.y + GAP * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             mode_tag(ui, mode, row_h);
             for group in groups {
-                ui.add_space(FRAME_GAP);
+                ui.add_space(GAP);
                 let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
                 let mut child = module_frame(ui, group.label, content_w, row_h);
                 draw_button_row(&mut child, group, host, &mut actions);
@@ -274,13 +306,13 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[Ri
 pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
-    let row_h = button_size.y + FRAME_PAD * 2.0;
+    let row_h = button_size.y + GAP * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             mode_tag(ui, mode, row_h);
             for module in modules {
-                ui.add_space(FRAME_GAP);
+                ui.add_space(GAP);
                 match module {
                     RibbonModule::Buttons(group) => {
                         let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
