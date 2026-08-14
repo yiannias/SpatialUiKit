@@ -17,14 +17,19 @@
 //! (flat borderless buttons, a group's name in small type *below* its button
 //! row, a hairline `ui.separator()` between groups) is gone, replaced by
 //! [`module_frame`] -- a rounded-corner box around each group/module with a
-//! small vertical label along its left edge, the same rotated-text treatment
-//! [`mode_tag`] already used for DRAFT/EDIT/tool tags. Chris's reasoning
+//! small vertical, all-caps label pill along its left edge. Chris's reasoning
 //! (2026-08-14): a caption row under every group stacked a second text row
 //! under the ribbon's own menu-bar row -- a "wedding cake" of stacked text --
 //! and cost vertical space that bigger icons could use instead once
 //! `RibbonHost::button_size` (new, defaulted) lets a host grow its buttons to
 //! fill the row when it hides per-button captions (SDB's `ribbon_show_labels`
-//! toggle).
+//! toggle). A same-day follow-up (still 2026-08-14) dropped the separate
+//! DRAFT/EDIT/tool-armed mode tag that used to sit to the left of the first
+//! module -- Chris: it "has no use" -- and moved its filled-pill visual
+//! treatment onto every module's own label instead of leaving it a one-off
+//! (see [`vertical_label_pill`]). `RibbonMode`/`mode_tag` are gone entirely,
+//! not just unused -- there was nothing else reading tool-armed state through
+//! this module, so nothing else needed to change.
 //!
 //! **This is a breaking visual change for SpatialSketchPad**, whose own
 //! ribbon is a second, unmodified caller of [`ribbon_panel`] through this
@@ -47,15 +52,6 @@
 //! `FRAME_RADIUS` below), those are file-local constants here, not
 //! per-host-configurable -- widen them to parameters if SSP's needs
 //! diverge from SDB's rather than forking the file.
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RibbonMode {
-    Draft,
-    Edit,
-    /// A drawing tool/command is armed; the payload is the short tag label
-    /// ("LINE", "ARC", ...).
-    Tool(&'static str),
-}
 
 /// One button in a ribbon group, generic over the app's action type.
 /// `selected` is precomputed by the caller (each app compares its own
@@ -147,19 +143,19 @@ const GAP: f32 = 8.0;
 const LABEL_STRIP_W: f32 = 16.0;
 const FRAME_RADIUS: f32 = 8.0;
 const FRAME_STROKE: egui::Color32 = egui::Color32::from_rgb(58, 59, 64);
-/// A module label pill's own colors -- deliberately the same pair
-/// `RibbonMode::Draft`'s tag uses below. Chris, 2026-08-14: the mode tag's
-/// filled-pill look ("I like the graphical appearance of it") should be
-/// every module label's look, not a one-off treatment that stops at DRAFT/
-/// EDIT/tool tags while every other label sits in plain outline text.
+/// A module label pill's own colors -- the same pair the old DRAFT tag used,
+/// carried over because Chris liked that look ("I like the graphical
+/// appearance of it") even after asking for the tag itself to go.
 const MODULE_LABEL_FG: egui::Color32 = egui::Color32::from_rgb(141, 142, 150);
 const MODULE_LABEL_BG: egui::Color32 = egui::Color32::from_rgb(43, 44, 49);
 
-/// Draws a filled box with a small vertical (rotated 90° CCW) label inside
-/// it -- the shared drawing behind both the mode tag (DRAFT/EDIT/tool,
-/// `corner_radius` fully rounded, standalone) and every module's own label
-/// pill (`corner_radius` rounded only on the corners at its *outer* edge,
-/// square where it abuts the module's icon container -- see `module_frame`).
+/// Draws a filled box with a small vertical (rotated 90° CCW), all-caps
+/// label inside it -- every module's own label pill, `corner_radius` rounded
+/// only on the corners at its *outer* edge and square where it abuts the
+/// module's icon container (see `module_frame`). Callers pass an
+/// already-uppercased/abbreviated `text`; this only handles layout and
+/// drawing, not wording -- see `module_frame`'s own doc comment for why
+/// abbreviation lives with the caller.
 fn vertical_label_pill(
     ui: &egui::Ui,
     rect: egui::Rect,
@@ -179,30 +175,6 @@ fn vertical_label_pill(
     let pos = egui::pos2(rect.center().x - galley.size().y / 2.0, rect.center().y + galley.size().x / 2.0);
     let shape = egui::epaint::TextShape::new(pos, galley, fg).with_angle(-std::f32::consts::FRAC_PI_2);
     painter.add(shape);
-}
-
-fn mode_tag(ui: &mut egui::Ui, mode: &RibbonMode, height: f32) {
-    let (text, fg, bg) = match mode {
-        RibbonMode::Draft => (
-            "DRAFT",
-            egui::Color32::from_rgb(141, 142, 150),
-            egui::Color32::from_rgb(43, 44, 49),
-        ),
-        RibbonMode::Edit => (
-            "EDIT",
-            egui::Color32::from_rgb(255, 178, 82),
-            egui::Color32::from_rgb(51, 41, 26),
-        ),
-        RibbonMode::Tool(label) => (
-            *label,
-            egui::Color32::from_rgb(104, 222, 158),
-            egui::Color32::from_rgb(23, 40, 30),
-        ),
-    };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(18.0, height), egui::Sense::hover());
-    // Standalone -- not attached to any icon container -- so it stays fully
-    // rounded, unlike a module's own label pill.
-    vertical_label_pill(ui, rect, text, fg, bg, egui::CornerRadius::same(6));
 }
 
 /// A group/module's content width -- `n` buttons at `button_w` each, with
@@ -226,6 +198,14 @@ fn group_content_width(button_count: usize, button_w: f32, spacing_x: f32) -> f3
 /// Chris's sketch shows this exact condition and asked for it explicitly
 /// (2026-08-14): a rounded outside, a square inside where the label meets
 /// the icon container.
+///
+/// `label` is drawn in all caps (Chris, 2026-08-14: "the icon groups'
+/// labels should be all caps"). Abbreviation for a label too long to read
+/// comfortably down the pill (e.g. "Dimension" -> "DIM", "Leaders & Styles"
+/// -> "LEADER") is **not** done here -- it's wording, which belongs with
+/// whoever wrote the label in the first place (`context.rs`'s group
+/// constructors), not a generic truncation rule that would produce
+/// nonsense like "DIME" for an arbitrary cutoff.
 fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> egui::Ui {
     let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
@@ -234,7 +214,7 @@ fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> e
         ui.painter().rect_stroke(outer_rect, FRAME_RADIUS, egui::Stroke::new(1.0, FRAME_STROKE), egui::StrokeKind::Inside);
         let radius = FRAME_RADIUS as u8;
         let pill_radius = egui::CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 };
-        vertical_label_pill(ui, label_rect, &label.to_lowercase(), MODULE_LABEL_FG, MODULE_LABEL_BG, pill_radius);
+        vertical_label_pill(ui, label_rect, &label.to_uppercase(), MODULE_LABEL_FG, MODULE_LABEL_BG, pill_radius);
     }
     let content_rect = egui::Rect::from_min_size(
         outer_rect.min + egui::vec2(LABEL_STRIP_W + GAP, 0.0),
@@ -273,19 +253,18 @@ fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &i
     }
 }
 
-/// Render the mode tag + button groups. Returns the actions clicked this
-/// frame. One row, horizontally scrollable if the groups exceed the window
-/// width -- groups must never wrap onto extra rows (each group is measured
-/// and allocated exactly, since a bare child inside a horizontal row claims
-/// all remaining width and stacks every group onto its own line).
-pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[RibbonGroup<A>], host: &impl RibbonHost) -> Vec<A> {
+/// Render the button groups. Returns the actions clicked this frame. One
+/// row, horizontally scrollable if the groups exceed the window width --
+/// groups must never wrap onto extra rows (each group is measured and
+/// allocated exactly, since a bare child inside a horizontal row claims all
+/// remaining width and stacks every group onto its own line).
+pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, groups: &[RibbonGroup<A>], host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            mode_tag(ui, mode, row_h);
             for group in groups {
                 ui.add_space(GAP);
                 let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
@@ -298,19 +277,18 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, groups: &[Ri
     actions
 }
 
-/// Render the mode tag + an ordered list of modules -- the generalized form
-/// of `ribbon_panel` that also accepts `RibbonModule::Custom` groups (tool
+/// Render an ordered list of modules -- the generalized form of
+/// `ribbon_panel` that also accepts `RibbonModule::Custom` groups (tool
 /// option fields, category units, ...) alongside plain button groups, each
 /// drawn with the same module-frame treatment so the row reads as one
 /// consistent set of modules.
-pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, mode: &RibbonMode, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
+pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            mode_tag(ui, mode, row_h);
             for module in modules {
                 ui.add_space(GAP);
                 match module {
