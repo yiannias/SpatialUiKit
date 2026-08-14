@@ -265,8 +265,20 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, groups: &[RibbonGroup<A>], host
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            for group in groups {
-                ui.add_space(GAP);
+            for (i, group) in groups.iter().enumerate() {
+                // Only before the *first* module -- egui's own
+                // `item_spacing.x` (8.0 by default, the same as `GAP`)
+                // already lands between every later pair of allocations
+                // automatically. Adding `GAP` there too double-counted it
+                // (Chris, 2026-08-14: the horizontal gap between frames read
+                // wider than the vertical padding inside them). The first
+                // module has no preceding allocation for `item_spacing` to
+                // apply after, so it still needs an explicit space -- and
+                // this is the one Chris confirmed reads correctly as-is,
+                // so it's untouched.
+                if i == 0 {
+                    ui.add_space(GAP);
+                }
                 let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
                 let mut child = module_frame(ui, group.label, content_w, row_h);
                 draw_button_row(&mut child, group, host, &mut actions);
@@ -289,8 +301,12 @@ pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, modules: Vec<RibbonModu
 
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
-            for module in modules {
-                ui.add_space(GAP);
+            // See `ribbon_panel`'s identical loop for why this is only
+            // before the first module.
+            for (i, module) in modules.into_iter().enumerate() {
+                if i == 0 {
+                    ui.add_space(GAP);
+                }
                 match module {
                     RibbonModule::Buttons(group) => {
                         let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
