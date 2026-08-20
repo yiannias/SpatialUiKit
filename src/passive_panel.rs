@@ -82,8 +82,16 @@ pub fn fit_to_viewport(
     let w = (vp.width() - l - r).max(min_outer.x);
     let h = height.clamp(min_outer.y, (vp.height() - 24.0).max(min_outer.y));
     // Nearer horizontal edge wins if the width had to be clamped.
-    let x = if r <= l { vp.right() - r - w } else { vp.left() + l };
-    let y = if anchor_bottom { vp.bottom() - b - h } else { vp.top() + t };
+    let x = if r <= l {
+        vp.right() - r - w
+    } else {
+        vp.left() + l
+    };
+    let y = if anchor_bottom {
+        vp.bottom() - b - h
+    } else {
+        vp.top() + t
+    };
     egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
 }
 
@@ -142,8 +150,19 @@ pub enum Glyph {
     Arc(f32, f32, f32, f32, f32),
 }
 
-pub fn paint_icon(painter: &egui::Painter, rect: egui::Rect, glyphs: &[Glyph], color: egui::Color32, width: f32) {
-    let map = |x: f32, y: f32| egui::pos2(rect.min.x + x * rect.width(), rect.min.y + y * rect.height());
+pub fn paint_icon(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    glyphs: &[Glyph],
+    color: egui::Color32,
+    width: f32,
+) {
+    let map = |x: f32, y: f32| {
+        egui::pos2(
+            rect.min.x + x * rect.width(),
+            rect.min.y + y * rect.height(),
+        )
+    };
     let stroke = egui::Stroke::new(width, color);
     for g in glyphs {
         match *g {
@@ -242,13 +261,28 @@ pub fn annunciator_response_sized(
     let radius = 7.0 * scale;
     let painter = ui.painter();
     painter.rect_filled(rect, radius, fill);
-    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    painter.rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
 
     let with_caption = size.y >= CAPTION_MIN_HEIGHT;
-    let icon_side = if with_caption { 15.0 * scale } else { (size.y - 6.0).min(size.x - 6.0) };
-    let icon_center_y = if with_caption { rect.min.y + 15.0 * scale } else { rect.center().y };
-    let icon_rect =
-        egui::Rect::from_center_size(egui::pos2(rect.center().x, icon_center_y), egui::vec2(icon_side, icon_side));
+    let icon_side = if with_caption {
+        15.0 * scale
+    } else {
+        (size.y - 6.0).min(size.x - 6.0)
+    };
+    let icon_center_y = if with_caption {
+        rect.min.y + 15.0 * scale
+    } else {
+        rect.center().y
+    };
+    let icon_rect = egui::Rect::from_center_size(
+        egui::pos2(rect.center().x, icon_center_y),
+        egui::vec2(icon_side, icon_side),
+    );
     let caption_pos = egui::pos2(rect.center().x, rect.max.y - 8.5 * scale);
     // Bypasses egui's style system entirely (raw `painter.text`), so scale
     // it manually against the app's text-size setting -- see
@@ -260,15 +294,44 @@ pub fn annunciator_response_sized(
     if lit {
         // Back-illumination: wide translucent underpaints beneath the crisp
         // stroke, and a soft halo behind the caption.
-        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.16), stroke_w * 3.2);
-        paint_icon(painter, icon_rect, glyphs, accent.gamma_multiply(0.38), stroke_w * 2.0);
+        paint_icon(
+            painter,
+            icon_rect,
+            glyphs,
+            accent.gamma_multiply(0.16),
+            stroke_w * 3.2,
+        );
+        paint_icon(
+            painter,
+            icon_rect,
+            glyphs,
+            accent.gamma_multiply(0.38),
+            stroke_w * 2.0,
+        );
         paint_icon(painter, icon_rect, glyphs, accent, stroke_w);
         if with_caption {
             let halo = accent.gamma_multiply(0.3);
-            for off in [egui::vec2(-1.0, 0.0), egui::vec2(1.0, 0.0), egui::vec2(0.0, -1.0), egui::vec2(0.0, 1.0)] {
-                painter.text(caption_pos + off, egui::Align2::CENTER_CENTER, label, font.clone(), halo);
+            for off in [
+                egui::vec2(-1.0, 0.0),
+                egui::vec2(1.0, 0.0),
+                egui::vec2(0.0, -1.0),
+                egui::vec2(0.0, 1.0),
+            ] {
+                painter.text(
+                    caption_pos + off,
+                    egui::Align2::CENTER_CENTER,
+                    label,
+                    font.clone(),
+                    halo,
+                );
             }
-            painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, accent);
+            painter.text(
+                caption_pos,
+                egui::Align2::CENTER_CENTER,
+                label,
+                font,
+                accent,
+            );
         }
     } else {
         let dim = egui::Color32::from_rgb(104, 104, 112);
@@ -286,12 +349,22 @@ pub fn annunciator_response_sized(
 /// lamp -- SDB's drafting-scale readout ("1:40", `1/4" = 1'-0"`) is the first.
 /// Returns the raw `Response` so the caller can hang a click handler or a
 /// `context_menu` / popup off it.
-pub fn capsule(ui: &mut egui::Ui, text: &str, accent: egui::Color32, height: f32, tip: &str) -> egui::Response {
+pub fn capsule(
+    ui: &mut egui::Ui,
+    text: &str,
+    accent: egui::Color32,
+    height: f32,
+    tip: &str,
+) -> egui::Response {
     let scale = (height / ANNUNCIATOR_SIZE.y).clamp(0.4, 1.0);
     let font = egui::FontId::monospace(
-        crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale.max(0.7),
+        crate::theme::PASSIVE_PANEL_TEXT_SIZE
+            * crate::theme::current_text_scale(ui)
+            * scale.max(0.7),
     );
-    let galley = ui.painter().layout_no_wrap(text.to_string(), font.clone(), accent);
+    let galley = ui
+        .painter()
+        .layout_no_wrap(text.to_string(), font.clone(), accent);
     let pad_x = 9.0 * scale.max(0.6);
     let size = egui::vec2(galley.size().x + pad_x * 2.0, height.max(14.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
@@ -306,14 +379,30 @@ pub fn capsule(ui: &mut egui::Ui, text: &str, accent: egui::Color32, height: f32
     } else {
         egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 70)
     };
-    painter.rect_stroke(rect, radius, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
-    painter.galley(egui::pos2(rect.min.x + pad_x, rect.center().y - galley.size().y * 0.5), galley, accent);
+    painter.rect_stroke(
+        rect,
+        radius,
+        egui::Stroke::new(1.0, border),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(
+        egui::pos2(rect.min.x + pad_x, rect.center().y - galley.size().y * 0.5),
+        galley,
+        accent,
+    );
     resp.on_hover_text(tip)
 }
 
 /// Plain-bool convenience wrapper over [`annunciator_response`], for the
 /// common case where only a left-click matters.
-pub fn annunciator(ui: &mut egui::Ui, label: &str, glyphs: &[Glyph], lit: bool, accent: egui::Color32, tip: &str) -> bool {
+pub fn annunciator(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyphs: &[Glyph],
+    lit: bool,
+    accent: egui::Color32,
+    tip: &str,
+) -> bool {
     annunciator_response(ui, label, glyphs, lit, accent, tip).clicked()
 }
 
@@ -323,7 +412,10 @@ pub fn panel_frame(opacity: f32) -> egui::Frame {
     let alpha = (opacity.clamp(0.25, 1.0) * 255.0) as u8;
     egui::Frame::new()
         .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 35, alpha))
-        .stroke(egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120))))
+        .stroke(egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120)),
+        ))
         .corner_radius(14)
         .inner_margin(egui::Margin::symmetric(14, 10))
 }
@@ -332,7 +424,11 @@ pub fn panel_frame(opacity: f32) -> egui::Frame {
 /// fully owned by the margin model above (egui's own resize memory can't be
 /// driven from viewport changes), so the window is fixed-size and resizing
 /// goes through [`resize_grip`] instead.
-pub fn panel_window(content_size: egui::Vec2, frame: egui::Frame, pending_pos: Option<(f32, f32)>) -> egui::Window<'static> {
+pub fn panel_window(
+    content_size: egui::Vec2,
+    frame: egui::Frame,
+    pending_pos: Option<(f32, f32)>,
+) -> egui::Window<'static> {
     let mut window = egui::Window::new("passive_panel")
         .id(egui::Id::new("passive_panel"))
         .title_bar(false)
@@ -351,9 +447,18 @@ pub fn panel_window(content_size: egui::Vec2, frame: egui::Frame, pending_pos: O
 /// `monospace` matches SDB's styling choice (SSP renders proportional).
 /// Requests a repaint while anything is still fading or visible, so the fade
 /// animation actually advances frame to frame.
-pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedEntry>, show_history: bool, feed_h: f32, monospace: bool) {
+pub fn render_feed(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    feed: &VecDeque<FeedEntry>,
+    show_history: bool,
+    feed_h: f32,
+    monospace: bool,
+) {
     let style_label = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
-        let mut rt = egui::RichText::new(text).color(color).size(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
+        let mut rt = egui::RichText::new(text)
+            .color(color)
+            .size(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
         if monospace {
             rt = rt.monospace();
         }
@@ -398,16 +503,20 @@ pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedE
     // renders next), with any leftover space pushed above the oldest visible
     // row instead of appearing below everything.
     let any_fading = ui
-        .allocate_ui_with_layout(egui::vec2(ui.available_width(), feed_h), egui::Layout::bottom_up(egui::Align::Min), |ui| {
-            let mut any_fading = false;
-            for (entry, a) in recent.iter() {
-                if *a < 1.0 {
-                    any_fading = true;
+        .allocate_ui_with_layout(
+            egui::vec2(ui.available_width(), feed_h),
+            egui::Layout::bottom_up(egui::Align::Min),
+            |ui| {
+                let mut any_fading = false;
+                for (entry, a) in recent.iter() {
+                    if *a < 1.0 {
+                        any_fading = true;
+                    }
+                    style_label(ui, &entry.text, feed_color(entry.kind).gamma_multiply(*a));
                 }
-                style_label(ui, &entry.text, feed_color(entry.kind).gamma_multiply(*a));
-            }
-            any_fading
-        })
+                any_fading
+            },
+        )
         .inner;
     if any_fading || !recent.is_empty() {
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -419,7 +528,10 @@ pub fn render_feed(ui: &mut egui::Ui, ctx: &egui::Context, feed: &VecDeque<FeedE
 /// fixed-size (see [`panel_window`]) -- this is the only way the user
 /// resizes it.
 pub fn resize_grip(ui: &mut egui::Ui, size: &mut (f32, f32), min_outer: egui::Vec2) {
-    let grip_rect = egui::Rect::from_min_size(ui.max_rect().max - egui::vec2(6.0, 6.0), egui::vec2(16.0, 16.0));
+    let grip_rect = egui::Rect::from_min_size(
+        ui.max_rect().max - egui::vec2(6.0, 6.0),
+        egui::vec2(16.0, 16.0),
+    );
     let grip = ui.interact(grip_rect, ui.id().with("resize_grip"), egui::Sense::drag());
     let grip_color = if grip.hovered() || grip.dragged() {
         egui::Color32::from_rgb(180, 180, 190)
@@ -428,8 +540,14 @@ pub fn resize_grip(ui: &mut egui::Ui, size: &mut (f32, f32), min_outer: egui::Ve
     };
     let painter = ui.painter();
     let c = grip_rect.min + egui::vec2(8.0, 8.0);
-    painter.line_segment([c + egui::vec2(-4.0, 4.0), c + egui::vec2(4.0, -4.0)], egui::Stroke::new(1.2, grip_color));
-    painter.line_segment([c + egui::vec2(0.0, 4.0), c + egui::vec2(4.0, 0.0)], egui::Stroke::new(1.2, grip_color));
+    painter.line_segment(
+        [c + egui::vec2(-4.0, 4.0), c + egui::vec2(4.0, -4.0)],
+        egui::Stroke::new(1.2, grip_color),
+    );
+    painter.line_segment(
+        [c + egui::vec2(0.0, 4.0), c + egui::vec2(4.0, 0.0)],
+        egui::Stroke::new(1.2, grip_color),
+    );
     if grip.hovered() || grip.dragged() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeNwSe);
     }
@@ -444,9 +562,19 @@ pub fn resize_grip(ui: &mut egui::Ui, size: &mut (f32, f32), min_outer: egui::Ve
 /// position, hide panel. `on_reset`/`on_hide` are called on click (before
 /// the menu closes) -- each app wires these to its own `PassivePanelState`
 /// methods/fields.
-pub fn context_menu(response: &egui::Response, opacity: &mut f32, show_history: &mut bool, on_reset: impl FnOnce(), on_hide: impl FnOnce()) {
+pub fn context_menu(
+    response: &egui::Response,
+    opacity: &mut f32,
+    show_history: &mut bool,
+    on_reset: impl FnOnce(),
+    on_hide: impl FnOnce(),
+) {
     response.context_menu(|ui| {
-        ui.add(egui::Slider::new(opacity, 0.25..=1.0).text("Opacity").show_value(false));
+        ui.add(
+            egui::Slider::new(opacity, 0.25..=1.0)
+                .text("Opacity")
+                .show_value(false),
+        );
         ui.checkbox(show_history, "Show history");
         if ui.button("Reset position").clicked() {
             on_reset();

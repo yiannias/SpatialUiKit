@@ -149,7 +149,10 @@ impl<A, Ctx> MenuNode<A, Ctx> {
     }
 
     pub fn guard_unchecked(mut self) -> MenuNode<A, Ctx> {
-        if let MenuNode::Item { guard_unchecked, .. } = &mut self {
+        if let MenuNode::Item {
+            guard_unchecked, ..
+        } = &mut self
+        {
             *guard_unchecked = true;
         }
         self
@@ -232,7 +235,11 @@ fn render_node<A: Clone, Ctx>(
                 }
             });
         }
-        MenuNode::Submenu { label, color, children } => {
+        MenuNode::Submenu {
+            label,
+            color,
+            children,
+        } => {
             ui.menu_button(colorize(label, color), |ui| {
                 for child in children {
                     render_node(ui, ctx, host, child, actions);
@@ -307,7 +314,12 @@ pub fn render_menu_bar<A: Clone, Ctx>(
     egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             for node in tree {
-                if let MenuNode::Submenu { label, color, children } = node {
+                if let MenuNode::Submenu {
+                    label,
+                    color,
+                    children,
+                } = node
+                {
                     ui.menu_button(colorize(label, color), |ui| {
                         for child in children {
                             render_node(ui, ctx, host, child, &mut actions);

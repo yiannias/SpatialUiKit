@@ -178,7 +178,10 @@ pub fn capsule(ui: &mut egui::Ui, viewport_rect: egui::Rect, state: &IdleInputSt
 
     let margin = egui::vec2(24.0, 24.0);
     let pos = if viewport_rect.width() > 1.0 && viewport_rect.height() > 1.0 {
-        egui::pos2(viewport_rect.left() + margin.x, viewport_rect.bottom() - margin.y)
+        egui::pos2(
+            viewport_rect.left() + margin.x,
+            viewport_rect.bottom() - margin.y,
+        )
     } else {
         ui.max_rect().left_bottom() + egui::vec2(margin.x, -margin.y)
     };

@@ -66,14 +66,21 @@ impl<A, Ctx> SettingsNode<A, Ctx> {
         label: &'static str,
         render: impl Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync + 'static,
     ) -> Self {
-        SettingsNode::Custom { label, render: Box::new(render) }
+        SettingsNode::Custom {
+            label,
+            render: Box::new(render),
+        }
     }
     pub fn section(
         id: &'static str,
         label: &'static str,
         children: Vec<SettingsNode<A, Ctx>>,
     ) -> Self {
-        SettingsNode::Section { id, label, children }
+        SettingsNode::Section {
+            id,
+            label,
+            children,
+        }
     }
 
     pub fn group(label: &'static str, children: Vec<SettingsNode<A, Ctx>>) -> Self {
@@ -259,7 +266,11 @@ pub trait SettingsHost {
 pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
     ui.horizontal(|ui| {
         ui.label("\u{1f50d}");
-        ui.add(egui::TextEdit::singleline(query).hint_text("Search").desired_width(f32::INFINITY));
+        ui.add(
+            egui::TextEdit::singleline(query)
+                .hint_text("Search")
+                .desired_width(f32::INFINITY),
+        );
     });
 }
 
@@ -272,8 +283,12 @@ fn label_contains(label: &str, filter_lower: &str) -> bool {
 /// `Section` row (or one of its ancestors) should still show while filtering.
 fn node_matches<A, Ctx>(node: &SettingsNode<A, Ctx>, filter_lower: &str) -> bool {
     match node {
-        SettingsNode::Section { label, children, .. } | SettingsNode::Group { label, children } => {
-            label_contains(label, filter_lower) || children.iter().any(|c| node_matches(c, filter_lower))
+        SettingsNode::Section {
+            label, children, ..
+        }
+        | SettingsNode::Group { label, children } => {
+            label_contains(label, filter_lower)
+                || children.iter().any(|c| node_matches(c, filter_lower))
         }
         SettingsNode::Field(f) => label_contains(f.label, filter_lower),
         SettingsNode::Custom { label, .. } => label_contains(label, filter_lower),
@@ -309,7 +324,12 @@ fn render_nav_filtered<A, Ctx>(
 ) -> Option<&'static str> {
     let mut clicked = None;
     for node in tree {
-        if let SettingsNode::Section { id, label, children } = node {
+        if let SettingsNode::Section {
+            id,
+            label,
+            children,
+        } = node
+        {
             if !filter_lower.is_empty() && !node_matches(node, filter_lower) {
                 continue;
             }
@@ -347,9 +367,18 @@ fn framed_header(ui: &mut egui::Ui, label: &str, text_size: f32) -> egui::Respon
 /// (cubic Bézier, control points at the standard ~0.5523*r circle-arc
 /// offset) instead of a sharp right angle, per the "little bend" look Chris
 /// asked for (2026-07-21) over egui's default straight `indent_has_left_vline`.
-fn draw_elbow(painter: &egui::Painter, trunk_x: f32, trunk_top: f32, target_y: f32, target_x: f32, stroke: egui::Stroke) {
+fn draw_elbow(
+    painter: &egui::Painter,
+    trunk_x: f32,
+    trunk_top: f32,
+    target_y: f32,
+    target_x: f32,
+    stroke: egui::Stroke,
+) {
     const K: f32 = 0.5523;
-    let r = 8.0_f32.min((target_x - trunk_x - 2.0).max(1.0)).min((target_y - trunk_top).max(1.0));
+    let r = 8.0_f32
+        .min((target_x - trunk_x - 2.0).max(1.0))
+        .min((target_y - trunk_top).max(1.0));
     let bend_start = egui::pos2(trunk_x, target_y - r);
     let bend_end = egui::pos2(trunk_x + r, target_y);
     let bezier = egui::epaint::CubicBezierShape::from_points_stroke(
@@ -390,13 +419,24 @@ fn render_indented<A: Clone, Ctx>(
 
     let mut child_ui = ui.new_child(egui::UiBuilder::new().id_salt(id_salt).max_rect(child_rect));
     let mut branch_ys: Vec<f32> = Vec::new();
-    render_content_impl(&mut child_ui, ctx, host, children, scroll_to, actions, &mut branch_ys);
+    render_content_impl(
+        &mut child_ui,
+        ctx,
+        host,
+        children,
+        scroll_to,
+        actions,
+        &mut branch_ys,
+    );
     let child_min_rect = child_ui.min_rect();
 
     if let Some(&last) = branch_ys.last() {
         let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
         let painter = ui.painter();
-        painter.line_segment([egui::pos2(trunk_x, top_y), egui::pos2(trunk_x, last)], stroke);
+        painter.line_segment(
+            [egui::pos2(trunk_x, top_y), egui::pos2(trunk_x, last)],
+            stroke,
+        );
         for &y in &branch_ys {
             draw_elbow(painter, trunk_x, top_y, y, child_rect.min.x, stroke);
         }
@@ -441,7 +481,11 @@ pub fn render_content<A: Clone, Ctx>(
         const SCROLLBAR_GUTTER: f32 = 14.0;
         let card_width = (ui.available_width() - SCROLLBAR_GUTTER).max(200.0);
         match node {
-            SettingsNode::Section { id, label, children } => {
+            SettingsNode::Section {
+                id,
+                label,
+                children,
+            } => {
                 ui.add_space(10.0);
                 egui::Frame::new()
                     .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
@@ -461,7 +505,15 @@ pub fn render_content<A: Clone, Ctx>(
             // Each app's tree root is a flat list of tier `Section`s, so
             // `Group`/`Field` shouldn't appear here in practice -- handled
             // via the plain (unframed) renderer for robustness.
-            _ => render_content_impl(ui, ctx, host, std::slice::from_ref(node), scroll_to, actions, &mut Vec::new()),
+            _ => render_content_impl(
+                ui,
+                ctx,
+                host,
+                std::slice::from_ref(node),
+                scroll_to,
+                actions,
+                &mut Vec::new(),
+            ),
         }
     }
 }
@@ -478,7 +530,11 @@ fn render_content_impl<A: Clone, Ctx>(
     let mut i = 0;
     while i < tree.len() {
         match &tree[i] {
-            SettingsNode::Section { id, label, children } => {
+            SettingsNode::Section {
+                id,
+                label,
+                children,
+            } => {
                 ui.add_space(10.0);
                 let resp = framed_header(ui, *label, 16.0);
                 branch_ys.push(resp.rect.center().y);
@@ -553,7 +609,10 @@ fn render_field_row<A: Clone, Ctx>(
                 }
                 FieldControl::Text { value, on_change } => {
                     let mut val = value(ctx);
-                    if ui.add(egui::TextEdit::singleline(&mut val).desired_width(220.0)).changed() {
+                    if ui
+                        .add(egui::TextEdit::singleline(&mut val).desired_width(220.0))
+                        .changed()
+                    {
                         actions.push(on_change(val));
                     }
                 }
@@ -581,7 +640,10 @@ fn render_field_row<A: Clone, Ctx>(
                 } => {
                     ui.horizontal(|ui| {
                         let mut val = value(ctx);
-                        if ui.add(egui::TextEdit::singleline(&mut val).desired_width(180.0)).changed() {
+                        if ui
+                            .add(egui::TextEdit::singleline(&mut val).desired_width(180.0))
+                            .changed()
+                        {
                             actions.push(on_change(val));
                         }
                         // `browse_path` opens a blocking native file dialog --
@@ -597,7 +659,10 @@ fn render_field_row<A: Clone, Ctx>(
                         }
                     });
                 }
-                FieldControl::Action { button_label, on_click } => {
+                FieldControl::Action {
+                    button_label,
+                    on_click,
+                } => {
                     if ui.button(*button_label).clicked() {
                         actions.push(on_click(ctx));
                     }

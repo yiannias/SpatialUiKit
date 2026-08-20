@@ -172,8 +172,12 @@ fn vertical_label_pill(
     let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::monospace(9.0), fg);
     // Rotated 90 CCW: reads bottom-to-top. The layout origin lands at the
     // bottom-left of the rotated text run.
-    let pos = egui::pos2(rect.center().x - galley.size().y / 2.0, rect.center().y + galley.size().x / 2.0);
-    let shape = egui::epaint::TextShape::new(pos, galley, fg).with_angle(-std::f32::consts::FRAC_PI_2);
+    let pos = egui::pos2(
+        rect.center().x - galley.size().y / 2.0,
+        rect.center().y + galley.size().x / 2.0,
+    );
+    let shape =
+        egui::epaint::TextShape::new(pos, galley, fg).with_angle(-std::f32::consts::FRAC_PI_2);
     painter.add(shape);
 }
 
@@ -211,24 +215,57 @@ fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> e
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
     if ui.is_rect_visible(outer_rect) {
-        ui.painter().rect_stroke(outer_rect, FRAME_RADIUS, egui::Stroke::new(1.0, FRAME_STROKE), egui::StrokeKind::Inside);
+        ui.painter().rect_stroke(
+            outer_rect,
+            FRAME_RADIUS,
+            egui::Stroke::new(1.0, FRAME_STROKE),
+            egui::StrokeKind::Inside,
+        );
         let radius = FRAME_RADIUS as u8;
-        let pill_radius = egui::CornerRadius { nw: radius, sw: radius, ne: 0, se: 0 };
-        vertical_label_pill(ui, label_rect, &label.to_uppercase(), MODULE_LABEL_FG, MODULE_LABEL_BG, pill_radius);
+        let pill_radius = egui::CornerRadius {
+            nw: radius,
+            sw: radius,
+            ne: 0,
+            se: 0,
+        };
+        vertical_label_pill(
+            ui,
+            label_rect,
+            &label.to_uppercase(),
+            MODULE_LABEL_FG,
+            MODULE_LABEL_BG,
+            pill_radius,
+        );
     }
     let content_rect = egui::Rect::from_min_size(
         outer_rect.min + egui::vec2(LABEL_STRIP_W + GAP, 0.0),
         egui::vec2(content_w, row_h),
     );
-    ui.new_child(egui::UiBuilder::new().max_rect(content_rect).layout(egui::Layout::left_to_right(egui::Align::Center)))
+    ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(content_rect)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    )
 }
 
 /// Draws one button group's row of icon buttons (no label -- the caller's
 /// [`module_frame`] already drew one) into `ui`, which is expected to already
 /// be scoped to the group's content area with a left-to-right layout.
-fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &impl RibbonHost, actions: &mut Vec<A>) {
+fn draw_button_row<A: Clone>(
+    ui: &mut egui::Ui,
+    group: &RibbonGroup<A>,
+    host: &impl RibbonHost,
+    actions: &mut Vec<A>,
+) {
     for button in &group.buttons {
-        let resp = host.icon_button(ui, button.key, button.label, button.selected, button.enabled, button.disabled_hint);
+        let resp = host.icon_button(
+            ui,
+            button.key,
+            button.label,
+            button.selected,
+            button.enabled,
+            button.disabled_hint,
+        );
         let flash_id = egui::Id::new(("ribbon_flash", button.key));
         if resp.clicked() {
             actions.push(button.action.clone());
@@ -243,8 +280,14 @@ fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &i
             if dt < FLASH_SECS {
                 let a = (1.0 - dt / FLASH_SECS) as f32;
                 let amber = egui::Color32::from_rgb(255, 178, 82);
-                ui.painter().rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
-                ui.painter().rect_stroke(resp.rect, 6.0, egui::Stroke::new(1.5, amber.gamma_multiply(a)), egui::StrokeKind::Outside);
+                ui.painter()
+                    .rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
+                ui.painter().rect_stroke(
+                    resp.rect,
+                    6.0,
+                    egui::Stroke::new(1.5, amber.gamma_multiply(a)),
+                    egui::StrokeKind::Outside,
+                );
                 ui.ctx().request_repaint();
             } else {
                 ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
@@ -258,7 +301,11 @@ fn draw_button_row<A: Clone>(ui: &mut egui::Ui, group: &RibbonGroup<A>, host: &i
 /// groups must never wrap onto extra rows (each group is measured and
 /// allocated exactly, since a bare child inside a horizontal row claims all
 /// remaining width and stacks every group onto its own line).
-pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, groups: &[RibbonGroup<A>], host: &impl RibbonHost) -> Vec<A> {
+pub fn ribbon_panel<A: Clone>(
+    ui: &mut egui::Ui,
+    groups: &[RibbonGroup<A>],
+    host: &impl RibbonHost,
+) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
@@ -279,7 +326,11 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, groups: &[RibbonGroup<A>], host
                 if i == 0 {
                     ui.add_space(GAP);
                 }
-                let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
+                let content_w = group_content_width(
+                    group.buttons.len(),
+                    button_size.x,
+                    ui.spacing().item_spacing.x,
+                );
                 let mut child = module_frame(ui, group.label, content_w, row_h);
                 draw_button_row(&mut child, group, host, &mut actions);
             }
@@ -294,7 +345,11 @@ pub fn ribbon_panel<A: Clone>(ui: &mut egui::Ui, groups: &[RibbonGroup<A>], host
 /// option fields, category units, ...) alongside plain button groups, each
 /// drawn with the same module-frame treatment so the row reads as one
 /// consistent set of modules.
-pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, modules: Vec<RibbonModule<A>>, host: &impl RibbonHost) -> Vec<A> {
+pub fn ribbon_panel_modules<A: Clone>(
+    ui: &mut egui::Ui,
+    modules: Vec<RibbonModule<A>>,
+    host: &impl RibbonHost,
+) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
@@ -309,11 +364,19 @@ pub fn ribbon_panel_modules<A: Clone>(ui: &mut egui::Ui, modules: Vec<RibbonModu
                 }
                 match module {
                     RibbonModule::Buttons(group) => {
-                        let content_w = group_content_width(group.buttons.len(), button_size.x, ui.spacing().item_spacing.x);
+                        let content_w = group_content_width(
+                            group.buttons.len(),
+                            button_size.x,
+                            ui.spacing().item_spacing.x,
+                        );
                         let mut child = module_frame(ui, group.label, content_w, row_h);
                         draw_button_row(&mut child, &group, host, &mut actions);
                     }
-                    RibbonModule::Custom { label, width, render } => {
+                    RibbonModule::Custom {
+                        label,
+                        width,
+                        render,
+                    } => {
                         let mut child = module_frame(ui, label, width, row_h);
                         let acts = render(&mut child);
                         actions.extend(acts);

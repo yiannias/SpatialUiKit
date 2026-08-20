@@ -91,7 +91,11 @@ pub const DETACH_MIN_DRAG_PX: f32 = 30.0;
 /// (press origin inside the tab's rect, egui "decidedly dragging"); the
 /// caller should store it into whatever `Option<TabDrag<T>>` it threads
 /// through the frame.
-pub fn detect_tab_drag<T: TabId>(tab: T, response: &egui::Response, source_side: Option<DockSide>) -> Option<TabDrag<T>> {
+pub fn detect_tab_drag<T: TabId>(
+    tab: T,
+    response: &egui::Response,
+    source_side: Option<DockSide>,
+) -> Option<TabDrag<T>> {
     let (down, origin, latest, decided) = response.ctx.input(|i| {
         (
             i.pointer.primary_down(),
@@ -131,7 +135,10 @@ pub enum ReleaseAction<T: TabId> {
     /// A click (never exceeded the distance threshold), or dropped back on
     /// its own source dock -- egui_dock already resolved the reorder/split.
     NoOp,
-    MoveTo { tab: T, target: DragTarget },
+    MoveTo {
+        tab: T,
+        target: DragTarget,
+    },
 }
 
 /// Result of [`classify_drag_release`] for the current frame.
@@ -176,7 +183,9 @@ pub fn classify_drag_release<T: TabId>(
         if drag.dist > min_drag_px {
             if let Some(pos) = pointer_pos {
                 if !over_left(pos) && !over_right(pos) {
-                    return DragReleaseOutcome::StillDragging { ghost_at: Some(pos) };
+                    return DragReleaseOutcome::StillDragging {
+                        ghost_at: Some(pos),
+                    };
                 }
             }
         }
@@ -184,18 +193,31 @@ pub fn classify_drag_release<T: TabId>(
     }
 
     if drag.dist <= min_drag_px {
-        return DragReleaseOutcome::Released { action: ReleaseAction::NoOp };
+        return DragReleaseOutcome::Released {
+            action: ReleaseAction::NoOp,
+        };
     }
     let Some(pos) = pointer_pos else {
-        return DragReleaseOutcome::Released { action: ReleaseAction::NoOp };
+        return DragReleaseOutcome::Released {
+            action: ReleaseAction::NoOp,
+        };
     };
     let (on_left, on_right) = (over_left(pos), over_right(pos));
     let action = match drag.source_side {
         Some(DockSide::Left) if on_left => ReleaseAction::NoOp,
         Some(DockSide::Right) if on_right => ReleaseAction::NoOp,
-        _ if on_left => ReleaseAction::MoveTo { tab: drag.tab, target: DragTarget::Side(DockSide::Left) },
-        _ if on_right => ReleaseAction::MoveTo { tab: drag.tab, target: DragTarget::Side(DockSide::Right) },
-        _ => ReleaseAction::MoveTo { tab: drag.tab, target: DragTarget::FloatingAt(pos) },
+        _ if on_left => ReleaseAction::MoveTo {
+            tab: drag.tab,
+            target: DragTarget::Side(DockSide::Left),
+        },
+        _ if on_right => ReleaseAction::MoveTo {
+            tab: drag.tab,
+            target: DragTarget::Side(DockSide::Right),
+        },
+        _ => ReleaseAction::MoveTo {
+            tab: drag.tab,
+            target: DragTarget::FloatingAt(pos),
+        },
     };
     DragReleaseOutcome::Released { action }
 }
@@ -204,13 +226,23 @@ pub fn classify_drag_release<T: TabId>(
 /// egui_dock's own ghost-tab preview is clipped to the dock panel and gives
 /// no feedback once the pointer leaves it.
 pub fn draw_detach_ghost(ctx: &egui::Context, pos: egui::Pos2, title: &str) {
-    let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("tab_detach_ghost")));
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::new("tab_detach_ghost"),
+    ));
     let rect = egui::Rect::from_min_size(pos + egui::vec2(14.0, 10.0), egui::vec2(180.0, 110.0));
-    painter.rect_filled(rect, 4.0, egui::Color32::from_rgba_unmultiplied(120, 160, 220, 20));
+    painter.rect_filled(
+        rect,
+        4.0,
+        egui::Color32::from_rgba_unmultiplied(120, 160, 220, 20),
+    );
     painter.rect_stroke(
         rect,
         4.0,
-        egui::Stroke::new(1.0, egui::Color32::from_rgba_unmultiplied(150, 180, 230, 200)),
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(150, 180, 230, 200),
+        ),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -313,19 +345,26 @@ pub fn poll_redock<T: TabId>(
         last_change: now,
         ever_moved: false,
     });
-    if (entry.rect.min - current_rect.min).length() >= 1.0 || (entry.rect.max - current_rect.max).length() >= 1.0 {
+    if (entry.rect.min - current_rect.min).length() >= 1.0
+        || (entry.rect.max - current_rect.max).length() >= 1.0
+    {
         *entry = RedockWatch {
             rect: current_rect,
             last_change: now,
             ever_moved: true,
         };
     }
-    let vertical_overlap = current_rect.min.y < main_window_rect.max.y && current_rect.max.y > main_window_rect.min.y;
+    let vertical_overlap =
+        current_rect.min.y < main_window_rect.max.y && current_rect.max.y > main_window_rect.min.y;
     let near_left = (current_rect.left() - main_window_rect.left()).abs() < snap_px;
     let near_right = (current_rect.right() - main_window_rect.right()).abs() < snap_px;
     if vertical_overlap && (near_left || near_right) && entry.ever_moved {
         if now.duration_since(entry.last_change) >= stable {
-            let side = if near_left { DockSide::Left } else { DockSide::Right };
+            let side = if near_left {
+                DockSide::Left
+            } else {
+                DockSide::Right
+            };
             return RedockPollOutcome::Redock { side };
         }
         return RedockPollOutcome::Watching;
@@ -377,7 +416,11 @@ pub struct TabViewerAdapter<'h, T: TabId, H: DockHost<T>> {
 }
 
 impl<'h, T: TabId, H: DockHost<T>> TabViewerAdapter<'h, T, H> {
-    pub fn new(host: &'h mut H, tab_drag: &'h mut Option<TabDrag<T>>, side: Option<DockSide>) -> Self {
+    pub fn new(
+        host: &'h mut H,
+        tab_drag: &'h mut Option<TabDrag<T>>,
+        side: Option<DockSide>,
+    ) -> Self {
         Self {
             host,
             tab_drag,
@@ -449,22 +492,52 @@ mod tests {
     }
 
     fn drag(tab: u32, source_side: Option<DockSide>, dist: f32) -> TabDrag<u32> {
-        TabDrag { tab, source_side, dist }
+        TabDrag {
+            tab,
+            source_side,
+            dist,
+        }
     }
 
     #[test]
     fn sub_threshold_release_is_a_click_no_op() {
         let d = drag(1, Some(DockSide::Left), 5.0);
-        let outcome = classify_drag_release(&d, true, false, Some(egui::pos2(50.0, 50.0)), Some(rect(0.0, 0.0, 100.0, 100.0)), None, 30.0);
-        assert!(matches!(outcome, DragReleaseOutcome::Released { action: ReleaseAction::NoOp }));
+        let outcome = classify_drag_release(
+            &d,
+            true,
+            false,
+            Some(egui::pos2(50.0, 50.0)),
+            Some(rect(0.0, 0.0, 100.0, 100.0)),
+            None,
+            30.0,
+        );
+        assert!(matches!(
+            outcome,
+            DragReleaseOutcome::Released {
+                action: ReleaseAction::NoOp
+            }
+        ));
     }
 
     #[test]
     fn drop_on_own_source_dock_is_no_op() {
         let d = drag(1, Some(DockSide::Left), 50.0);
         let left = Some(rect(0.0, 0.0, 100.0, 100.0));
-        let outcome = classify_drag_release(&d, true, false, Some(egui::pos2(50.0, 50.0)), left, None, 30.0);
-        assert!(matches!(outcome, DragReleaseOutcome::Released { action: ReleaseAction::NoOp }));
+        let outcome = classify_drag_release(
+            &d,
+            true,
+            false,
+            Some(egui::pos2(50.0, 50.0)),
+            left,
+            None,
+            30.0,
+        );
+        assert!(matches!(
+            outcome,
+            DragReleaseOutcome::Released {
+                action: ReleaseAction::NoOp
+            }
+        ));
     }
 
     #[test]
@@ -472,10 +545,22 @@ mod tests {
         let d = drag(1, Some(DockSide::Left), 50.0);
         let left = Some(rect(0.0, 0.0, 100.0, 100.0));
         let right = Some(rect(200.0, 0.0, 100.0, 100.0));
-        let outcome = classify_drag_release(&d, true, false, Some(egui::pos2(250.0, 50.0)), left, right, 30.0);
+        let outcome = classify_drag_release(
+            &d,
+            true,
+            false,
+            Some(egui::pos2(250.0, 50.0)),
+            left,
+            right,
+            30.0,
+        );
         match outcome {
             DragReleaseOutcome::Released {
-                action: ReleaseAction::MoveTo { tab, target: DragTarget::Side(DockSide::Right) },
+                action:
+                    ReleaseAction::MoveTo {
+                        tab,
+                        target: DragTarget::Side(DockSide::Right),
+                    },
             } => assert_eq!(tab, 1),
             other => panic!("expected move to right side, got {other:?}"),
         }
@@ -490,7 +575,11 @@ mod tests {
         let outcome = classify_drag_release(&d, true, false, Some(pos), left, right, 30.0);
         match outcome {
             DragReleaseOutcome::Released {
-                action: ReleaseAction::MoveTo { tab, target: DragTarget::FloatingAt(p) },
+                action:
+                    ReleaseAction::MoveTo {
+                        tab,
+                        target: DragTarget::FloatingAt(p),
+                    },
             } => {
                 assert_eq!(tab, 1);
                 assert_eq!(p, pos);
@@ -505,15 +594,28 @@ mod tests {
         let left = Some(rect(0.0, 0.0, 100.0, 100.0));
         let pos = egui::pos2(500.0, 500.0);
         let outcome = classify_drag_release(&d, false, true, Some(pos), left, None, 30.0);
-        assert!(matches!(outcome, DragReleaseOutcome::StillDragging { ghost_at: Some(p) } if p == pos));
+        assert!(
+            matches!(outcome, DragReleaseOutcome::StillDragging { ghost_at: Some(p) } if p == pos)
+        );
     }
 
     #[test]
     fn still_dragging_over_a_dock_has_no_ghost() {
         let d = drag(1, Some(DockSide::Left), 50.0);
         let left = Some(rect(0.0, 0.0, 100.0, 100.0));
-        let outcome = classify_drag_release(&d, false, true, Some(egui::pos2(50.0, 50.0)), left, None, 30.0);
-        assert!(matches!(outcome, DragReleaseOutcome::StillDragging { ghost_at: None }));
+        let outcome = classify_drag_release(
+            &d,
+            false,
+            true,
+            Some(egui::pos2(50.0, 50.0)),
+            left,
+            None,
+            30.0,
+        );
+        assert!(matches!(
+            outcome,
+            DragReleaseOutcome::StillDragging { ghost_at: None }
+        ));
     }
 
     #[test]
@@ -528,7 +630,14 @@ mod tests {
         let mut watch = HashMap::new();
         let main = rect(0.0, 0.0, 800.0, 600.0);
         let far = rect(2000.0, 2000.0, 300.0, 400.0);
-        let outcome = poll_redock(1u32, far, main, &mut watch, 40.0, Duration::from_millis(400));
+        let outcome = poll_redock(
+            1u32,
+            far,
+            main,
+            &mut watch,
+            40.0,
+            Duration::from_millis(400),
+        );
         assert_eq!(outcome, RedockPollOutcome::Idle);
     }
 
@@ -539,8 +648,19 @@ mod tests {
         // Spawned already resting right at the left edge, but never moved.
         let resting = rect(-5.0, 100.0, 300.0, 400.0);
         for _ in 0..3 {
-            let outcome = poll_redock(1u32, resting, main, &mut watch, 40.0, Duration::from_millis(0));
-            assert_eq!(outcome, RedockPollOutcome::Idle, "must not redock without ever_moved");
+            let outcome = poll_redock(
+                1u32,
+                resting,
+                main,
+                &mut watch,
+                40.0,
+                Duration::from_millis(0),
+            );
+            assert_eq!(
+                outcome,
+                RedockPollOutcome::Idle,
+                "must not redock without ever_moved"
+            );
         }
     }
 
@@ -549,12 +669,29 @@ mod tests {
         let mut watch = HashMap::new();
         let main = rect(0.0, 0.0, 800.0, 600.0);
         let start = rect(2000.0, 100.0, 300.0, 400.0);
-        assert_eq!(poll_redock(1u32, start, main, &mut watch, 40.0, Duration::from_millis(400)), RedockPollOutcome::Idle);
+        assert_eq!(
+            poll_redock(
+                1u32,
+                start,
+                main,
+                &mut watch,
+                40.0,
+                Duration::from_millis(400)
+            ),
+            RedockPollOutcome::Idle
+        );
 
         // Drags near the left edge -- rect changed, so `ever_moved` latches true.
         let near = rect(-5.0, 100.0, 300.0, 400.0);
         assert_eq!(
-            poll_redock(1u32, near, main, &mut watch, 40.0, Duration::from_millis(400)),
+            poll_redock(
+                1u32,
+                near,
+                main,
+                &mut watch,
+                40.0,
+                Duration::from_millis(400)
+            ),
             RedockPollOutcome::Watching,
             "just arrived, not yet stable"
         );
@@ -562,6 +699,11 @@ mod tests {
         // Same rect, but pretend enough time has passed by using a zero
         // stability requirement on the next poll.
         let outcome = poll_redock(1u32, near, main, &mut watch, 40.0, Duration::from_millis(0));
-        assert_eq!(outcome, RedockPollOutcome::Redock { side: DockSide::Left });
+        assert_eq!(
+            outcome,
+            RedockPollOutcome::Redock {
+                side: DockSide::Left
+            }
+        );
     }
 }

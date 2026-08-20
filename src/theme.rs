@@ -67,8 +67,12 @@ impl TextScale {
         }
     }
 
-    pub const ALL: [TextScale; 4] =
-        [TextScale::Small, TextScale::Default, TextScale::Large, TextScale::ExtraLarge];
+    pub const ALL: [TextScale; 4] = [
+        TextScale::Small,
+        TextScale::Default,
+        TextScale::Large,
+        TextScale::ExtraLarge,
+    ];
 }
 
 /// Applies `scale` to every named `egui::TextStyle`'s font size, scaled from
@@ -124,6 +128,11 @@ pub fn current_text_scale(ui: &egui::Ui) -> f32 {
     if default_body <= 0.0 {
         return 1.0;
     }
-    let live_body = ui.style().text_styles.get(&egui::TextStyle::Body).map(|f| f.size).unwrap_or(default_body);
+    let live_body = ui
+        .style()
+        .text_styles
+        .get(&egui::TextStyle::Body)
+        .map(|f| f.size)
+        .unwrap_or(default_body);
     live_body / default_body
 }

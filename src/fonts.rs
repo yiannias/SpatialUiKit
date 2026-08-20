@@ -47,7 +47,10 @@ impl Typeface {
 /// resolve).
 pub fn apply_typeface(ctx: &egui::Context, typeface: Typeface) {
     let mut defs = egui::FontDefinitions::default();
-    defs.font_data.insert(INTER_FONT_KEY.to_owned(), egui::FontData::from_static(INTER_BYTES).into());
+    defs.font_data.insert(
+        INTER_FONT_KEY.to_owned(),
+        egui::FontData::from_static(INTER_BYTES).into(),
+    );
 
     if typeface == Typeface::Inter {
         if let Some(family) = defs.families.get_mut(&egui::FontFamily::Proportional) {
