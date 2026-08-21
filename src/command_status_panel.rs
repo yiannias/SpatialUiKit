@@ -1,7 +1,16 @@
-//! Passive Panel mechanics shared between SpatialSketchPad and
+//! Command & Status Panel mechanics shared between SpatialSketchPad and
 //! SpatialDrawingBoard: the floating translucent "squircle" that anchors to
 //! the drawing viewport's edges, its auto-fading notification feed, cockpit-
 //! style annunciator push-buttons, and its resize/context-menu chrome.
+//!
+//! **Named the Passive Panel until 2026-08-10 (SDB) / 2026-08-21 (SSP).**
+//! Both apps retired "passive": the panel takes command input, toggles
+//! drafting aids, and (in SDB) sets a stored drafting-scale document
+//! property, so the word was wrong as well as vague. This module -- and
+//! `theme::COMMAND_STATUS_PANEL_TEXT_SIZE` -- carried the old name for a
+//! stretch after SDB's rename since it's public API shared with SSP and a
+//! module rename needed SSP's agreement first (ADR 0010); both apps now use
+//! the new name throughout.
 //!
 //! Investigating both apps' current `chrome::passive_panel.rs` (2026-07-20,
 //! ahead of this extraction) found them already nearly identical in
@@ -112,8 +121,8 @@ pub fn capture_margins(rect: egui::Rect, vp: egui::Rect) -> (f32, f32, f32, f32)
 /// True if the panel's rendered `rect` now sits in the bottom half of the
 /// viewport `vp` -- the raw signal `anchor_bottom` gets updated from,
 /// **only** on a frame where the panel actually moved for a reason other
-/// than the module's own re-fit (see each app's `passive_panel` for the
-/// `refit_this_frame` gate this must be paired with).
+/// than the module's own re-fit (see each app's `command_status_panel` for
+/// the `refit_this_frame` gate this must be paired with).
 pub fn capture_anchor_bottom(rect: egui::Rect, vp: egui::Rect) -> bool {
     rect.center().y - vp.top() > vp.height() * 0.5
 }
@@ -288,7 +297,7 @@ pub fn annunciator_response_sized(
     // it manually against the app's text-size setting -- see
     // `crate::theme::current_text_scale`'s doc comment.
     let font = egui::FontId::monospace(
-        crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale,
+        crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale,
     );
     let stroke_w = 1.3 * scale.max(0.75);
     if lit {
@@ -358,7 +367,7 @@ pub fn capsule(
 ) -> egui::Response {
     let scale = (height / ANNUNCIATOR_SIZE.y).clamp(0.4, 1.0);
     let font = egui::FontId::monospace(
-        crate::theme::PASSIVE_PANEL_TEXT_SIZE
+        crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE
             * crate::theme::current_text_scale(ui)
             * scale.max(0.7),
     );
@@ -429,8 +438,8 @@ pub fn panel_window(
     frame: egui::Frame,
     pending_pos: Option<(f32, f32)>,
 ) -> egui::Window<'static> {
-    let mut window = egui::Window::new("passive_panel")
-        .id(egui::Id::new("passive_panel"))
+    let mut window = egui::Window::new("command_status_panel")
+        .id(egui::Id::new("command_status_panel"))
         .title_bar(false)
         .resizable(false)
         .movable(true)
@@ -443,8 +452,8 @@ pub fn panel_window(
 }
 
 /// Draws the feed: either the full scrollback (`show_history`) or the
-/// last-few entries fading out with age (the "passive" in Passive Panel).
-/// `monospace` matches SDB's styling choice (SSP renders proportional).
+/// last-few entries fading out with age. `monospace` matches SDB's styling
+/// choice (SSP renders proportional).
 /// Requests a repaint while anything is still fading or visible, so the fade
 /// animation actually advances frame to frame.
 pub fn render_feed(
@@ -456,9 +465,9 @@ pub fn render_feed(
     monospace: bool,
 ) {
     let style_label = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
-        let mut rt = egui::RichText::new(text)
-            .color(color)
-            .size(crate::theme::PASSIVE_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui));
+        let mut rt = egui::RichText::new(text).color(color).size(
+            crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui),
+        );
         if monospace {
             rt = rt.monospace();
         }
@@ -472,7 +481,7 @@ pub fn render_feed(
         // prompt row the caller renders next, instead of the prompt sitting
         // flush at the bottom with history above it.
         egui::ScrollArea::vertical()
-            .id_salt("passive_panel_feed")
+            .id_salt("command_status_panel_feed")
             .min_scrolled_height(feed_h)
             .max_height(feed_h)
             .stick_to_bottom(true)

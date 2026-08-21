@@ -4,11 +4,11 @@
 //! app-supplied action type and context type, and this crate never depends
 //! on either app's domain crates.
 
+pub mod command_status_panel;
 pub mod dock;
 pub mod fonts;
 pub mod idle_input;
 pub mod menu;
-pub mod passive_panel;
 pub mod ribbon;
 pub mod settings;
 pub mod theme;

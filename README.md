@@ -7,7 +7,7 @@ Shared `egui` UI chrome mechanics for [SpatialSketchPad](https://github.com/yian
 ## Scope
 
 This crate holds only generic UI *mechanics* — declarative menu trees, panel docking/tabbing/
-floating shells, the Passive Panel's ambient-chrome primitives, the Ribbon's rendering shell,
+floating shells, the Command & Status Panel's ambient-chrome primitives, the Ribbon's rendering shell,
 and (eventually) a schema-driven Preferences renderer. It never holds panel *content* (Layers,
 Properties, Planes, entity data, etc.) and never depends on either app's domain crates
 (`ssp-core`, `ssp-2d`, `sdb_core`, ...).
@@ -29,8 +29,10 @@ that moved writes the other a dated brief here — what needs a decision, what m
 which bugs it found that the sibling probably shares.
 
 - [`docs/2026-08-10-sdb-ui-changes-for-ssp.md`](docs/2026-08-10-sdb-ui-changes-for-ssp.md) —
-  SDB → SSP, covering ~2026-07-20 to 2026-08-10. Open items for SSP: the "Passive Panel" rename,
-  window draw-order scoping, and whether `DockHost` should own a `ScrollArea`.
+  SDB → SSP, covering ~2026-07-20 to 2026-08-10. All three items resolved 2026-08-21: SSP agreed
+  to the "Passive Panel" → "Command & Status Panel" rename (this crate's `passive_panel` module
+  followed, now `command_status_panel`); window draw-order was never an issue for SSP
+  (`with_always_on_top()` unused there); `DockHost` now wraps content in a `ScrollArea`.
 
 ## Modules
 
