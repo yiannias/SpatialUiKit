@@ -389,6 +389,13 @@ pub trait DockHost<T: TabId> {
     fn title(&self, tab: T) -> String;
 
     /// Render this tab's content into `ui`.
+    ///
+    /// The caller ([`TabViewerAdapter::ui`]) wraps this in `ScrollArea::both()`,
+    /// so content does not need to provide its own scrolling to stay reachable
+    /// in a narrow or short dock -- it can simply lay itself out at natural
+    /// size. A content fn that wants to fill the dock exactly (a canvas, a
+    /// splitter) rather than scroll should say so in its own doc comment,
+    /// since it now sits inside a `ScrollArea` implicitly.
     fn content(&mut self, ui: &mut egui::Ui, tab: T);
 }
 
@@ -435,7 +442,11 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     type Tab = T;
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
-        self.host.content(ui, *tab);
+        let host = &mut self.host;
+        let tab = *tab;
+        egui::ScrollArea::both()
+            .id_salt(("dock_tab_scroll", tab))
+            .show(ui, |ui| host.content(ui, tab));
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
