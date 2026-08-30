@@ -58,6 +58,13 @@ pub struct ThemedWindow<'a> {
     minimizable: bool,
     maximizable: bool,
     modal: bool,
+    /// Y (in screen/viewport space) the sheet hangs flush against when
+    /// `modal` -- the bottom edge of whatever's above the content area
+    /// (menu bar, ribbon), passed in by the caller since this crate has no
+    /// idea what SDB/SSP stack on top of their own central content.
+    /// Defaults to `0.0` (flush against the very top of the viewport) when
+    /// never set.
+    sheet_anchor_top: f32,
 }
 
 impl<'a> ThemedWindow<'a> {
@@ -76,6 +83,7 @@ impl<'a> ThemedWindow<'a> {
             minimizable: false,
             maximizable: false,
             modal: false,
+            sheet_anchor_top: 0.0,
         }
     }
 
@@ -120,6 +128,19 @@ impl<'a> ThemedWindow<'a> {
     /// blanket change.
     pub fn modal(mut self, modal: bool) -> Self {
         self.modal = modal;
+        self
+    }
+
+    /// Where a `modal` sheet hangs flush against, in screen/viewport space
+    /// -- pass the bottom edge of whatever sits above the caller's central
+    /// content (e.g. `ctx.available_rect().top()` read right after the
+    /// menu bar/ribbon panels are laid out, before this is shown). True
+    /// macOS sheets attach with no visible seam to what's above them,
+    /// rather than floating with a gap underneath -- Chris's sketch,
+    /// `docs/design/2026-08-30_chrome-ideas-sketch.md` (SDB repo), idea 3.
+    /// No-op on a non-`modal` window.
+    pub fn sheet_anchor_top(mut self, y: f32) -> Self {
+        self.sheet_anchor_top = y;
         self
     }
 
@@ -184,6 +205,10 @@ impl<'a> ThemedWindow<'a> {
             title_color,
             button_hover_bg,
             button_icon_color,
+            // Sheets always attach flush to whatever's above them -- see
+            // `sheet_anchor_top`'s doc comment -- so the top corners read as
+            // square, matching what they're hanging from, not rounded.
+            flush_top: self.modal,
         };
 
         if self.modal {
@@ -193,6 +218,16 @@ impl<'a> ThemedWindow<'a> {
             // time_and_easing` eases 0->1 exactly once, the first frame
             // `open` becomes true, then holds at 1 -- a one-shot open
             // animation, not a continuous oscillation.
+            //
+            // Flush-attach to `sheet_anchor_top`, per Chris's sketch
+            // (`docs/design/2026-08-30_chrome-ideas-sketch.md` idea 3, SDB
+            // repo): "true macOS sheets attach with no visible seam to the
+            // parent window's title bar" -- no rest gap (unlike the first
+            // version of this animation, which left a 28px gap and rounded
+            // top corners, "stylistically... needs work" per his live
+            // review), and the top corners are squared off above so the
+            // shadow below is the only visual separation from what it's
+            // hanging from.
             let anim_t = ctx.animate_bool_with_time_and_easing(
                 self.id.with("sheet_anim"),
                 true,
@@ -200,16 +235,33 @@ impl<'a> ThemedWindow<'a> {
                 egui::emath::easing::cubic_out,
             );
             const SLIDE_FROM_PX: f32 = 40.0;
-            const REST_OFFSET_PX: f32 = 28.0;
-            let offset_y = REST_OFFSET_PX - SLIDE_FROM_PX * (1.0 - anim_t);
+            let offset_y = self.sheet_anchor_top - SLIDE_FROM_PX * (1.0 - anim_t);
             let area = egui::Modal::default_area(self.id)
                 .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, offset_y));
             let backdrop = resolved_color(&w.shadow_color, egui::Color32::from_black_alpha(0x40))
                 .gamma_multiply(anim_t);
 
+            let sheet_frame = frame
+                .corner_radius(egui::CornerRadius {
+                    nw: 0,
+                    ne: 0,
+                    sw: corner_radius,
+                    se: corner_radius,
+                })
+                // Shifted down rather than centered on the rect, so the
+                // blur doesn't bleed out above the flush top edge -- it
+                // reads as the sheet casting a shadow downward onto what's
+                // below it, not floating free on all sides.
+                .shadow(egui::Shadow {
+                    offset: [0, (shadow_blur / 2).max(1) as i8],
+                    blur: shadow_blur,
+                    spread: 0,
+                    color: shadow_color,
+                });
+
             let modal_response = egui::Modal::new(self.id)
                 .area(area)
-                .frame(frame)
+                .frame(sheet_frame)
                 .backdrop_color(backdrop)
                 .show(ctx, |ui| {
                     ui.multiply_opacity(anim_t);
@@ -274,8 +326,16 @@ impl<'a> ThemedWindow<'a> {
 
         let painter = ui.painter();
         let top_rounding = egui::CornerRadius {
-            nw: colors.corner_radius,
-            ne: colors.corner_radius,
+            nw: if colors.flush_top {
+                0
+            } else {
+                colors.corner_radius
+            },
+            ne: if colors.flush_top {
+                0
+            } else {
+                colors.corner_radius
+            },
             sw: 0,
             se: 0,
         };
@@ -370,4 +430,5 @@ struct ChromeColors {
     title_color: egui::Color32,
     button_hover_bg: egui::Color32,
     button_icon_color: egui::Color32,
+    flush_top: bool,
 }
