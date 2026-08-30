@@ -12,3 +12,7 @@ serde = { version = "1", features = ["derive"] }
 # handling (see dock.rs's module doc). An incidental minor bump could
 # silently change or fix that behavior out from under the workaround.
 egui_dock = { version = "=0.20.1", features = ["serde"] }
+
+[dev-dependencies]
+serde_json = "1"
+eframe = { version = "0.35", features = ["wgpu"] }

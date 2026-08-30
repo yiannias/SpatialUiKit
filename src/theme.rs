@@ -6,6 +6,7 @@
 //! app owns persistence (its own `ApplicationSettings`-equivalent) and
 //! applies `visuals()` to its `egui::Context` on change.
 
+use crate::tokens::{ColorToken, DimensionToken};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
@@ -105,6 +106,136 @@ pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
 /// crate followed too, becoming [`crate::command_status_panel`], and the interim
 /// `PASSIVE_PANEL_TEXT_SIZE` alias this const briefly kept is gone.
 pub const COMMAND_STATUS_PANEL_TEXT_SIZE: f32 = 10.0;
+
+/// Header bar tokens for a themed in-app `egui::Window` (see
+/// `crate::window_chrome`). Docs/design/2026-08-30_theme-system-spec.md
+/// (SDB repo) is the source spec; values below come from the Lunacy mockup
+/// that spec was extracted from.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct HeaderTokens {
+    pub background: ColorToken,
+    pub height: DimensionToken,
+    pub border_bottom: ColorToken,
+    pub title_color: ColorToken,
+}
+
+/// Shared by close/minimize/maximize -- flat glyph buttons, no fill at
+/// rest, a highlight rect only on hover. Revised 2026-08-30 (was a filled
+/// circle matching the Lunacy mockup) to match native Windows chrome once
+/// Chris saw the mockup-accurate version rendered next to his real title
+/// bar. One size token set covers all three; there's no per-button
+/// variation.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct ButtonTokens {
+    pub hover_background: ColorToken,
+    pub icon_color: ColorToken,
+}
+
+/// Full window-chrome token set for one theme.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct WindowChromeTokens {
+    pub background: ColorToken,
+    pub corner_radius: DimensionToken,
+    pub shadow_blur: DimensionToken,
+    pub shadow_color: ColorToken,
+    /// App-wide themeable window border -- Chris, 2026-08-30, inspired by
+    /// Windows' own accent-colored title bar border. Built-ins ship this
+    /// at zero width / transparent (no visible change from the
+    /// shadow-only look); it exists so the Themes Panel can expose it as
+    /// an editable control.
+    pub border_width: DimensionToken,
+    pub border_color: ColorToken,
+    pub header: HeaderTokens,
+    pub button: ButtonTokens,
+}
+
+/// A named, importable/exportable theme. `base` picks which built-in
+/// `egui::Visuals` a theme inherits everything this spec doesn't yet
+/// tokenize from (text selection color, hyperlink color, etc.) --
+/// see docs/design/2026-08-30_theme-system-spec.md's "Scope boundary"
+/// section for why this doesn't yet cover every `Visuals` field.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct ThemePalette {
+    pub name: String,
+    pub base: Theme,
+    pub window: WindowChromeTokens,
+}
+
+impl ThemePalette {
+    pub fn dark() -> Self {
+        Self {
+            name: "Dark".to_string(),
+            base: Theme::Dark,
+            window: WindowChromeTokens {
+                background: ColorToken::new(egui::Color32::from_rgb(0x22, 0x22, 0x26)),
+                corner_radius: DimensionToken::new(12.0),
+                shadow_blur: DimensionToken::new(20.0),
+                shadow_color: ColorToken::new(egui::Color32::from_black_alpha(0x40)),
+                border_width: DimensionToken::new(0.0),
+                border_color: ColorToken::new(egui::Color32::TRANSPARENT),
+                header: HeaderTokens {
+                    background: ColorToken::new(egui::Color32::from_rgb(0x2E, 0x2E, 0x32)),
+                    height: DimensionToken::new(32.0),
+                    border_bottom: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                        0xFF, 0xFF, 0xFF, 0x26,
+                    )),
+                    title_color: ColorToken::new(egui::Color32::WHITE),
+                },
+                button: ButtonTokens {
+                    hover_background: ColorToken::new(egui::Color32::from_rgb(0x38, 0x38, 0x3C)),
+                    icon_color: ColorToken::new(egui::Color32::WHITE),
+                },
+            },
+        }
+    }
+
+    pub fn light() -> Self {
+        Self {
+            name: "Light".to_string(),
+            base: Theme::Light,
+            window: WindowChromeTokens {
+                background: ColorToken::new(egui::Color32::from_rgb(0xFA, 0xFA, 0xFB)),
+                corner_radius: DimensionToken::new(12.0),
+                shadow_blur: DimensionToken::new(20.0),
+                shadow_color: ColorToken::new(egui::Color32::from_black_alpha(0x40)),
+                border_width: DimensionToken::new(0.0),
+                border_color: ColorToken::new(egui::Color32::TRANSPARENT),
+                header: HeaderTokens {
+                    background: ColorToken::new(egui::Color32::from_rgb(0xEB, 0xEB, 0xEB)),
+                    height: DimensionToken::new(32.0),
+                    border_bottom: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                        0x00, 0x00, 0x00, 0x26,
+                    )),
+                    title_color: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                        0x00, 0x00, 0x06, 0xCC,
+                    )),
+                },
+                button: ButtonTokens {
+                    hover_background: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                        0x00, 0x00, 0x06, 0x1F,
+                    )),
+                    icon_color: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                        0x00, 0x00, 0x06, 0xCC,
+                    )),
+                },
+            },
+        }
+    }
+}
+
+#[cfg(test)]
+mod theme_palette_tests {
+    use super::*;
+
+    #[test]
+    fn dark_and_light_round_trip_through_json() {
+        for palette in [ThemePalette::dark(), ThemePalette::light()] {
+            let json = serde_json::to_string(&palette).unwrap();
+            let back: ThemePalette = serde_json::from_str(&json).unwrap();
+            assert_eq!(palette, back);
+        }
+    }
+}
 
 /// Current text-scale ratio in effect, derived from how far the live
 /// `TextStyle::Body` size has diverged from egui's own default -- lets code

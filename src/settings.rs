@@ -263,15 +263,45 @@ pub trait SettingsHost {
 /// per-frame temp data, keyed by a stable `Id` -- no persistence to disk
 /// needed, it's ephemeral UI state); this just draws the widget. Feed the
 /// same string into [`render_nav`]'s `filter` param.
+///
+/// A fully-rounded pill with the icon *inside* the field, rather than a bare
+/// `egui::TextEdit` with an emoji glued on beside it -- Chris, 2026-08-30,
+/// comparing it unfavorably to 1Password's Windows search field: "much less
+/// comfortable and nice." `corner_radius` = half the field height (a true
+/// pill, not `os_style`'s flat 4px control radius -- search fields read as
+/// a distinct, softer affordance in most native UIs, this one included).
 pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
-    ui.horizontal(|ui| {
-        ui.label("\u{1f50d}");
-        ui.add(
-            egui::TextEdit::singleline(query)
-                .hint_text("Search")
-                .desired_width(f32::INFINITY),
-        );
-    });
+    // Deliberately no `set_min_height`/`horizontal_centered` -- either
+    // stretches to whatever height the surrounding container currently
+    // offers, and since that container (a `Panel::top` in SDB's settings
+    // panel) remembers *this* frame's content height for the *next*
+    // frame's available space, the two compound into runaway growth every
+    // frame (caught live, 2026-08-30: the field grew to fill the entire
+    // nav pane within seconds). Padding via `inner_margin` alone gives the
+    // same taller, more comfortable look without depending on available
+    // height at all -- the field's size is purely intrinsic (icon + text
+    // line + fixed margin), so there's nothing to feed back into.
+    egui::Frame::new()
+        .fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.inactive.bg_stroke)
+        .corner_radius(15)
+        .inner_margin(egui::Margin::symmetric(12, 8))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new("\u{1f50d}")
+                        .size(13.0)
+                        .color(ui.visuals().weak_text_color()),
+                );
+                ui.add(
+                    egui::TextEdit::singleline(query)
+                        .hint_text("Search")
+                        .desired_width(f32::INFINITY)
+                        .frame(egui::Frame::NONE)
+                        .vertical_align(egui::Align::Center),
+                );
+            });
+        });
 }
 
 fn label_contains(label: &str, filter_lower: &str) -> bool {
