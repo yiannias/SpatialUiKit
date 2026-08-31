@@ -215,6 +215,21 @@ fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> e
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
     if ui.is_rect_visible(outer_rect) {
+        // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
+        // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
+        // full-width panel strip is gone (see `ribbon_panel_modules`'s
+        // caller in `sdb_ui::build_ui`, a floating `Area` rather than a
+        // `Panel` reserving its own space), so each module is now the only
+        // thing giving the row a solid backing -- "the 'pods'/'capsules'
+        // [should] be the solid elements", with the viewport visible
+        // through the gaps around them. (An intermediate version reserved
+        // Panel space with a transparent fill instead -- fixed a docked-
+        // panel layout bug it caused, but Chris confirmed live the result
+        // lost the visual contrast entirely, "back where we started" --
+        // see `sdb_app::frame`'s dock-`Area` doc comment for the fuller
+        // fix that replaced it.)
+        ui.painter()
+            .rect_filled(outer_rect, FRAME_RADIUS, ui.visuals().window_fill());
         ui.painter().rect_stroke(
             outer_rect,
             FRAME_RADIUS,
@@ -310,6 +325,12 @@ pub fn ribbon_panel<A: Clone>(
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
 
+    // Note, 2026-08-30: SDB (the only current caller of this crate that's
+    // actively iterating on ribbon visuals) uses `ribbon_panel_modules`
+    // below, not this function -- this one is SSP's entry point. Chris
+    // asked for `ScrollArea` to come out of SDB's ribbon specifically
+    // ("does NOT need any scrolling capability"); left untouched here
+    // rather than silently changing SSP's own ribbon behavior too.
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             for (i, group) in groups.iter().enumerate() {
@@ -354,36 +375,43 @@ pub fn ribbon_panel_modules<A: Clone>(
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
 
-    egui::ScrollArea::horizontal().show(ui, |ui| {
-        ui.horizontal(|ui| {
-            // See `ribbon_panel`'s identical loop for why this is only
-            // before the first module.
-            for (i, module) in modules.into_iter().enumerate() {
-                if i == 0 {
-                    ui.add_space(GAP);
+    // No `ScrollArea` -- Chris, 2026-08-30, live: "the ribbon does NOT need
+    // any scrolling capability". (It also used to paint a fade-to-
+    // transparent gradient at its scrollable edge, invisible against the
+    // ribbon's old opaque strip; disabling just the fade turned out not to
+    // be the actual source of what looked like fading once the row sat on
+    // a transparent `Area` over the viewport -- that's the viewport's own
+    // content showing through the row's empty space as designed, not a
+    // residual artifact. Removing `ScrollArea` outright is simpler either
+    // way, and is what was actually asked for.)
+    ui.horizontal(|ui| {
+        // See `ribbon_panel`'s identical loop for why this is only before
+        // the first module.
+        for (i, module) in modules.into_iter().enumerate() {
+            if i == 0 {
+                ui.add_space(GAP);
+            }
+            match module {
+                RibbonModule::Buttons(group) => {
+                    let content_w = group_content_width(
+                        group.buttons.len(),
+                        button_size.x,
+                        ui.spacing().item_spacing.x,
+                    );
+                    let mut child = module_frame(ui, group.label, content_w, row_h);
+                    draw_button_row(&mut child, &group, host, &mut actions);
                 }
-                match module {
-                    RibbonModule::Buttons(group) => {
-                        let content_w = group_content_width(
-                            group.buttons.len(),
-                            button_size.x,
-                            ui.spacing().item_spacing.x,
-                        );
-                        let mut child = module_frame(ui, group.label, content_w, row_h);
-                        draw_button_row(&mut child, &group, host, &mut actions);
-                    }
-                    RibbonModule::Custom {
-                        label,
-                        width,
-                        render,
-                    } => {
-                        let mut child = module_frame(ui, label, width, row_h);
-                        let acts = render(&mut child);
-                        actions.extend(acts);
-                    }
+                RibbonModule::Custom {
+                    label,
+                    width,
+                    render,
+                } => {
+                    let mut child = module_frame(ui, label, width, row_h);
+                    let acts = render(&mut child);
+                    actions.extend(acts);
                 }
             }
-        });
+        }
     });
 
     actions
