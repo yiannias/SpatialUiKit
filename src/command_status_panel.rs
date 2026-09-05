@@ -416,11 +416,29 @@ pub fn annunciator(
 }
 
 /// Renders the panel's translucent rounded-rect frame at the given opacity
-/// (0.25-1.0, clamped). Identical styling in both apps.
+/// (0.25-1.0, clamped), with the historical hardcoded near-black base color.
+/// Identical styling in both apps. Kept as-is (rather than repointing at
+/// [`panel_frame_with_background`]'s new default) so SSP, which has no
+/// surface-color theming yet, is unaffected by SDB's own theming work.
 pub fn panel_frame(opacity: f32) -> egui::Frame {
+    panel_frame_with_background(opacity, egui::Color32::from_rgb(30, 30, 35))
+}
+
+/// Same as [`panel_frame`], but with a caller-supplied base fill color
+/// instead of the hardcoded near-black -- lets a themeable app match this
+/// panel's background to its own "surface" token (`theme::SurfaceTokens`)
+/// rather than the two drifting independently. Added 2026-09-05 for SDB's
+/// ribbon/dock/CSP surface-color unification; `alpha` (opacity) still comes
+/// from `opacity`, not from `background`'s own alpha channel.
+pub fn panel_frame_with_background(opacity: f32, background: egui::Color32) -> egui::Frame {
     let alpha = (opacity.clamp(0.25, 1.0) * 255.0) as u8;
     egui::Frame::new()
-        .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 35, alpha))
+        .fill(egui::Color32::from_rgba_unmultiplied(
+            background.r(),
+            background.g(),
+            background.b(),
+            alpha,
+        ))
         .stroke(egui::Stroke::new(
             1.0,
             egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120)),

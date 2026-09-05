@@ -138,7 +138,14 @@ const FLASH_SECS: f64 = 0.28;
 /// gaps... between frames are all about the same" is the thing that matters,
 /// more than the exact pixel count -- one constant is what keeps that true
 /// instead of three independent guesses drifting apart.
-const GAP: f32 = 8.0;
+///
+/// `pub` since 2026-09-05: Chris asked for the docked side panels' own
+/// inset-from-the-window-edge gap (`sdb_app::frame::docked_side_area`) and
+/// the Command & Status Panel's edge margin
+/// (`spatial_ui_kit::command_status_panel::EDGE_MARGIN`) to match this one
+/// number instead of each guessing its own -- same motivation as the doc
+/// comment above, extended past just the ribbon's own modules.
+pub const GAP: f32 = 8.0;
 /// Width of a module frame's vertical-label pill.
 const LABEL_STRIP_W: f32 = 16.0;
 const FRAME_RADIUS: f32 = 8.0;

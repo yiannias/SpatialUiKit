@@ -149,6 +149,19 @@ pub struct WindowChromeTokens {
     pub button: ButtonTokens,
 }
 
+/// Background for a "floating surface" -- a ribbon module capsule, a docked
+/// side panel's card, or the Command & Status Panel's own frame. Split out
+/// from `WindowChromeTokens` (which is the four themed *dialogs'* chrome)
+/// because Chris asked, 2026-09-05, for these three surfaces -- previously
+/// two different colors (the OS-accent-driven `Visuals::window_fill`/
+/// `panel_fill` for the ribbon/dock, a hardcoded near-black for the CSP) --
+/// to share one settable color, after noticing the CSP's own distinct
+/// background "helps a lot" for legibility against the viewport.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct SurfaceTokens {
+    pub background: ColorToken,
+}
+
 /// A named, importable/exportable theme. `base` picks which built-in
 /// `egui::Visuals` a theme inherits everything this spec doesn't yet
 /// tokenize from (text selection color, hyperlink color, etc.) --
@@ -159,6 +172,7 @@ pub struct ThemePalette {
     pub name: String,
     pub base: Theme,
     pub window: WindowChromeTokens,
+    pub surface: SurfaceTokens,
 }
 
 impl ThemePalette {
@@ -185,6 +199,14 @@ impl ThemePalette {
                     hover_background: ColorToken::new(egui::Color32::from_rgb(0x38, 0x38, 0x3C)),
                     icon_color: ColorToken::new(egui::Color32::WHITE),
                 },
+            },
+            // Matches the Command & Status Panel's long-standing hardcoded
+            // frame color (`command_status_panel::panel_frame`'s prior
+            // literal `rgb(30, 30, 35)`) -- picked as the shared default
+            // specifically because Chris singled that panel's background
+            // out as the one to match everything else to.
+            surface: SurfaceTokens {
+                background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
             },
         }
     }
@@ -218,6 +240,13 @@ impl ThemePalette {
                         0x00, 0x00, 0x06, 0xCC,
                     )),
                 },
+            },
+            // A touch darker than the window background (0xFA) so the
+            // surface still reads as a distinct layer, mirroring the dark
+            // theme's surface being a touch different from its own window
+            // background.
+            surface: SurfaceTokens {
+                background: ColorToken::new(egui::Color32::from_rgb(0xF0, 0xF0, 0xF2)),
             },
         }
     }
