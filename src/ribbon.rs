@@ -148,7 +148,13 @@ const FLASH_SECS: f64 = 0.28;
 pub const GAP: f32 = 8.0;
 /// Width of a module frame's vertical-label pill.
 const LABEL_STRIP_W: f32 = 16.0;
-const FRAME_RADIUS: f32 = 8.0;
+/// `pub` since 2026-09-05: Chris asked for the docked side panels' own
+/// corner radius (`sdb_app::frame::docked_side_area`) and the Command &
+/// Status Panel's corner radius
+/// (`spatial_ui_kit::command_status_panel::panel_frame_with_background`) to
+/// match this one number instead of each guessing its own -- same
+/// motivation as `GAP`'s own `pub` doc comment.
+pub const FRAME_RADIUS: f32 = 8.0;
 const FRAME_STROKE: egui::Color32 = egui::Color32::from_rgb(58, 59, 64);
 /// A module label pill's own colors -- the same pair the old DRAFT tag used,
 /// carried over because Chris liked that look ("I like the graphical

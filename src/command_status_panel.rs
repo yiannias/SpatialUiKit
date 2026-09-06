@@ -421,7 +421,7 @@ pub fn annunciator(
 /// [`panel_frame_with_background`]'s new default) so SSP, which has no
 /// surface-color theming yet, is unaffected by SDB's own theming work.
 pub fn panel_frame(opacity: f32) -> egui::Frame {
-    panel_frame_with_background(opacity, egui::Color32::from_rgb(30, 30, 35))
+    panel_frame_themed(opacity, egui::Color32::from_rgb(30, 30, 35), 14)
 }
 
 /// Same as [`panel_frame`], but with a caller-supplied base fill color
@@ -429,8 +429,24 @@ pub fn panel_frame(opacity: f32) -> egui::Frame {
 /// panel's background to its own "surface" token (`theme::SurfaceTokens`)
 /// rather than the two drifting independently. Added 2026-09-05 for SDB's
 /// ribbon/dock/CSP surface-color unification; `alpha` (opacity) still comes
-/// from `opacity`, not from `background`'s own alpha channel.
+/// from `opacity`, not from `background`'s own alpha channel. Kept as a
+/// thin wrapper over [`panel_frame_themed`] (this panel's historical corner
+/// radius, 14) for existing callers -- SDB itself has since moved to that
+/// function directly, to also share the ribbon/dock's own radius.
 pub fn panel_frame_with_background(opacity: f32, background: egui::Color32) -> egui::Frame {
+    panel_frame_themed(opacity, background, 14)
+}
+
+/// Same as [`panel_frame_with_background`], with the corner radius also
+/// caller-supplied -- added 2026-09-05, same session, so SDB could match
+/// this panel's corners to `spatial_ui_kit::ribbon::FRAME_RADIUS` (8) rather
+/// than this panel's own historical 14, per Chris: the docked panels, the
+/// ribbon, and the CSP should all round the same amount.
+pub fn panel_frame_themed(
+    opacity: f32,
+    background: egui::Color32,
+    corner_radius: u8,
+) -> egui::Frame {
     let alpha = (opacity.clamp(0.25, 1.0) * 255.0) as u8;
     egui::Frame::new()
         .fill(egui::Color32::from_rgba_unmultiplied(
@@ -443,7 +459,7 @@ pub fn panel_frame_with_background(opacity: f32, background: egui::Color32) -> e
             1.0,
             egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120)),
         ))
-        .corner_radius(14)
+        .corner_radius(corner_radius)
         .inner_margin(egui::Margin::symmetric(14, 10))
 }
 
