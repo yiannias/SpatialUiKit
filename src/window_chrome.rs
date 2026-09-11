@@ -57,6 +57,7 @@ pub struct ThemedWindow<'a> {
     resizable: bool,
     minimizable: bool,
     maximizable: bool,
+    headerless: bool,
     modal: bool,
     /// Y (in screen/viewport space) the sheet hangs flush against when
     /// `modal` -- the bottom edge of whatever's above the content area
@@ -82,6 +83,7 @@ impl<'a> ThemedWindow<'a> {
             resizable: true,
             minimizable: false,
             maximizable: false,
+            headerless: false,
             modal: false,
             sheet_anchor_top: 0.0,
         }
@@ -116,6 +118,27 @@ impl<'a> ThemedWindow<'a> {
     /// un-maximize. Off by default, same rationale as `minimizable`.
     pub fn maximizable(mut self, maximizable: bool) -> Self {
         self.maximizable = maximizable;
+        self
+    }
+
+    /// Renders with no header strip at all -- no title, no close/minimize/
+    /// maximize buttons, just the themed frame (background, corner radius,
+    /// shadow, border) around `add_contents`. Off by default, purely
+    /// additive: every existing caller keeps its header. `minimizable`/
+    /// `maximizable` are ignored when this is on, since there's no header
+    /// to put their buttons in.
+    ///
+    /// A headerless window has nothing to drag by, so it's also made
+    /// immovable (see `show`) rather than falling back to egui's
+    /// drag-anywhere behavior for title-bar-less windows, which would make
+    /// clicking the content itself move the window. Intended for dialogs
+    /// with a fixed/anchored/centered position where that's correct
+    /// anyway -- e.g. a confirmation modal whose only actions are its own
+    /// buttons, where the caller decided (product call, 2026-09-11, on
+    /// SDB's delete-sheet confirm) that the close button is redundant with
+    /// Cancel and the title bar earns nothing.
+    pub fn headerless(mut self, headerless: bool) -> Self {
+        self.headerless = headerless;
         self
     }
 
@@ -279,6 +302,7 @@ impl<'a> ThemedWindow<'a> {
             .title_bar(false)
             .collapsible(false)
             .resizable(self.resizable && !state.maximized && !state.minimized)
+            .movable(!self.headerless)
             .frame(frame);
 
         if state.maximized {
@@ -320,6 +344,11 @@ impl<'a> ThemedWindow<'a> {
         colors: &ChromeColors,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) {
+        if self.headerless {
+            add_contents(ui);
+            return;
+        }
+
         let width = ui.available_width();
         let (header_rect, _) =
             ui.allocate_exact_size(egui::vec2(width, colors.header_h), egui::Sense::hover());
