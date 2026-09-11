@@ -60,11 +60,65 @@ impl DockSide {
 /// smaller and non-serializable -- it's the vocabulary [`move_panel`]
 /// operates on, not a storage format. Apps keep their own enum for
 /// persistence and convert to/from this at the call site.
+///
+/// Deliberately *not* extended with a `Central` variant alongside the new
+/// [`DockRegion`] below: [`move_panel`] only ever mutates the two persistent
+/// `left`/`right` `DockState`s it's handed, the same as before this change.
+/// A central pane tree is a third `DockState` this crate has no handle to
+/// and no opinion about (mirroring the module doc's point that detached-
+/// window lifecycle stays app-side) -- so a drag that resolves to the
+/// central region is something the caller (SDB) places into its own
+/// `DockState` itself, the same way it already owns floating/hidden
+/// bookkeeping this enum's other variants don't touch either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DockTarget {
     Side(DockSide),
     Floating,
     Hidden,
+}
+
+/// A drop region's role within whichever window it lives in. `Left`/`Right`
+/// mirror [`DockSide`]; `Central` is the pane tree over the drawing canvas
+/// that only some apps (currently SDB) have.
+///
+/// Kept separate from `DockSide` rather than adding a third variant there:
+/// `DockSide` is still exactly what [`move_panel`], [`DockMenuAction`], and
+/// `TabViewerAdapter`'s side-relative menu logic want for the two
+/// *persistent* docks, and every one of those call sites is unconditional
+/// two-arm logic (`opposite()`, "move to the other side") that a `Central`
+/// arm would either have to panic on or silently mishandle. Forcing SSP --
+/// which has no central tree at all -- to reckon with that arm for code it
+/// never touches would be exactly the wart the task brief warned against.
+/// `DockRegion` exists only in the drag-classification vocabulary below,
+/// where a third, dock-tree-less role is exactly what's needed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum DockRegion {
+    Left,
+    Right,
+    Central,
+}
+
+impl From<DockSide> for DockRegion {
+    fn from(side: DockSide) -> Self {
+        match side {
+            DockSide::Left => DockRegion::Left,
+            DockSide::Right => DockRegion::Right,
+        }
+    }
+}
+
+/// Full identity of a drop region: which OS window it's in, plus its role
+/// within that window. Window identity reuses `egui`'s own [`egui::ViewportId`]
+/// rather than a crate-invented generic parameter -- this crate already
+/// depends on `egui`, both apps already address their detached windows by
+/// `ViewportId` (`show_viewport_deferred`), and a parallel window-id type
+/// here would just be another thing to keep in sync with theirs for no
+/// benefit, violating the constraint that this crate must not depend on
+/// either app's own types.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct DockRegionId {
+    pub window: egui::ViewportId,
+    pub role: DockRegion,
 }
 
 /// Live state of an in-progress docked-tab drag, tracked passively by
@@ -73,10 +127,11 @@ pub enum DockTarget {
 #[derive(Clone, Copy, Debug)]
 pub struct TabDrag<T: TabId> {
     pub tab: T,
-    /// Which dock the drag started from, so release can tell "dropped back
-    /// on my own dock" (egui_dock already handled it) from "opposite dock"
-    /// from "open space".
-    pub source_side: Option<DockSide>,
+    /// The region (window + role) the drag started from, so release can
+    /// tell "dropped back on my own region" (egui_dock already handled the
+    /// reorder) from "a different region" from "open space". `None` for a
+    /// drag with no originating dock region to speak of.
+    pub source: Option<DockRegionId>,
     /// Accumulated drag path length in points, to ignore twitchy clicks.
     pub dist: f32,
 }
@@ -94,7 +149,7 @@ pub const DETACH_MIN_DRAG_PX: f32 = 30.0;
 pub fn detect_tab_drag<T: TabId>(
     tab: T,
     response: &egui::Response,
-    source_side: Option<DockSide>,
+    source: Option<DockRegionId>,
 ) -> Option<TabDrag<T>> {
     let (down, origin, latest, decided) = response.ctx.input(|i| {
         (
@@ -109,7 +164,7 @@ pub fn detect_tab_drag<T: TabId>(
             if response.rect.contains(origin) {
                 return Some(TabDrag {
                     tab,
-                    source_side,
+                    source,
                     dist: (latest - origin).length(),
                 });
             }
@@ -121,11 +176,22 @@ pub fn detect_tab_drag<T: TabId>(
 /// Where a released tab drag implies moving to.
 #[derive(Clone, Copy, Debug)]
 pub enum DragTarget {
-    Side(DockSide),
-    /// Open-space drop -- caller should call [`move_panel`] with
-    /// `DockTarget::Floating` and detach to a real OS window spawned at this
-    /// screen position (position handling itself stays app-side, since it's
-    /// tied to each app's own `show_viewport_deferred`/boot-geometry setup).
+    /// Dropped on a named region -- `Left`/`Right` mean exactly what they
+    /// did before (call [`move_panel`] with `DockTarget::Side`); `Central`
+    /// (or any region in a window other than the one the drag started in)
+    /// is the caller's own `DockState` to place into, per [`DockTarget`]'s
+    /// doc comment.
+    Region(DockRegionId),
+    /// Open-space drop, clear of every candidate region in every window --
+    /// caller should detach to a brand-new OS window spawned at this
+    /// position (position handling itself stays app-side, since it's tied
+    /// to each app's own `show_viewport_deferred`/boot-geometry setup).
+    ///
+    /// This position is in the *shared coordinate space* [`classify_drag_release`]
+    /// is called with (see its doc comment) -- for a single-window caller
+    /// that's just window-local pixels as before; a cross-window caller
+    /// must convert to that same space before using it to place the new
+    /// window.
     FloatingAt(egui::Pos2),
 }
 
@@ -159,22 +225,46 @@ pub enum DragReleaseOutcome<T: TabId> {
     Released { action: ReleaseAction<T> },
 }
 
-/// Classify a drag-in-progress or just-released tab drag against the two
-/// dock panels' on-screen rects this frame. Must be called **once per frame,
-/// after both dock areas have shown** -- see the module doc comment for why;
-/// this function itself doesn't and can't enforce that ordering, since it
-/// has no visibility into when the caller invoked it.
+/// One candidate drop target for the current frame: a named region's
+/// on-screen rect. A caller with the historical two side docks supplies two
+/// of these (`Left`, `Right`) tagged with its single window; a caller with a
+/// central pane tree adds a third (`Central`); cross-window dragging falls
+/// out of the same list by including regions tagged with other windows'
+/// `ViewportId`s -- there's no separate "which window" parameter, because
+/// the region list already says, per candidate, which window it belongs to.
+///
+/// `rect` must be in the same shared coordinate space `pointer_pos` is given
+/// in to [`classify_drag_release`] -- see that function's doc comment.
+#[derive(Clone, Copy, Debug)]
+pub struct DropRegion {
+    pub id: DockRegionId,
+    pub rect: egui::Rect,
+}
+
+/// Classify a drag-in-progress or just-released tab drag against this
+/// frame's candidate drop regions. Must be called **once per frame, after
+/// every dock area (in every window) has shown** -- see the module doc
+/// comment for why; this function itself doesn't and can't enforce that
+/// ordering, since it has no visibility into when the caller invoked it.
+///
+/// `pointer_pos` and every `regions[_].rect` must be given in one shared
+/// coordinate space. Egui's own pointer positions are local to whichever
+/// viewport reported them, so a cross-window caller must translate both the
+/// pointer position and each other window's region rects into a common
+/// frame (e.g. each viewport's own screen-space `inner_rect.min` offset,
+/// which a multi-viewport caller already has on hand to place detached
+/// windows) before calling this. A single-window caller with no central
+/// region can ignore this entirely and keep passing window-local pixels, as
+/// before.
 pub fn classify_drag_release<T: TabId>(
     drag: &TabDrag<T>,
     released: bool,
     pointer_down: bool,
     pointer_pos: Option<egui::Pos2>,
-    left_dock_rect: Option<egui::Rect>,
-    right_dock_rect: Option<egui::Rect>,
+    regions: &[DropRegion],
     min_drag_px: f32,
 ) -> DragReleaseOutcome<T> {
-    let over_left = |pos: egui::Pos2| left_dock_rect.is_some_and(|r| r.contains(pos));
-    let over_right = |pos: egui::Pos2| right_dock_rect.is_some_and(|r| r.contains(pos));
+    let region_at = |pos: egui::Pos2| regions.iter().find(|r| r.rect.contains(pos));
 
     if !released {
         if !pointer_down {
@@ -182,7 +272,7 @@ pub fn classify_drag_release<T: TabId>(
         }
         if drag.dist > min_drag_px {
             if let Some(pos) = pointer_pos {
-                if !over_left(pos) && !over_right(pos) {
+                if region_at(pos).is_none() {
                     return DragReleaseOutcome::StillDragging {
                         ghost_at: Some(pos),
                     };
@@ -202,19 +292,15 @@ pub fn classify_drag_release<T: TabId>(
             action: ReleaseAction::NoOp,
         };
     };
-    let (on_left, on_right) = (over_left(pos), over_right(pos));
-    let action = match drag.source_side {
-        Some(DockSide::Left) if on_left => ReleaseAction::NoOp,
-        Some(DockSide::Right) if on_right => ReleaseAction::NoOp,
-        _ if on_left => ReleaseAction::MoveTo {
+    let action = match region_at(pos) {
+        // Dropped back on exactly the region it started from -- egui_dock
+        // already resolved the reorder/split for that dock area itself.
+        Some(hit) if drag.source == Some(hit.id) => ReleaseAction::NoOp,
+        Some(hit) => ReleaseAction::MoveTo {
             tab: drag.tab,
-            target: DragTarget::Side(DockSide::Left),
+            target: DragTarget::Region(hit.id),
         },
-        _ if on_right => ReleaseAction::MoveTo {
-            tab: drag.tab,
-            target: DragTarget::Side(DockSide::Right),
-        },
-        _ => ReleaseAction::MoveTo {
+        None => ReleaseAction::MoveTo {
             tab: drag.tab,
             target: DragTarget::FloatingAt(pos),
         },
@@ -418,6 +504,13 @@ pub struct TabViewerAdapter<'h, T: TabId, H: DockHost<T>> {
     pub host: &'h mut H,
     pub tab_drag: &'h mut Option<TabDrag<T>>,
     pub side: Option<DockSide>,
+    /// Which window this dock area is showing in, so a drag it detects can
+    /// be tagged with a full [`DockRegionId`] (window + role) rather than
+    /// just a bare side -- required for [`classify_drag_release`] to tell
+    /// "dropped back on my own region" apart across windows. A single-
+    /// window caller just passes its one `ViewportId` (`egui::ViewportId::ROOT`
+    /// for the main window) and never notices the extra field mattering.
+    pub window: egui::ViewportId,
     pub closed_tabs: Vec<T>,
     pub menu_action: Option<DockMenuAction<T>>,
 }
@@ -427,11 +520,13 @@ impl<'h, T: TabId, H: DockHost<T>> TabViewerAdapter<'h, T, H> {
         host: &'h mut H,
         tab_drag: &'h mut Option<TabDrag<T>>,
         side: Option<DockSide>,
+        window: egui::ViewportId,
     ) -> Self {
         Self {
             host,
             tab_drag,
             side,
+            window,
             closed_tabs: Vec::new(),
             menu_action: None,
         }
@@ -488,7 +583,11 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     /// See the module doc comment for why this uses [`detect_tab_drag`]'s
     /// raw-pointer-state approach instead of `response.dragged()`.
     fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
-        if let Some(drag) = detect_tab_drag(*tab, response, self.side) {
+        let source = self.side.map(|side| DockRegionId {
+            window: self.window,
+            role: side.into(),
+        });
+        if let Some(drag) = detect_tab_drag(*tab, response, source) {
             *self.tab_drag = Some(drag);
         }
     }
@@ -502,24 +601,39 @@ mod tests {
         egui::Rect::from_min_size(egui::pos2(x, y), egui::vec2(w, h))
     }
 
-    fn drag(tab: u32, source_side: Option<DockSide>, dist: f32) -> TabDrag<u32> {
-        TabDrag {
-            tab,
-            source_side,
-            dist,
+    fn win(n: u64) -> egui::ViewportId {
+        egui::ViewportId(egui::Id::new(("test_window", n)))
+    }
+
+    fn region(window: egui::ViewportId, role: DockRegion, r: egui::Rect) -> DropRegion {
+        DropRegion {
+            id: DockRegionId { window, role },
+            rect: r,
         }
+    }
+
+    fn drag(tab: u32, source: Option<DockRegionId>, dist: f32) -> TabDrag<u32> {
+        TabDrag { tab, source, dist }
     }
 
     #[test]
     fn sub_threshold_release_is_a_click_no_op() {
-        let d = drag(1, Some(DockSide::Left), 5.0);
+        let main = win(0);
+        let d = drag(
+            1,
+            Some(DockRegionId {
+                window: main,
+                role: DockRegion::Left,
+            }),
+            5.0,
+        );
+        let regions = [region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0))];
         let outcome = classify_drag_release(
             &d,
             true,
             false,
             Some(egui::pos2(50.0, 50.0)),
-            Some(rect(0.0, 0.0, 100.0, 100.0)),
-            None,
+            &regions,
             30.0,
         );
         assert!(matches!(
@@ -531,16 +645,20 @@ mod tests {
     }
 
     #[test]
-    fn drop_on_own_source_dock_is_no_op() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let left = Some(rect(0.0, 0.0, 100.0, 100.0));
+    fn drop_on_own_source_region_is_no_op() {
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0))];
         let outcome = classify_drag_release(
             &d,
             true,
             false,
             Some(egui::pos2(50.0, 50.0)),
-            left,
-            None,
+            &regions,
             30.0,
         );
         assert!(matches!(
@@ -553,16 +671,22 @@ mod tests {
 
     #[test]
     fn drop_on_opposite_dock_moves_there() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let left = Some(rect(0.0, 0.0, 100.0, 100.0));
-        let right = Some(rect(200.0, 0.0, 100.0, 100.0));
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [
+            region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0)),
+            region(main, DockRegion::Right, rect(200.0, 0.0, 100.0, 100.0)),
+        ];
         let outcome = classify_drag_release(
             &d,
             true,
             false,
             Some(egui::pos2(250.0, 50.0)),
-            left,
-            right,
+            &regions,
             30.0,
         );
         match outcome {
@@ -570,20 +694,121 @@ mod tests {
                 action:
                     ReleaseAction::MoveTo {
                         tab,
-                        target: DragTarget::Side(DockSide::Right),
+                        target:
+                            DragTarget::Region(DockRegionId {
+                                window,
+                                role: DockRegion::Right,
+                            }),
                     },
-            } => assert_eq!(tab, 1),
+            } => {
+                assert_eq!(tab, 1);
+                assert_eq!(window, main);
+            }
             other => panic!("expected move to right side, got {other:?}"),
         }
     }
 
     #[test]
+    fn drop_on_central_region_docks_there_instead_of_floating() {
+        // The whole point of the redesign: the central canvas area used to
+        // be indistinguishable from open space (-> float). With a tagged
+        // `Central` region, the same drop now resolves to that region.
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [
+            region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0)),
+            region(main, DockRegion::Right, rect(300.0, 0.0, 100.0, 100.0)),
+            region(main, DockRegion::Central, rect(100.0, 0.0, 200.0, 100.0)),
+        ];
+        let outcome = classify_drag_release(
+            &d,
+            true,
+            false,
+            Some(egui::pos2(150.0, 50.0)),
+            &regions,
+            30.0,
+        );
+        match outcome {
+            DragReleaseOutcome::Released {
+                action:
+                    ReleaseAction::MoveTo {
+                        tab,
+                        target:
+                            DragTarget::Region(DockRegionId {
+                                role: DockRegion::Central,
+                                ..
+                            }),
+                    },
+            } => assert_eq!(tab, 1),
+            other => panic!("expected dock to central region, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn drop_on_a_region_in_another_window_moves_cross_window() {
+        let main = win(0);
+        let detached = win(1);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        // Both windows' regions given in one shared coordinate space, as
+        // documented on `classify_drag_release`; here the detached window's
+        // region just happens to be laid out far to the right.
+        let regions = [
+            region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0)),
+            region(
+                detached,
+                DockRegion::Central,
+                rect(1000.0, 0.0, 100.0, 100.0),
+            ),
+        ];
+        let outcome = classify_drag_release(
+            &d,
+            true,
+            false,
+            Some(egui::pos2(1050.0, 50.0)),
+            &regions,
+            30.0,
+        );
+        match outcome {
+            DragReleaseOutcome::Released {
+                action:
+                    ReleaseAction::MoveTo {
+                        tab,
+                        target:
+                            DragTarget::Region(DockRegionId {
+                                window,
+                                role: DockRegion::Central,
+                            }),
+                    },
+            } => {
+                assert_eq!(tab, 1);
+                assert_eq!(window, detached);
+            }
+            other => panic!("expected cross-window move, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn drop_in_open_space_floats_at_cursor() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let left = Some(rect(0.0, 0.0, 100.0, 100.0));
-        let right = Some(rect(200.0, 0.0, 100.0, 100.0));
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [
+            region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0)),
+            region(main, DockRegion::Right, rect(200.0, 0.0, 100.0, 100.0)),
+        ];
         let pos = egui::pos2(500.0, 500.0);
-        let outcome = classify_drag_release(&d, true, false, Some(pos), left, right, 30.0);
+        let outcome = classify_drag_release(&d, true, false, Some(pos), &regions, 30.0);
         match outcome {
             DragReleaseOutcome::Released {
                 action:
@@ -601,10 +826,15 @@ mod tests {
 
     #[test]
     fn still_dragging_over_open_space_reports_ghost_position() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let left = Some(rect(0.0, 0.0, 100.0, 100.0));
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0))];
         let pos = egui::pos2(500.0, 500.0);
-        let outcome = classify_drag_release(&d, false, true, Some(pos), left, None, 30.0);
+        let outcome = classify_drag_release(&d, false, true, Some(pos), &regions, 30.0);
         assert!(
             matches!(outcome, DragReleaseOutcome::StillDragging { ghost_at: Some(p) } if p == pos)
         );
@@ -612,15 +842,19 @@ mod tests {
 
     #[test]
     fn still_dragging_over_a_dock_has_no_ghost() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let left = Some(rect(0.0, 0.0, 100.0, 100.0));
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let regions = [region(main, DockRegion::Left, rect(0.0, 0.0, 100.0, 100.0))];
         let outcome = classify_drag_release(
             &d,
             false,
             true,
             Some(egui::pos2(50.0, 50.0)),
-            left,
-            None,
+            &regions,
             30.0,
         );
         assert!(matches!(
@@ -631,8 +865,13 @@ mod tests {
 
     #[test]
     fn pointer_up_without_release_event_is_lost() {
-        let d = drag(1, Some(DockSide::Left), 50.0);
-        let outcome = classify_drag_release(&d, false, false, None, None, None, 30.0);
+        let main = win(0);
+        let source = DockRegionId {
+            window: main,
+            role: DockRegion::Left,
+        };
+        let d = drag(1, Some(source), 50.0);
+        let outcome = classify_drag_release(&d, false, false, None, &[], 30.0);
         assert!(matches!(outcome, DragReleaseOutcome::Lost));
     }
 
