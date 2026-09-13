@@ -160,6 +160,59 @@ pub struct WindowChromeTokens {
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct SurfaceTokens {
     pub background: ColorToken,
+    /// The 1px outline drawn around a floating surface. Added 2026-09-13:
+    /// the ribbon's module capsules and the Command & Status Panel each had
+    /// their *own* border literal -- an opaque `rgb(58, 59, 64)` in
+    /// `ribbon::FRAME_STROKE` and a lighter, panel-opacity-modulated
+    /// `rgba(90, 90, 100, alpha.max(120))` in
+    /// [`crate::command_status_panel::panel_frame_themed`] -- so two things
+    /// meant to read as the same kind of floating card were outlined
+    /// differently. Chris, 2026-09-13: they should match, "for both light
+    /// and dark mode." One token now feeds both.
+    ///
+    /// Unlike the fill above, this is **not** faded with the CSP's own
+    /// opacity slider: the ribbon's border has always been fully opaque, and
+    /// "same width, same color" only holds if the CSP's stops varying with a
+    /// setting the ribbon has no equivalent of.
+    pub border_color: ColorToken,
+    pub border_width: DimensionToken,
+}
+
+/// Colors for the small chrome *controls* that sit on a surface -- a ribbon
+/// module capsule's vertical label pill, the Command & Status Panel's
+/// annunciator caps and its scale capsule, and the accent those light up in.
+///
+/// Split out from [`SurfaceTokens`] (which is the card these sit *on*)
+/// because Chris, 2026-09-13, asked for exactly this group to be themeable
+/// per-mode: the label pill and annunciator caps are near-black constants
+/// carried over from the dark-only "graphical novel"/cockpit look, and read
+/// as jarring dark blocks once the app is in light mode. Dark mode keeps
+/// every one of its existing literals (see [`ThemePalette::dark`]); light
+/// mode is where these actually differ.
+///
+/// The pill and the cap get *separate* background/foreground pairs rather
+/// than one shared pair, because the dark theme's two are genuinely
+/// different colors today (`rgb(43, 44, 49)` pill vs. `rgb(24, 24, 27)` cap)
+/// and collapsing them would silently change dark mode. Light mode is free
+/// to give them the same value, and does.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+pub struct ControlTokens {
+    /// The "active"/highlight color: a lit annunciator's icon and caption,
+    /// the CSP's command prompt and its prompt pills, the scale capsule's
+    /// text. Chris, 2026-09-13: "The highlight color should be definable,
+    /// but a mid-tone BLUE would be good" -- for light mode; dark mode keeps
+    /// the app's long-standing amber.
+    pub accent: ColorToken,
+    /// A ribbon module capsule's vertical label pill (FILE / DRAW / DIM).
+    pub label_background: ColorToken,
+    pub label_foreground: ColorToken,
+    /// An annunciator cap (GRID/OSNAP/ORTHO/POLAR) and the scale capsule --
+    /// their unlit fill and their unlit icon/caption color.
+    pub cap_background: ColorToken,
+    pub cap_foreground: ColorToken,
+    /// The cap's own 1px outline at rest, and while hovered.
+    pub cap_border: ColorToken,
+    pub cap_border_hovered: ColorToken,
 }
 
 /// A named, importable/exportable theme. `base` picks which built-in
@@ -173,6 +226,7 @@ pub struct ThemePalette {
     pub base: Theme,
     pub window: WindowChromeTokens,
     pub surface: SurfaceTokens,
+    pub control: ControlTokens,
 }
 
 impl ThemePalette {
@@ -205,8 +259,31 @@ impl ThemePalette {
             // literal `rgb(30, 30, 35)`) -- picked as the shared default
             // specifically because Chris singled that panel's background
             // out as the one to match everything else to.
+            // `border_color`/`border_width` are `ribbon::FRAME_STROKE`'s
+            // exact previous literal and its 1.0 width, so the ribbon's
+            // capsules are pixel-identical to before; it is the Command &
+            // Status Panel's own lighter, opacity-modulated border that
+            // moves onto this value (which is the point -- see
+            // `SurfaceTokens::border_color`).
             surface: SurfaceTokens {
                 background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
+                border_color: ColorToken::new(egui::Color32::from_rgb(58, 59, 64)),
+                border_width: DimensionToken::new(1.0),
+            },
+            // Every value here is the dark-only literal it replaces, so dark
+            // mode renders exactly as it did before these tokens existed:
+            // `sdb_ui::appearance::ACCENT`'s amber, `ribbon::
+            // MODULE_LABEL_BG`/`MODULE_LABEL_FG`, and
+            // `command_status_panel::annunciator_response_sized`'s cap fill,
+            // dim glyph color and two border colors.
+            control: ControlTokens {
+                accent: ColorToken::new(egui::Color32::from_rgb(255, 178, 82)),
+                label_background: ColorToken::new(egui::Color32::from_rgb(43, 44, 49)),
+                label_foreground: ColorToken::new(egui::Color32::from_rgb(141, 142, 150)),
+                cap_background: ColorToken::new(egui::Color32::from_rgb(24, 24, 27)),
+                cap_foreground: ColorToken::new(egui::Color32::from_rgb(104, 104, 112)),
+                cap_border: ColorToken::new(egui::Color32::from_rgb(58, 58, 64)),
+                cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(110, 110, 118)),
             },
         }
     }
@@ -245,11 +322,61 @@ impl ThemePalette {
             // surface still reads as a distinct layer, mirroring the dark
             // theme's surface being a touch different from its own window
             // background.
+            // The border is a mid grey rather than the dark theme's near-
+            // black `rgb(58, 59, 64)`: a near-black hairline around every
+            // capsule is what makes the light-mode chrome read as a set of
+            // stickers cut out of the dark theme. Dark enough to still be a
+            // real edge against the `0xF0` surface, light enough not to
+            // fight the content inside it.
             surface: SurfaceTokens {
                 background: ColorToken::new(egui::Color32::from_rgb(0xF0, 0xF0, 0xF2)),
+                border_color: ColorToken::new(egui::Color32::from_rgb(150, 151, 158)),
+                border_width: DimensionToken::new(1.0),
+            },
+            // Chris, 2026-09-13, on the ribbon capsule titles and the CSP's
+            // assist buttons in light mode: "The button/capsule 'labels'
+            // should have a very light grey background with a fairly dark
+            // grey text overlay on it." The pill and the cap share one pair
+            // here (unlike dark, where they differ) -- in light mode there is
+            // no lamp-behind-a-lens conceit for the cap to be darker for.
+            //
+            // The accent is a mid-tone blue, per Chris ("a mid-tone BLUE
+            // would be good"), picked for legibility rather than saturation:
+            // `rgb(40, 100, 185)` clears 5:1 contrast against the light-grey
+            // chip below, where a brighter blue like `rgb(70, 130, 220)`
+            // lands nearer 3:1 and reads washed out on a lit caption.
+            control: ControlTokens {
+                accent: ColorToken::new(egui::Color32::from_rgb(40, 100, 185)),
+                label_background: ColorToken::new(egui::Color32::from_rgb(226, 227, 232)),
+                label_foreground: ColorToken::new(egui::Color32::from_rgb(74, 76, 84)),
+                cap_background: ColorToken::new(egui::Color32::from_rgb(226, 227, 232)),
+                cap_foreground: ColorToken::new(egui::Color32::from_rgb(74, 76, 84)),
+                cap_border: ColorToken::new(egui::Color32::from_rgb(190, 191, 198)),
+                cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(120, 122, 130)),
             },
         }
     }
+}
+
+/// Whether `color` is dark enough that light-on-dark chrome (specifically
+/// the annunciator's back-illuminated "lamp behind a lens" glow, see
+/// [`crate::command_status_panel::AnnunciatorStyle`]) reads correctly on it.
+///
+/// This is what decides, from the palette alone, whether an annunciator cap
+/// glows or paints flat -- rather than a separate "glow: on/off" flag that
+/// could disagree with the colors around it. Chris, 2026-09-13, asked for
+/// "no glow" in light mode; a soft accent bloom under a crisp stroke is a
+/// bloom only against a dark cap, and on a light one it is just a smudge.
+/// So the rule is stated once, here, in terms of the cap's own color: recolor
+/// a palette's cap and its glow follows automatically.
+///
+/// Uses sRGB relative luminance (Rec. 709 coefficients on the raw 0-255
+/// components, not gamma-expanded -- this is a coarse light/dark bucket, not
+/// a contrast calculation, and the cheap form agrees with the expanded one
+/// everywhere near the 0.5 boundary that matters here).
+pub fn is_dark(color: egui::Color32) -> bool {
+    let luma = 0.2126 * color.r() as f32 + 0.7152 * color.g() as f32 + 0.0722 * color.b() as f32;
+    luma < 128.0
 }
 
 #[cfg(test)]
@@ -263,6 +390,86 @@ mod theme_palette_tests {
             let back: ThemePalette = serde_json::from_str(&json).unwrap();
             assert_eq!(palette, back);
         }
+    }
+
+    /// The dark palette must keep reproducing the exact literals that were
+    /// hardcoded in `ribbon.rs` and `command_status_panel.rs` before the
+    /// 2026-09-13 token pass -- Chris's one hard constraint on that work was
+    /// "dark mode is good as it is." A drift here is a silent dark-mode
+    /// regression that no other test would catch.
+    #[test]
+    fn the_dark_palette_reproduces_the_literals_it_replaced() {
+        let d = ThemePalette::dark();
+        // `ribbon::FRAME_STROKE`, at its `Stroke::new(1.0, ..)` width.
+        assert_eq!(
+            d.surface.border_color.color32().unwrap(),
+            egui::Color32::from_rgb(58, 59, 64)
+        );
+        assert_eq!(d.surface.border_width.px().unwrap(), 1.0);
+        // `sdb_ui::appearance::ACCENT`.
+        assert_eq!(
+            d.control.accent.color32().unwrap(),
+            egui::Color32::from_rgb(255, 178, 82)
+        );
+        // `ribbon::MODULE_LABEL_BG` / `MODULE_LABEL_FG`.
+        assert_eq!(
+            d.control.label_background.color32().unwrap(),
+            egui::Color32::from_rgb(43, 44, 49)
+        );
+        assert_eq!(
+            d.control.label_foreground.color32().unwrap(),
+            egui::Color32::from_rgb(141, 142, 150)
+        );
+        // `annunciator_response_sized`'s unlit cap fill, dim glyph color and
+        // its two border colors.
+        assert_eq!(
+            d.control.cap_background.color32().unwrap(),
+            egui::Color32::from_rgb(24, 24, 27)
+        );
+        assert_eq!(
+            d.control.cap_foreground.color32().unwrap(),
+            egui::Color32::from_rgb(104, 104, 112)
+        );
+        assert_eq!(
+            d.control.cap_border.color32().unwrap(),
+            egui::Color32::from_rgb(58, 58, 64)
+        );
+        assert_eq!(
+            d.control.cap_border_hovered.color32().unwrap(),
+            egui::Color32::from_rgb(110, 110, 118)
+        );
+    }
+
+    /// The whole point of the light palette's control tokens: light chips
+    /// with dark text, and a blue accent that is actually legible on them.
+    #[test]
+    fn the_light_palette_is_light_chips_with_dark_text_and_no_glow() {
+        let l = ThemePalette::light();
+        let cap_bg = l.control.cap_background.color32().unwrap();
+        let label_bg = l.control.label_background.color32().unwrap();
+        assert!(!is_dark(cap_bg), "light-mode cap must be a light chip");
+        assert!(!is_dark(label_bg), "light-mode pill must be a light chip");
+        // ... which is also what turns the annunciator's back-illumination
+        // off, per `is_dark`'s doc comment -- Chris: "No glow either."
+        assert!(is_dark(l.control.cap_foreground.color32().unwrap()));
+        assert!(is_dark(l.control.label_foreground.color32().unwrap()));
+        // A mid-tone blue: blue-dominant, and not so pale it disappears on
+        // the chip it is painted over.
+        let accent = l.control.accent.color32().unwrap();
+        assert!(accent.b() > accent.r() && accent.b() > accent.g());
+        assert!(is_dark(accent), "accent must stay legible on a light chip");
+    }
+
+    #[test]
+    fn is_dark_buckets_the_two_palettes_the_way_their_names_claim() {
+        assert!(is_dark(
+            ThemePalette::dark().surface.background.color32().unwrap()
+        ));
+        assert!(!is_dark(
+            ThemePalette::light().surface.background.color32().unwrap()
+        ));
+        assert!(is_dark(egui::Color32::BLACK));
+        assert!(!is_dark(egui::Color32::WHITE));
     }
 }
 

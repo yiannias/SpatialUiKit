@@ -214,6 +214,73 @@ pub fn annunciator_response(
     annunciator_response_sized(ui, label, glyphs, lit, accent, tip, ANNUNCIATOR_SIZE)
 }
 
+/// Everything about an annunciator cap that isn't its accent, its glyphs or
+/// its size -- the colors of the cap itself, and whether the lit state is
+/// *back-illuminated* (soft accent bloom under a crisp stroke, plus a halo
+/// behind the caption) or painted flat.
+///
+/// Added 2026-09-13. Until then every one of these was a literal inside
+/// [`annunciator_response_sized`], which made this widget a permanently dark
+/// cockpit lamp regardless of the app's theme -- fine in dark mode (it is
+/// the look Chris asked for and likes), a row of near-black blocks with a
+/// glow around them in light mode. Chris, 2026-09-13, on light mode
+/// specifically: the caps should be "a very light grey background with a
+/// fairly dark grey text overlay", and "No glow either."
+///
+/// [`AnnunciatorStyle::cockpit`] is the pre-2026-09-13 look exactly, and is
+/// what every un-styled entry point still uses, so SSP -- which has no theme
+/// tokens -- is unaffected.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct AnnunciatorStyle {
+    /// Cap fill when unlit. The lit fill is this nudged toward `accent` (see
+    /// [`AnnunciatorStyle::lit_fill`]) rather than a separate token, so a
+    /// recolored cap and a recolored accent can't drift apart.
+    pub background: egui::Color32,
+    /// Icon and caption color when unlit.
+    pub foreground: egui::Color32,
+    pub border: egui::Color32,
+    pub border_hovered: egui::Color32,
+    /// Whether a lit cap gets the layered under-paint + caption halo. See
+    /// [`crate::theme::is_dark`], which is how a themed host decides this
+    /// (from the cap color itself, not a separate switch that could
+    /// disagree with it).
+    pub backlit: bool,
+}
+
+impl AnnunciatorStyle {
+    /// The historical dark cockpit lamp: near-black cap, dim grey glyph,
+    /// back-illuminated when lit.
+    pub fn cockpit() -> Self {
+        Self {
+            background: egui::Color32::from_rgb(24, 24, 27),
+            foreground: egui::Color32::from_rgb(104, 104, 112),
+            border: egui::Color32::from_rgb(58, 58, 64),
+            border_hovered: egui::Color32::from_rgb(110, 110, 118),
+            backlit: true,
+        }
+    }
+
+    /// The cap fill for a lit button: `background` shifted a small, fixed
+    /// fraction of the way toward `accent`. On the dark cockpit cap this
+    /// reproduces the previous literal blend (`24 + accent.r * 26 / 255`,
+    /// etc.) exactly; on a light cap it tints just enough to read as "on"
+    /// without turning the chip into a solid block of accent.
+    fn lit_fill(&self, accent: egui::Color32) -> egui::Color32 {
+        let mix = |base: u8, acc: u8| base.saturating_add((acc as u32 * 26 / 255) as u8);
+        egui::Color32::from_rgb(
+            mix(self.background.r(), accent.r()),
+            mix(self.background.g(), accent.g()),
+            mix(self.background.b(), accent.b()),
+        )
+    }
+}
+
+impl Default for AnnunciatorStyle {
+    fn default() -> Self {
+        Self::cockpit()
+    }
+}
+
 /// The historical (and still default) annunciator cap size -- what
 /// [`annunciator_response`] uses, and what SSP's panel is laid out around.
 pub const ANNUNCIATOR_SIZE: egui::Vec2 = egui::vec2(58.0, 40.0);
@@ -242,6 +309,33 @@ pub fn annunciator_response_sized(
     tip: &str,
     size: egui::Vec2,
 ) -> egui::Response {
+    annunciator_response_styled(
+        ui,
+        label,
+        glyphs,
+        lit,
+        accent,
+        tip,
+        size,
+        AnnunciatorStyle::cockpit(),
+    )
+}
+
+/// [`annunciator_response_sized`] with the cap's own colors and lit
+/// treatment supplied by the caller instead of baked in -- see
+/// [`AnnunciatorStyle`] for why. Passing [`AnnunciatorStyle::cockpit`] is
+/// bit-for-bit what this widget drew before the style existed.
+#[allow(clippy::too_many_arguments)]
+pub fn annunciator_response_styled(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyphs: &[Glyph],
+    lit: bool,
+    accent: egui::Color32,
+    tip: &str,
+    size: egui::Vec2,
+    style: AnnunciatorStyle,
+) -> egui::Response {
     let size = egui::vec2(size.x.max(18.0), size.y.max(14.0));
     let (rect, resp) = ui.allocate_exact_size(size, egui::Sense::click());
     if !ui.is_rect_visible(rect) {
@@ -249,20 +343,23 @@ pub fn annunciator_response_sized(
     }
     let hovered = resp.hovered();
     let fill = if lit {
-        egui::Color32::from_rgb(
-            24 + (accent.r() as u32 * 26 / 255) as u8,
-            24 + (accent.g() as u32 * 26 / 255) as u8,
-            27 + (accent.b() as u32 * 26 / 255) as u8,
-        )
+        style.lit_fill(accent)
     } else {
-        egui::Color32::from_rgb(24, 24, 27)
+        style.background
     };
     let border = if hovered {
-        egui::Color32::from_rgb(110, 110, 118)
-    } else if lit {
+        style.border_hovered
+    } else if lit && style.backlit {
+        // A faint accent rim: on the dark cockpit cap the glow inside is
+        // what announces "on", so the rim only has to hint.
         egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 70)
+    } else if lit {
+        // Flat cap: with no glow inside (Chris, 2026-09-13), a crisp full-
+        // strength accent outline is what has to carry "on" instead -- the
+        // same 70-alpha rim over a light chip is barely a tint.
+        accent
     } else {
-        egui::Color32::from_rgb(58, 58, 64)
+        style.border
     };
     // Everything below is proportional to the cap so a shrunken button stays
     // a scaled-down version of the full-size one rather than a clipped one.
@@ -301,38 +398,44 @@ pub fn annunciator_response_sized(
     );
     let stroke_w = 1.3 * scale.max(0.75);
     if lit {
-        // Back-illumination: wide translucent underpaints beneath the crisp
-        // stroke, and a soft halo behind the caption.
-        paint_icon(
-            painter,
-            icon_rect,
-            glyphs,
-            accent.gamma_multiply(0.16),
-            stroke_w * 3.2,
-        );
-        paint_icon(
-            painter,
-            icon_rect,
-            glyphs,
-            accent.gamma_multiply(0.38),
-            stroke_w * 2.0,
-        );
+        if style.backlit {
+            // Back-illumination: wide translucent underpaints beneath the
+            // crisp stroke, and a soft halo behind the caption. Skipped
+            // entirely for a flat style -- against a light cap this is not a
+            // bloom, it is a smudge (Chris, 2026-09-13: "No glow either").
+            paint_icon(
+                painter,
+                icon_rect,
+                glyphs,
+                accent.gamma_multiply(0.16),
+                stroke_w * 3.2,
+            );
+            paint_icon(
+                painter,
+                icon_rect,
+                glyphs,
+                accent.gamma_multiply(0.38),
+                stroke_w * 2.0,
+            );
+        }
         paint_icon(painter, icon_rect, glyphs, accent, stroke_w);
         if with_caption {
-            let halo = accent.gamma_multiply(0.3);
-            for off in [
-                egui::vec2(-1.0, 0.0),
-                egui::vec2(1.0, 0.0),
-                egui::vec2(0.0, -1.0),
-                egui::vec2(0.0, 1.0),
-            ] {
-                painter.text(
-                    caption_pos + off,
-                    egui::Align2::CENTER_CENTER,
-                    label,
-                    font.clone(),
-                    halo,
-                );
+            if style.backlit {
+                let halo = accent.gamma_multiply(0.3);
+                for off in [
+                    egui::vec2(-1.0, 0.0),
+                    egui::vec2(1.0, 0.0),
+                    egui::vec2(0.0, -1.0),
+                    egui::vec2(0.0, 1.0),
+                ] {
+                    painter.text(
+                        caption_pos + off,
+                        egui::Align2::CENTER_CENTER,
+                        label,
+                        font.clone(),
+                        halo,
+                    );
+                }
             }
             painter.text(
                 caption_pos,
@@ -343,7 +446,7 @@ pub fn annunciator_response_sized(
             );
         }
     } else {
-        let dim = egui::Color32::from_rgb(104, 104, 112);
+        let dim = style.foreground;
         paint_icon(painter, icon_rect, glyphs, dim, stroke_w);
         if with_caption {
             painter.text(caption_pos, egui::Align2::CENTER_CENTER, label, font, dim);
@@ -365,6 +468,24 @@ pub fn capsule(
     height: f32,
     tip: &str,
 ) -> egui::Response {
+    capsule_styled(ui, text, accent, height, tip, AnnunciatorStyle::cockpit())
+}
+
+/// [`capsule`] with caller-supplied cap colors, so a themed app's scale
+/// readout matches the annunciator caps it sits beside instead of staying a
+/// near-black pill in light mode. Same [`AnnunciatorStyle`] the annunciators
+/// take (Chris, 2026-09-13, named the two together: "the button/capsule
+/// 'labels'"); only `background`/`border`/`border_hovered` apply here, since
+/// a capsule's text is always the accent and it has no lit/unlit state to
+/// back-illuminate.
+pub fn capsule_styled(
+    ui: &mut egui::Ui,
+    text: &str,
+    accent: egui::Color32,
+    height: f32,
+    tip: &str,
+    style: AnnunciatorStyle,
+) -> egui::Response {
     let scale = (height / ANNUNCIATOR_SIZE.y).clamp(0.4, 1.0);
     let font = egui::FontId::monospace(
         crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE
@@ -382,11 +503,15 @@ pub fn capsule(
     }
     let radius = rect.height() * 0.5;
     let painter = ui.painter();
-    painter.rect_filled(rect, radius, egui::Color32::from_rgb(24, 24, 27));
+    painter.rect_filled(rect, radius, style.background);
     let border = if resp.hovered() {
-        egui::Color32::from_rgb(110, 110, 118)
-    } else {
+        style.border_hovered
+    } else if style.backlit {
         egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 70)
+    } else {
+        // Flat style: see `annunciator_response_styled`'s identical branch --
+        // a 70-alpha rim over a light chip is barely a tint.
+        accent
     };
     painter.rect_stroke(
         rect,
@@ -448,6 +573,36 @@ pub fn panel_frame_themed(
     corner_radius: u8,
 ) -> egui::Frame {
     let alpha = (opacity.clamp(0.25, 1.0) * 255.0) as u8;
+    panel_frame_bordered(
+        opacity,
+        background,
+        corner_radius,
+        egui::Stroke::new(
+            1.0,
+            egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120)),
+        ),
+    )
+}
+
+/// Same as [`panel_frame_themed`], with the border stroke also caller-
+/// supplied -- added 2026-09-13 so SDB's Command & Status Panel can draw the
+/// *same* border as the ribbon's module capsules
+/// (`theme::SurfaceTokens::border_color`/`border_width`) instead of this
+/// module's own lighter, panel-opacity-modulated `rgba(90, 90, 100,
+/// alpha.max(120))`. Chris: the two should match, "for both light and dark
+/// mode."
+///
+/// The stroke is used verbatim, **not** faded with `opacity` the way the
+/// fill is -- the ribbon's border has never varied with anything, and
+/// "same color" only holds if this one doesn't either. `panel_frame_themed`
+/// above keeps the old opacity-tied stroke, so SSP is unaffected.
+pub fn panel_frame_bordered(
+    opacity: f32,
+    background: egui::Color32,
+    corner_radius: u8,
+    border: egui::Stroke,
+) -> egui::Frame {
+    let alpha = (opacity.clamp(0.25, 1.0) * 255.0) as u8;
     egui::Frame::new()
         .fill(egui::Color32::from_rgba_unmultiplied(
             background.r(),
@@ -455,10 +610,7 @@ pub fn panel_frame_themed(
             background.b(),
             alpha,
         ))
-        .stroke(egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(90, 90, 100, alpha.max(120)),
-        ))
+        .stroke(border)
         .corner_radius(corner_radius)
         .inner_margin(egui::Margin::symmetric(14, 10))
 }
@@ -698,6 +850,53 @@ mod tests {
         assert_eq!(snap_edge(3.0, 7.0, 24.0), 7.0);
         assert_eq!(snap_edge(24.0, 7.0, 24.0), 7.0);
         assert_eq!(snap_edge(25.0, 7.0, 24.0), 25.0);
+    }
+
+    /// `AnnunciatorStyle::cockpit` must keep reproducing the exact literals
+    /// that were inlined in `annunciator_response_sized` before the
+    /// 2026-09-13 style pass -- SSP still renders through it unchanged, and
+    /// SDB's dark mode does too (Chris: "Dark mode is good as it is").
+    #[test]
+    fn the_cockpit_style_reproduces_the_literals_it_replaced() {
+        let s = AnnunciatorStyle::cockpit();
+        assert_eq!(s.background, egui::Color32::from_rgb(24, 24, 27));
+        assert_eq!(s.foreground, egui::Color32::from_rgb(104, 104, 112));
+        assert_eq!(s.border, egui::Color32::from_rgb(58, 58, 64));
+        assert_eq!(s.border_hovered, egui::Color32::from_rgb(110, 110, 118));
+        assert!(s.backlit);
+
+        // The lit-cap blend, against the app's amber accent: previously the
+        // literal `24 + accent.r * 26 / 255`, `24 + g`, `27 + b`.
+        let amber = egui::Color32::from_rgb(255, 178, 82);
+        assert_eq!(
+            s.lit_fill(amber),
+            egui::Color32::from_rgb(
+                24 + (amber.r() as u32 * 26 / 255) as u8,
+                24 + (amber.g() as u32 * 26 / 255) as u8,
+                27 + (amber.b() as u32 * 26 / 255) as u8,
+            )
+        );
+    }
+
+    /// The light palette's cap is near-white, so the same `+26/255` nudge
+    /// that lifts a near-black cap must not wrap around into a dark color --
+    /// `saturating_add` is load-bearing, not decoration.
+    #[test]
+    fn a_light_cap_tints_toward_the_accent_without_wrapping() {
+        let light = AnnunciatorStyle {
+            background: egui::Color32::from_rgb(226, 227, 232),
+            foreground: egui::Color32::from_rgb(74, 76, 84),
+            border: egui::Color32::from_rgb(190, 191, 198),
+            border_hovered: egui::Color32::from_rgb(120, 122, 130),
+            backlit: false,
+        };
+        let blue = egui::Color32::from_rgb(40, 100, 185);
+        let lit = light.lit_fill(blue);
+        assert!(lit.r() >= light.background.r());
+        assert!(lit.g() >= light.background.g());
+        assert!(lit.b() >= light.background.b());
+        assert!(crate::theme::is_dark(light.foreground));
+        assert!(!crate::theme::is_dark(lit));
     }
 
     #[test]

@@ -124,6 +124,52 @@ pub trait RibbonHost {
     fn button_size(&self) -> egui::Vec2 {
         egui::vec2(40.0, 40.0)
     }
+
+    /// The module capsule's border and label-pill colors. Defaults to the
+    /// file-local constants this module has always used, so a host that
+    /// doesn't override it (SSP's) renders exactly as before -- see
+    /// [`ModuleFrameStyle::default`].
+    ///
+    /// Added 2026-09-13, when Chris asked for the light-mode capsule titles
+    /// (a near-black pill with mid-grey text, fine in dark mode, a jarring
+    /// dark block in light) to come from the theme instead. The module doc
+    /// comment above anticipated this exact case -- "widen them to
+    /// parameters if SSP's needs diverge from SDB's rather than forking the
+    /// file" -- and a defaulted `RibbonHost` method is the widening, since
+    /// `RibbonHost` is already how every other app-specific decision
+    /// (icons, button size) reaches this file.
+    fn module_frame_style(&self) -> ModuleFrameStyle {
+        ModuleFrameStyle::default()
+    }
+}
+
+/// Per-theme colors for [`module_frame`]'s capsule border and label pill.
+/// Plain resolved `Color32`s, not `ColorToken`s: this crate's drawing code
+/// should never be parsing token strings mid-frame, and a host that has no
+/// token system at all (SSP) must still be able to hand over four colors.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub struct ModuleFrameStyle {
+    pub border: egui::Color32,
+    pub border_width: f32,
+    pub label_foreground: egui::Color32,
+    pub label_background: egui::Color32,
+}
+
+impl Default for ModuleFrameStyle {
+    /// The dark-only look this module shipped with from 2026-08-14 to
+    /// 2026-09-13. Kept as the default so SSP -- an unmodified second caller
+    /// of [`ribbon_panel`] through the same path dependency -- is untouched
+    /// by SDB's theming work, exactly as [`panel_frame`] was kept for it.
+    ///
+    /// [`panel_frame`]: crate::command_status_panel::panel_frame
+    fn default() -> Self {
+        Self {
+            border: FRAME_STROKE,
+            border_width: 1.0,
+            label_foreground: MODULE_LABEL_FG,
+            label_background: MODULE_LABEL_BG,
+        }
+    }
 }
 
 /// How long the clicked-button flash lasts, seconds.
@@ -223,7 +269,13 @@ fn group_content_width(button_count: usize, button_w: f32, spacing_x: f32) -> f3
 /// whoever wrote the label in the first place (`context.rs`'s group
 /// constructors), not a generic truncation rule that would produce
 /// nonsense like "DIME" for an arbitrary cutoff.
-fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> egui::Ui {
+fn module_frame(
+    ui: &mut egui::Ui,
+    label: &str,
+    content_w: f32,
+    row_h: f32,
+    style: ModuleFrameStyle,
+) -> egui::Ui {
     let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
@@ -246,7 +298,7 @@ fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> e
         ui.painter().rect_stroke(
             outer_rect,
             FRAME_RADIUS,
-            egui::Stroke::new(1.0, FRAME_STROKE),
+            egui::Stroke::new(style.border_width, style.border),
             egui::StrokeKind::Inside,
         );
         let radius = FRAME_RADIUS as u8;
@@ -260,8 +312,8 @@ fn module_frame(ui: &mut egui::Ui, label: &str, content_w: f32, row_h: f32) -> e
             ui,
             label_rect,
             &label.to_uppercase(),
-            MODULE_LABEL_FG,
-            MODULE_LABEL_BG,
+            style.label_foreground,
+            style.label_background,
             pill_radius,
         );
     }
@@ -337,6 +389,10 @@ pub fn ribbon_panel<A: Clone>(
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
+    // Resolved once per row, not per module: it cannot vary between modules
+    // (it's a theme lookup, not a per-group decision) and a host is free to
+    // do real work in `module_frame_style` -- SDB's parses color tokens.
+    let frame_style = host.module_frame_style();
 
     // Note, 2026-08-30: SDB (the only current caller of this crate that's
     // actively iterating on ribbon visuals) uses `ribbon_panel_modules`
@@ -365,7 +421,7 @@ pub fn ribbon_panel<A: Clone>(
                     button_size.x,
                     ui.spacing().item_spacing.x,
                 );
-                let mut child = module_frame(ui, group.label, content_w, row_h);
+                let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
                 draw_button_row(&mut child, group, host, &mut actions);
             }
         });
@@ -387,6 +443,8 @@ pub fn ribbon_panel_modules<A: Clone>(
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
+    // See `ribbon_panel`'s identical lookup for why this is hoisted.
+    let frame_style = host.module_frame_style();
 
     // No `ScrollArea` -- Chris, 2026-08-30, live: "the ribbon does NOT need
     // any scrolling capability". (It also used to paint a fade-to-
@@ -411,7 +469,7 @@ pub fn ribbon_panel_modules<A: Clone>(
                         button_size.x,
                         ui.spacing().item_spacing.x,
                     );
-                    let mut child = module_frame(ui, group.label, content_w, row_h);
+                    let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
                     draw_button_row(&mut child, &group, host, &mut actions);
                 }
                 RibbonModule::Custom {
@@ -419,7 +477,7 @@ pub fn ribbon_panel_modules<A: Clone>(
                     width,
                     render,
                 } => {
-                    let mut child = module_frame(ui, label, width, row_h);
+                    let mut child = module_frame(ui, label, width, row_h, frame_style);
                     let acts = render(&mut child);
                     actions.extend(acts);
                 }
