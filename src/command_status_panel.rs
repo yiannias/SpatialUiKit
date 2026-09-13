@@ -570,7 +570,18 @@ pub fn render_feed(
 /// directly to `size` (clamped to `min_outer`). The window itself is
 /// fixed-size (see [`panel_window`]) -- this is the only way the user
 /// resizes it.
-pub fn resize_grip(ui: &mut egui::Ui, size: &mut (f32, f32), min_outer: egui::Vec2) {
+///
+/// Returns the grip's own drag `Response` -- a caller whose window also
+/// re-derives its size/position from fixed margins every frame (as SDB's
+/// Command & Status Panel does, see its own doc comments) needs to know a
+/// resize-only drag is in progress, not just a whole-window move-drag, or
+/// that per-frame re-derivation overwrites the grip's own change the very
+/// next frame before the drag ever gets to recapture new margins from it.
+pub fn resize_grip(
+    ui: &mut egui::Ui,
+    size: &mut (f32, f32),
+    min_outer: egui::Vec2,
+) -> egui::Response {
     let grip_rect = egui::Rect::from_min_size(
         ui.max_rect().max - egui::vec2(6.0, 6.0),
         egui::vec2(16.0, 16.0),
@@ -599,6 +610,7 @@ pub fn resize_grip(ui: &mut egui::Ui, size: &mut (f32, f32), min_outer: egui::Ve
         size.0 = (size.0 + d.x).max(min_outer.x);
         size.1 = (size.1 + d.y).max(min_outer.y);
     }
+    grip
 }
 
 /// Right-click context menu: opacity slider, show-history checkbox, reset
