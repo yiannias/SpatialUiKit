@@ -1208,9 +1208,17 @@ fn draw_flyout_column<A>(
         / (1.0 - ITEMS_REVEAL_THRESHOLD))
         .clamp(0.0, 1.0);
 
-    let col_min = egui::pos2(revealed_left, anchor_rect.bottom());
+    // The shape joins the *pod's* bottom edge, not the button's: pods
+    // extend below their buttons, and attaching at the button's bottom put
+    // the fillets inside the pod and left the pod's bottom border running
+    // through the join (Chris, 2026-09-24 screenshot).
+    let attach = egui::Rect::from_min_max(
+        anchor_rect.min,
+        egui::pos2(anchor_rect.max.x, pod.bottom().max(anchor_rect.bottom())),
+    );
+    let col_min = egui::pos2(revealed_left, attach.bottom());
     let full_rect = egui::Rect::from_min_size(
-        egui::pos2(final_left, anchor_rect.bottom()),
+        egui::pos2(final_left, attach.bottom()),
         egui::vec2(final_w, natural_h),
     );
     let reveal_column = egui::Rect::from_min_size(col_min, egui::vec2(revealed_w, revealed_h));
@@ -1239,7 +1247,7 @@ fn draw_flyout_column<A>(
             let stroke = egui::Stroke::new(style.border_width, style.border);
             paint_flow_out(
                 ui.painter(),
-                anchor_rect,
+                attach,
                 reveal_column,
                 revealed_r,
                 left,
