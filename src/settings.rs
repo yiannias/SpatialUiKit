@@ -147,6 +147,23 @@ pub enum FieldControl<A, Ctx> {
         suffix: &'static str,
         on_change: Box<dyn Fn(f32) -> A + Send + Sync>,
     },
+    /// A read-only value -- no widget, just text in the control column, for
+    /// rows that report something (GPU adapter name, backend, ...) rather
+    /// than edit it. Added so those rows can live in the same label/control
+    /// grid as everything else instead of a hand-rolled `Custom` row that
+    /// couldn't share the grid's column alignment.
+    Static { value: ReadFn<Ctx, String> },
+    /// Like `Dropdown`, but the option list is computed from `Ctx` each frame
+    /// instead of being a fixed `&'static [&'static str]` -- for a picker
+    /// whose choices come from runtime data (e.g. the GPU adapters actually
+    /// present on this machine). `on_change` gets both the chosen label and
+    /// `Ctx`, since recovering the underlying value from the label alone
+    /// often needs looking the label back up in that same runtime data.
+    DynamicDropdown {
+        value: ReadFn<Ctx, String>,
+        options: Box<dyn Fn(&Ctx) -> Vec<String> + Send + Sync>,
+        on_change: Box<dyn Fn(&str, &Ctx) -> A + Send + Sync>,
+    },
 }
 
 impl<A, Ctx> Field<A, Ctx> {
@@ -263,6 +280,38 @@ impl<A, Ctx> Field<A, Ctx> {
                 range,
                 step,
                 suffix,
+                on_change: Box::new(on_change),
+            },
+        ))
+    }
+
+    pub fn static_text(
+        id: &'static str,
+        label: &'static str,
+        value: impl Fn(&Ctx) -> String + Send + Sync + 'static,
+    ) -> SettingsNode<A, Ctx> {
+        SettingsNode::Field(Self::base(
+            id,
+            label,
+            FieldControl::Static {
+                value: Box::new(value),
+            },
+        ))
+    }
+
+    pub fn dynamic_dropdown(
+        id: &'static str,
+        label: &'static str,
+        value: impl Fn(&Ctx) -> String + Send + Sync + 'static,
+        options: impl Fn(&Ctx) -> Vec<String> + Send + Sync + 'static,
+        on_change: impl Fn(&str, &Ctx) -> A + Send + Sync + 'static,
+    ) -> SettingsNode<A, Ctx> {
+        SettingsNode::Field(Self::base(
+            id,
+            label,
+            FieldControl::DynamicDropdown {
+                value: Box::new(value),
+                options: Box::new(options),
                 on_change: Box::new(on_change),
             },
         ))
@@ -422,124 +471,140 @@ fn render_nav_filtered<A, Ctx>(
     clicked
 }
 
-/// A bordered, content-sized header box, matching the sketch's rounded-rect
-/// boxes around each section/group header in the content pane (as opposed
-/// to a plain heading label spanning the full width). Returns the frame's
-/// response so callers can `scroll_to_rect` it.
-fn framed_header(ui: &mut egui::Ui, label: &str, text_size: f32) -> egui::Response {
-    egui::Frame::new()
-        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-        .corner_radius(4)
-        .inner_margin(egui::Margin::symmetric(10, 4))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(label).strong().size(text_size));
-        })
-        .response
+/// Fixed width of the control column -- every control (and the help/hint
+/// text under it) renders at this width, rather than shrink-wrapping to
+/// whatever the widest one happens to be. Matches the ribbon pods' control
+/// sizing language (docs/design/2026-09-24_ribbon-pods-spec.md): a
+/// consistent control width reads as one system rather than a pile of
+/// independently-sized widgets. Also what stops help text from ever running
+/// the full width of the window: everything in the control column, wrapped
+/// text included, is laid out inside a `Ui` this wide.
+const CONTROL_COL_WIDTH: f32 = 240.0;
+
+/// One "row unit" derived from the current body text size rather than a bare
+/// pixel constant, so every space/gap in the panel keeps its proportions as
+/// Interface Scale or Text Size change (Text Size only touches font metrics,
+/// not spacing -- see `theme::apply_text_scale` -- so anything that should
+/// track it has to be computed from a text height, not hardcoded).
+fn row_unit(ui: &egui::Ui) -> f32 {
+    ui.text_style_height(&egui::TextStyle::Body)
 }
 
-/// Draws a rounded "elbow" tree connector from the vertical trunk line at
-/// `trunk_x` out to a child header vertically centered at `target_y`, then a
-/// straight run over to `target_x` -- a small quarter-circle-ish bend
-/// (cubic Bézier, control points at the standard ~0.5523*r circle-arc
-/// offset) instead of a sharp right angle, per the "little bend" look Chris
-/// asked for (2026-07-21) over egui's default straight `indent_has_left_vline`.
-fn draw_elbow(
-    painter: &egui::Painter,
-    trunk_x: f32,
-    trunk_top: f32,
-    target_y: f32,
-    target_x: f32,
-    stroke: egui::Stroke,
-) {
-    const K: f32 = 0.5523;
-    let r = 8.0_f32
-        .min((target_x - trunk_x - 2.0).max(1.0))
-        .min((target_y - trunk_top).max(1.0));
-    let bend_start = egui::pos2(trunk_x, target_y - r);
-    let bend_end = egui::pos2(trunk_x + r, target_y);
-    let bezier = egui::epaint::CubicBezierShape::from_points_stroke(
-        [
-            bend_start,
-            egui::pos2(trunk_x, target_y - r + r * K),
-            egui::pos2(trunk_x + r - r * K, target_y),
-            bend_end,
-        ],
-        false,
-        egui::Color32::TRANSPARENT,
-        stroke,
-    );
-    painter.add(bezier);
-    painter.line_segment([bend_end, egui::pos2(target_x, target_y)], stroke);
-}
-
-/// Indents `children` under a parent Section/Group header, one nesting
-/// level, drawing a vertical trunk line down to the last immediate child
-/// Section/Group header and a curved elbow connector out to each one --
-/// replaces egui's plain `Ui::indent` (straight vline, sharp corner) with
-/// the tree-outline look. Fields don't get their own branch (too busy --
-/// they're already visually grouped by `render_content`'s shared grid).
-fn render_indented<A: Clone, Ctx>(
-    ui: &mut egui::Ui,
-    id_salt: impl std::hash::Hash + std::fmt::Debug,
-    ctx: &Ctx,
-    host: &impl SettingsHost,
-    children: &[SettingsNode<A, Ctx>],
-    scroll_to: Option<&'static str>,
-    actions: &mut Vec<A>,
-) {
-    let indent = ui.spacing().indent;
-    let mut child_rect = ui.available_rect_before_wrap();
-    child_rect.min.x += indent;
-    let top_y = child_rect.min.y;
-    let trunk_x = child_rect.min.x - indent * 0.5;
-
-    let mut child_ui = ui.new_child(egui::UiBuilder::new().id_salt(id_salt).max_rect(child_rect));
-    let mut branch_ys: Vec<f32> = Vec::new();
-    render_content_impl(
-        &mut child_ui,
-        ctx,
-        host,
-        children,
-        scroll_to,
-        actions,
-        &mut branch_ys,
-    );
-    let child_min_rect = child_ui.min_rect();
-
-    if let Some(&last) = branch_ys.last() {
-        let stroke = ui.visuals().widgets.noninteractive.bg_stroke;
-        let painter = ui.painter();
-        painter.line_segment(
-            [egui::pos2(trunk_x, top_y), egui::pos2(trunk_x, last)],
-            stroke,
-        );
-        for &y in &branch_ys {
-            draw_elbow(painter, trunk_x, top_y, y, child_rect.min.x, stroke);
-        }
+/// Secondary/help text color with enough contrast against the panel
+/// background to stay readable (targets WCAG >= 4.5:1) -- egui's own
+/// `weak_text_color()` is tuned for de-emphasis against arbitrary content
+/// and skews too faint for a full sentence of help text. Splits dark/light
+/// rather than reading `weak_text_color()`, matching the ribbon pods'
+/// secondary-text value in dark mode (`#7F8088`) and a comparably-toned
+/// mid-grey in light mode.
+fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_rgb(0x7F, 0x80, 0x88)
+    } else {
+        egui::Color32::from_rgb(0x5B, 0x5D, 0x66)
     }
+}
 
-    ui.advance_cursor_after_rect(child_min_rect);
+/// A disabled row's hint should read as clearly dimmer than ordinary help
+/// text, not just the same weak color reused -- otherwise a disabled field
+/// and an enabled one with a hover hint look identically "quiet" and the eye
+/// has nothing to tell them apart with.
+fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_rgb(0x5A, 0x5B, 0x60)
+    } else {
+        egui::Color32::from_rgb(0xA8, 0xA9, 0xAE)
+    }
+}
+
+/// Primary label color -- brighter than egui's default body text in a few
+/// visuals presets, and stated explicitly here (rather than left to
+/// `ui.visuals().text_color()`) so field labels are always the panel's
+/// brightest, most legible text, per the readability pass this module went
+/// through (labels were reading as dim grey against help text that was
+/// nearly as bright).
+fn label_color(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::WHITE
+    } else {
+        egui::Color32::from_rgb(0x10, 0x10, 0x14)
+    }
+}
+
+/// Tier header: "Application Settings" / "User-Specific Settings" / "Project
+/// Settings" -- the top level of the settings tree's three-level hierarchy
+/// (tier / section / group). Large, bold, no box, generous space above, and
+/// a thin full-width rule below it, so a tier reads as a hard break rather
+/// than another box the same weight as everything under it.
+fn tier_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let unit = row_unit(ui);
+    ui.add_space(unit * 1.6);
+    let resp = ui.label(
+        egui::RichText::new(label)
+            .size(unit * 1.55)
+            .strong()
+            .color(label_color(ui)),
+    );
+    ui.add_space(unit * 0.5);
+    let rule_rect = ui.available_rect_before_wrap();
+    ui.painter().hline(
+        rule_rect.x_range(),
+        rule_rect.top(),
+        ui.visuals().widgets.noninteractive.bg_stroke,
+    );
+    ui.add_space(unit * 0.7);
+    resp
+}
+
+/// Section header: "Themes", "Visual Fidelity", "GPU & Rendering" -- medium
+/// semibold, no box, one level down from a tier.
+fn section_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let unit = row_unit(ui);
+    ui.add_space(unit * 1.0);
+    let resp = ui.label(
+        egui::RichText::new(label)
+            .size(unit * 1.15)
+            .strong()
+            .color(label_color(ui)),
+    );
+    ui.add_space(unit * 0.45);
+    resp
+}
+
+/// Group header: "Selection Highlight", "Spacing" -- smaller semibold, in
+/// the help-text color rather than the label color, so it reads as a quiet
+/// subdivision of the section above it instead of competing with it.
+fn group_header(ui: &mut egui::Ui, label: &str) {
+    let unit = row_unit(ui);
+    ui.add_space(unit * 0.6);
+    ui.label(
+        egui::RichText::new(label)
+            .size(unit * 0.85)
+            .strong()
+            .color(help_text_color(ui)),
+    );
+    ui.add_space(unit * 0.3);
 }
 
 /// Render the single continuously-scrolling content pane: every `Section`
-/// and `Group` as a header followed by its fields, all in one column. When
-/// `scroll_to` names a `Section` id, that header's rect is scrolled into
+/// and `Group` as a heading followed by its fields, all in one column. When
+/// `scroll_to` names a `Section` id, that heading's rect is scrolled into
 /// view this frame (see the sketch's "spatial continuity" rationale in
 /// `docs/Sketches/Prefs Panel.md` -- clicking the nav walks you to a
 /// section, it doesn't isolate it).
 ///
-/// Formatting matters here as much as content: a tree meant to hold dozens
-/// to hundreds of fields is unusable if every field is its own free-floating
-/// `label + widget` line with no shared alignment. So runs of consecutive
-/// sibling [`SettingsNode::Field`]s are batched into a single two-column
-/// `egui::Grid` (label column, control column) -- every field in that run
-/// lines up, rather than each one picking its own label width. A `Group` or
-/// `Section` breaks the run (and starts its own grid for its own fields).
-///
-/// Top-level entries (the three tiers -- Application-Wide/User/Project) each
-/// get a full grey bordered frame around header+content, not just the
-/// header box every nested Section/Group gets -- makes each tier read as
-/// its own card.
+/// Three heading weights, one shared grid per tier: a tier
+/// (Application-Wide/User/Project) gets [`tier_header`]; a nested `Section`
+/// (Themes, GPU & Rendering, ...) gets [`section_header`]; a `Group`
+/// (Selection Highlight, Spacing, ...) gets [`group_header`]. All the
+/// `Field` rows anywhere under one tier -- across every nested `Section` and
+/// `Group` -- share a single `egui::Grid` keyed by that tier's id, so the
+/// label column and control column land at the same x for the whole tier,
+/// not just within whichever run of fields happened to sit next to each
+/// other. (A fresh `Grid::new` call with the same id resumes that id's
+/// column widths from whatever the last call already measured, so
+/// interleaving headings and `Custom` rows between grid calls doesn't reset
+/// alignment.)
 pub fn render_content<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
@@ -549,59 +614,46 @@ pub fn render_content<A: Clone, Ctx>(
     actions: &mut Vec<A>,
 ) {
     for node in tree {
-        // Fixed width for every top-level tier card, computed once from the
-        // content pane's available width (rather than each `Frame` shrink-
-        // wrapping its own content) so all three tiers line up, and pulled
-        // in a bit from the scroll area's right edge so the card doesn't
-        // crowd/underlap the scrollbar.
-        const SCROLLBAR_GUTTER: f32 = 14.0;
-        let card_width = (ui.available_width() - SCROLLBAR_GUTTER).max(200.0);
         match node {
             SettingsNode::Section {
                 id,
                 label,
                 children,
             } => {
-                ui.add_space(10.0);
-                egui::Frame::new()
-                    .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
-                    .corner_radius(6)
-                    .inner_margin(egui::Margin::symmetric(12, 10))
-                    .show(ui, |ui| {
-                        ui.set_width(card_width - 24.0); // minus the inner_margin above
-                        let resp = framed_header(ui, label, 16.0);
-                        if scroll_to == Some(*id) {
-                            ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
-                        }
-                        ui.add_space(8.0);
-                        render_indented(ui, *id, ctx, host, children, scroll_to, actions);
-                    });
-                ui.add_space(18.0);
+                let resp = tier_header(ui, label);
+                if scroll_to == Some(*id) {
+                    ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
+                }
+                render_section_body(ui, ctx, host, id, children, scroll_to, actions);
             }
             // Each app's tree root is a flat list of tier `Section`s, so
-            // `Group`/`Field` shouldn't appear here in practice -- handled
-            // via the plain (unframed) renderer for robustness.
-            _ => render_content_impl(
+            // `Group`/`Field`/`Custom` shouldn't appear here in practice --
+            // handled via the same body renderer, keyed to a fallback grid
+            // id, for robustness.
+            _ => render_section_body(
                 ui,
                 ctx,
                 host,
+                "settings_root",
                 std::slice::from_ref(node),
                 scroll_to,
                 actions,
-                &mut Vec::new(),
             ),
         }
     }
 }
 
-fn render_content_impl<A: Clone, Ctx>(
+/// Walks one tier's subtree, rendering nested `Section`/`Group` headings
+/// inline and feeding every `Field` run into the one `egui::Grid` keyed by
+/// `grid_id` (see [`render_content`]'s doc comment).
+fn render_section_body<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
     host: &impl SettingsHost,
+    grid_id: &'static str,
     tree: &[SettingsNode<A, Ctx>],
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
-    branch_ys: &mut Vec<f32>,
 ) {
     let mut i = 0;
     while i < tree.len() {
@@ -611,24 +663,16 @@ fn render_content_impl<A: Clone, Ctx>(
                 label,
                 children,
             } => {
-                ui.add_space(10.0);
-                let resp = framed_header(ui, *label, 16.0);
-                branch_ys.push(resp.rect.center().y);
+                let resp = section_header(ui, label);
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                ui.add_space(8.0);
-                render_indented(ui, *id, ctx, host, children, scroll_to, actions);
-                ui.add_space(18.0);
+                render_section_body(ui, ctx, host, grid_id, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Group { label, children } => {
-                ui.add_space(6.0);
-                let resp = framed_header(ui, *label, 14.0);
-                branch_ys.push(resp.rect.center().y);
-                ui.add_space(6.0);
-                render_indented(ui, *label, ctx, host, children, scroll_to, actions);
-                ui.add_space(12.0);
+                group_header(ui, label);
+                render_section_body(ui, ctx, host, grid_id, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Custom { render, .. } => {
@@ -640,14 +684,10 @@ fn render_content_impl<A: Clone, Ctx>(
                 while i < tree.len() && matches!(tree[i], SettingsNode::Field(_)) {
                     i += 1;
                 }
-                let grid_id = match &tree[start] {
-                    SettingsNode::Field(f) => f.id,
-                    _ => unreachable!(),
-                };
+                let unit = row_unit(ui);
                 egui::Grid::new(grid_id)
                     .num_columns(2)
-                    .spacing([18.0, 10.0])
-                    .striped(true)
+                    .spacing([unit * 1.3, unit * 0.5])
                     .show(ui, |ui| {
                         for node in &tree[start..i] {
                             if let SettingsNode::Field(field) = node {
@@ -667,22 +707,25 @@ fn render_field_row<A: Clone, Ctx>(
     field: &Field<A, Ctx>,
     actions: &mut Vec<A>,
 ) {
+    let label_col = label_color(ui);
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.scope(|ui| {
             ui.set_min_width(190.0);
+            let text = egui::RichText::new(field.label).color(label_col);
             if field.nested {
                 ui.horizontal(|ui| {
-                    ui.add_space(18.0);
-                    ui.label(field.label);
+                    ui.add_space(row_unit(ui) * 1.1);
+                    ui.label(text);
                 });
             } else {
-                ui.label(field.label);
+                ui.label(text);
             }
         });
     });
 
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.vertical(|ui| {
+            ui.set_width(CONTROL_COL_WIDTH);
             match &field.control {
                 FieldControl::Toggle { value, on_change } => {
                     let mut val = value(ctx);
@@ -693,7 +736,7 @@ fn render_field_row<A: Clone, Ctx>(
                 FieldControl::Text { value, on_change } => {
                     let mut val = value(ctx);
                     if ui
-                        .add(egui::TextEdit::singleline(&mut val).desired_width(220.0))
+                        .add(egui::TextEdit::singleline(&mut val).desired_width(CONTROL_COL_WIDTH))
                         .changed()
                     {
                         actions.push(on_change(val));
@@ -707,7 +750,7 @@ fn render_field_row<A: Clone, Ctx>(
                     let current = value(ctx);
                     egui::ComboBox::from_id_salt(field.id)
                         .selected_text(current)
-                        .width(220.0)
+                        .width(CONTROL_COL_WIDTH)
                         .show_ui(ui, |ui| {
                             for opt in *options {
                                 if ui.selectable_label(current == *opt, *opt).clicked() {
@@ -715,6 +758,29 @@ fn render_field_row<A: Clone, Ctx>(
                                 }
                             }
                         });
+                }
+                FieldControl::DynamicDropdown {
+                    value,
+                    options,
+                    on_change,
+                } => {
+                    let current = value(ctx);
+                    let opts = options(ctx);
+                    egui::ComboBox::from_id_salt(field.id)
+                        .selected_text(current.clone())
+                        .width(CONTROL_COL_WIDTH)
+                        .show_ui(ui, |ui| {
+                            for opt in &opts {
+                                if ui.selectable_label(&current == opt, opt).clicked() {
+                                    actions.push(on_change(opt, ctx));
+                                }
+                            }
+                        });
+                }
+                FieldControl::Static { value } => {
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(value(ctx)).color(label_col)).wrap(),
+                    );
                 }
                 FieldControl::Path {
                     value,
@@ -724,7 +790,10 @@ fn render_field_row<A: Clone, Ctx>(
                     ui.horizontal(|ui| {
                         let mut val = value(ctx);
                         if ui
-                            .add(egui::TextEdit::singleline(&mut val).desired_width(180.0))
+                            .add(
+                                egui::TextEdit::singleline(&mut val)
+                                    .desired_width(CONTROL_COL_WIDTH - 28.0),
+                            )
                             .changed()
                         {
                             actions.push(on_change(val));
@@ -765,32 +834,45 @@ fn render_field_row<A: Clone, Ctx>(
                     let mut val = ui
                         .data(|d| d.get_temp::<f32>(drag_id))
                         .unwrap_or_else(|| value(ctx));
-                    ui.horizontal(|ui| {
-                        ui.set_width(220.0);
-                        let response = ui.add(
-                            egui::Slider::new(&mut val, range.clone())
-                                .step_by(*step as f64)
-                                .suffix(*suffix),
-                        );
-                        if response.dragged() {
-                            ui.data_mut(|d| d.insert_temp(drag_id, val));
-                        } else if response.drag_stopped() {
-                            ui.data_mut(|d| d.remove::<f32>(drag_id));
-                            actions.push(on_change(val));
-                        } else if response.changed() {
-                            // Keyboard or a single click on the track.
-                            actions.push(on_change(val));
-                        }
-                    });
+                    let response = ui.add(
+                        egui::Slider::new(&mut val, range.clone())
+                            .step_by(*step as f64)
+                            .suffix(*suffix),
+                    );
+                    if response.dragged() {
+                        ui.data_mut(|d| d.insert_temp(drag_id, val));
+                    } else if response.drag_stopped() {
+                        ui.data_mut(|d| d.remove::<f32>(drag_id));
+                        actions.push(on_change(val));
+                    } else if response.changed() {
+                        // Keyboard or a single click on the track.
+                        actions.push(on_change(val));
+                    }
                 }
             }
 
             if let Some(hint) = field.disabled_hint {
                 if !field.enabled {
-                    ui.label(egui::RichText::new(hint).small().weak());
+                    ui.add_space(row_unit(ui) * 0.15);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(hint)
+                                .size(row_unit(ui) * 0.85)
+                                .color(disabled_hint_color(ui)),
+                        )
+                        .wrap(),
+                    );
                 }
             } else if let Some(text) = field.hover {
-                ui.label(egui::RichText::new(text).small().weak());
+                ui.add_space(row_unit(ui) * 0.15);
+                ui.add(
+                    egui::Label::new(
+                        egui::RichText::new(text)
+                            .size(row_unit(ui) * 0.85)
+                            .color(help_text_color(ui)),
+                    )
+                    .wrap(),
+                );
             }
         });
     });
