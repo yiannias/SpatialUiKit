@@ -402,6 +402,11 @@ pub fn pod_corner_radius(row_h: f32) -> f32 {
     (row_h * FRAME_RADIUS_PROPORTION).max(1.0)
 }
 
+/// egui temp-data key for the pod [`module_frame`] most recently drew.
+fn current_pod_rect_id() -> egui::Id {
+    egui::Id::new("spatial_ui_kit::ribbon::current_pod_rect")
+}
+
 fn module_frame(
     ui: &mut egui::Ui,
     label: &str,
@@ -413,6 +418,10 @@ fn module_frame(
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
     let frame_radius = pod_corner_radius(row_h);
+    // Remembered for this frame so a flyout on the pod's first/last button
+    // can sit flush with the pod's *outer* edge, not the button's (the pod
+    // has end padding past its last button).
+    ui.data_mut(|d| d.insert_temp(current_pod_rect_id(), outer_rect));
     if ui.is_rect_visible(outer_rect) {
         // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
         // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
@@ -875,18 +884,23 @@ pub fn flow_out_outline(
             ));
         }
         Join::Flush => {
-            // Straight down the pod's own outer edge -- no flare, no rounded
-            // corner, per the end-condition spec.
-            pts.push(egui::pos2(l, y0));
-            pts.push(egui::pos2(l, b));
+            // Straight down the pod's own outer edge, starting where the
+            // pod's (now covered) rounded corner began so the pod's side
+            // stroke runs unbroken into the column's; the bottom corner is
+            // still rounded.
+            pts.push(egui::pos2(l, y0 - r));
+            pts.push(egui::pos2(l, b - r));
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(l + r, b - r),
+                PI,
+                FRAC_PI_2,
+            ));
         }
     }
 
     // Along the bottom, to wherever the right side's own segment starts.
-    let right_bottom_x = match right {
-        Join::Flare => right_x - r,
-        Join::Flush => right_x,
-    };
+    let right_bottom_x = right_x - r;
     pts.push(egui::pos2(right_bottom_x, b));
 
     match right {
@@ -909,7 +923,13 @@ pub fn flow_out_outline(
             ));
         }
         Join::Flush => {
-            pts.push(egui::pos2(right_x, y0));
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(right_x - r, b - r),
+                FRAC_PI_2,
+                0.0,
+            ));
+            pts.push(egui::pos2(right_x, y0 - r));
         }
     }
 
@@ -966,8 +986,11 @@ pub fn paint_flow_out(
     if b > y0 - bw {
         let body = egui::Rect::from_min_max(egui::pos2(l, y0 - bw), egui::pos2(right_x, b));
         let flare_r = r.round().clamp(0.0, u8::MAX as f32) as u8;
-        let sw = if left == Join::Flare { flare_r } else { 0 };
-        let se = if right == Join::Flare { flare_r } else { 0 };
+        // Bottom corners are always rounded -- only the *top* of a `Flush`
+        // side is square, continuing the pod's straight end edge (Chris,
+        // 2026-09-24: "rounded is nicer" at the bottom of the L).
+        let sw = flare_r;
+        let se = flare_r;
         painter.rect_filled(
             body,
             egui::CornerRadius {
@@ -1126,16 +1149,28 @@ fn draw_flyout_column<A>(
         .fold(anchor_rect.width().max(button_size.x), |w, item| {
             w.max(host.button_width(ui, item.key, item.label))
         });
-    let final_w = content_w + 2.0 * pad_h;
+    let mut final_w = content_w + 2.0 * pad_h;
 
     // The column's final left edge and horizontal centre -- symmetric growth
     // past the anchor button on both sides for a T join, but pinned flush to
-    // the anchor's outer edge (growing only inward) on a Flush side, per the
-    // end-condition spec's "if wider, it grows symmetrically (but a Flush
-    // side stays flush -- grow toward the inner side)".
+    // the *pod's* outer edge (growing only inward) on a Flush side, per the
+    // end-condition spec. The pod edge, not the button's: the pod has end
+    // padding past its first/last button, and pinning to the button left the
+    // column short of the pod's straight end (Chris, 2026-09-24 screenshots).
+    // Widened if needed so the column still spans the whole button.
+    let pod = ui
+        .data(|d| d.get_temp::<egui::Rect>(current_pod_rect_id()))
+        .filter(|p| p.x_range().contains(anchor_rect.center().x))
+        .unwrap_or(anchor_rect);
     let final_left = match (left, right) {
-        (Join::Flush, _) => anchor_rect.left(),
-        (_, Join::Flush) => anchor_rect.right() - final_w,
+        (Join::Flush, _) => {
+            final_w = final_w.max(anchor_rect.right() - pod.left());
+            pod.left()
+        }
+        (_, Join::Flush) => {
+            final_w = final_w.max(pod.right() - anchor_rect.left());
+            pod.right() - final_w
+        }
         _ => anchor_rect.center().x - final_w / 2.0,
     };
     let final_centre_x = final_left + final_w / 2.0;
