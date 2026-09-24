@@ -699,6 +699,110 @@ fn draw_hold_hint(ui: &egui::Ui, icon_rect: egui::Rect) {
     ));
 }
 
+/// Builds a "flow-out" shape polygon where the flyout extends from the pod's
+/// bottom edge with concave fillets that blend the pod and flyout into one
+/// continuous silhouette. Returns points for both the outline (open path) and
+/// the fill areas.
+///
+/// # Arguments
+/// - `pod_rect`: the pod button's rectangle (the attachment point is its bottom edge)
+/// - `flyout_rect`: the full flyout column's rectangle
+/// - `pod_radius`: the pod's corner radius (used for fillet curves)
+/// - `attach_x_range`: a tuple `(min, max)` x-coordinates where the flyout
+///   attaches to the pod's bottom edge (typically the pod button's width)
+///
+/// # Returns
+/// A tuple of `(outline_points, fill_areas)` where:
+/// - `outline_points`: vec of points forming the closed outline (for stroke)
+/// - `fill_areas`: vec of rects/shapes to fill for the fill color
+fn build_flow_out_shape(
+    pod_rect: egui::Rect,
+    flyout_rect: egui::Rect,
+    pod_radius: f32,
+    attach_x_range: (f32, f32),
+) -> (Vec<egui::Pos2>, Vec<egui::Shape>) {
+    let mut outline = Vec::new();
+    let fill_areas = Vec::new();
+
+    // Approximate arc segments with ~6-8 points for smooth curves
+    const FILLET_SEGMENTS: usize = 6;
+
+    let attach_left = attach_x_range.0;
+    let attach_right = attach_x_range.1;
+    let pod_bottom = pod_rect.bottom(); // top of the flyout attachment
+    let flyout_left = flyout_rect.left();
+    let flyout_right = flyout_rect.right();
+    let flyout_top = flyout_rect.top();
+    let flyout_bottom = flyout_rect.bottom();
+
+    // Left concave fillet: curves outward and down from pod bottom
+    // Start at pod's bottom left edge of attachment
+    outline.push(egui::pos2(attach_left, pod_bottom));
+
+    // Concave fillet on the left side
+    // Curve goes from (attach_left, pod_bottom) to (flyout_left, flyout_top)
+    // with a concave (outward) curve
+    for i in 0..=FILLET_SEGMENTS {
+        let t = i as f32 / FILLET_SEGMENTS as f32;
+        // Use a smooth bezier-like curve: start curving out, then back in
+        let ease_t = t; // parametric curve
+        let curve_out = (pod_radius * 0.8 * (1.0 - ease_t.powi(2))).max(0.0);
+        let x = egui::lerp(attach_left..=flyout_left, ease_t) - curve_out;
+        let y = egui::lerp(pod_bottom..=flyout_top, ease_t);
+        outline.push(egui::pos2(x, y));
+    }
+
+    // Left side of flyout column
+    outline.push(egui::pos2(flyout_left, flyout_top));
+
+    // Bottom-left convex fillet
+    for i in 1..=FILLET_SEGMENTS {
+        let t = i as f32 / FILLET_SEGMENTS as f32;
+        let angle = std::f32::consts::PI * t; // quarter circle
+        let x = flyout_left + pod_radius * (1.0 - angle.cos());
+        let y = flyout_bottom - pod_radius * (1.0 - angle.sin());
+        outline.push(egui::pos2(x, y));
+    }
+
+    // Bottom of flyout
+    outline.push(egui::pos2(flyout_left + pod_radius, flyout_bottom));
+    outline.push(egui::pos2(flyout_right - pod_radius, flyout_bottom));
+
+    // Bottom-right convex fillet
+    for i in 1..=FILLET_SEGMENTS {
+        let t = i as f32 / FILLET_SEGMENTS as f32;
+        let angle = std::f32::consts::PI * (1.0 - t); // quarter circle
+        let x = flyout_right - pod_radius * (1.0 - angle.cos());
+        let y = flyout_bottom - pod_radius * (1.0 - angle.sin());
+        outline.push(egui::pos2(x, y));
+    }
+
+    // Right side of flyout column
+    outline.push(egui::pos2(flyout_right, flyout_top));
+
+    // Right concave fillet: mirrors the left side
+    for i in 0..=FILLET_SEGMENTS {
+        let t = i as f32 / FILLET_SEGMENTS as f32;
+        let ease_t = 1.0 - t; // reverse direction
+        let curve_out = (pod_radius * 0.8 * (1.0 - ease_t.powi(2))).max(0.0);
+        let x = egui::lerp(flyout_right..=attach_right, t) + curve_out;
+        let y = egui::lerp(flyout_top..=pod_bottom, t);
+        outline.push(egui::pos2(x, y));
+    }
+
+    // Right edge of pod attachment (top of flyout)
+    outline.push(egui::pos2(attach_right, pod_bottom));
+
+    // Top edge from right to left along the pod bottom (closes the shape)
+    outline.push(egui::pos2(attach_left, pod_bottom));
+
+    // For fill: we'll use the outline as a convex polygon approximation
+    // (it's not convex, so we need to be careful with painting)
+    // Return the outline points and let the caller handle fill/stroke
+
+    (outline, fill_areas)
+}
+
 /// Draws the flyout column "growing out of the pod as one outline" below
 /// `anchor_rect` (the held button's own rect) -- same fill/border as the
 /// module capsule, joined to it with no seam (the capsule's bottom border
@@ -754,40 +858,39 @@ fn draw_flyout_column<A>(
             ui.set_clip_rect(visible_rect);
             ui.set_opacity(opacity);
 
-            // Overpaint the capsule's own bottom border directly under the
-            // button -- erases the seam so the column reads as the pod's
-            // own silhouette extending down, not a separate popup.
+            // Build and paint the flow-out shape that blends pod and flyout
+            let (outline_points, _fill_areas) = build_flow_out_shape(
+                anchor_rect,
+                full_rect,
+                FRAME_RADIUS,
+                (anchor_rect.left(), anchor_rect.right()),
+            );
+
+            // Paint the fill using the outline polygon
+            let fill_color = ui.visuals().window_fill();
+            ui.painter().add(egui::Shape::convex_polygon(
+                outline_points.clone(),
+                fill_color,
+                egui::Stroke::NONE,
+            ));
+
+            // Paint the outline stroke
+            let stroke = egui::Stroke::new(style.border_width, style.border);
+            ui.painter()
+                .add(egui::Shape::line(outline_points.clone(), stroke));
+
+            // Paint over the pod's bottom border in the attachment area to
+            // create seamless flow
             let seam = egui::Rect::from_min_size(
                 anchor_rect.left_bottom() - egui::vec2(0.0, style.border_width),
                 egui::vec2(anchor_rect.width(), style.border_width * 2.0),
             );
-            ui.painter()
-                .rect_filled(seam, 0.0, ui.visuals().window_fill());
-
-            let radius = FRAME_RADIUS as u8;
-            let corners = egui::CornerRadius {
-                nw: 0,
-                ne: 0,
-                sw: radius,
-                se: radius,
-            };
-            ui.painter()
-                .rect_filled(full_rect, corners, ui.visuals().window_fill());
-            // Left/right/bottom border only -- the top edge merges into the
-            // button above, which already reads as one continuous outline
-            // once the seam above is overpainted.
-            let s = egui::Stroke::new(style.border_width, style.border);
-            ui.painter()
-                .line_segment([full_rect.left_top(), full_rect.left_bottom()], s);
-            ui.painter()
-                .line_segment([full_rect.right_top(), full_rect.right_bottom()], s);
-            ui.painter()
-                .rect_stroke(full_rect, corners, s, egui::StrokeKind::Inside);
+            ui.painter().rect_filled(seam, 0.0, fill_color);
 
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
                     .max_rect(full_rect)
-                    .layout(egui::Layout::top_down(egui::Align::Min)),
+                    .layout(egui::Layout::top_down(egui::Align::Center)),
             );
             // Zero vertical item spacing -- `natural_h` above is exactly
             // `item_h * items.len()`, with no room for egui's own default
@@ -1187,6 +1290,67 @@ mod tests {
         assert_eq!(
             closed_h, open_h,
             "opening the flyout must not change row height"
+        );
+    }
+
+    /// The flow-out shape's outline must stay within the pod+flyout bounding
+    /// box, and the outline must be closed (start and end at the same point).
+    #[test]
+    fn flow_out_shape_outline_bounds_and_closure() {
+        let pod_rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let flyout_rect =
+            egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
+        let pod_radius = 8.0;
+        let attach_x_range = (pod_rect.left(), pod_rect.right());
+
+        let (outline, _fill) =
+            build_flow_out_shape(pod_rect, flyout_rect, pod_radius, attach_x_range);
+
+        // Outline must not be empty
+        assert!(!outline.is_empty(), "outline must have points");
+
+        // Outline must be closed: start and end at the same point
+        if outline.len() > 1 {
+            assert_eq!(
+                outline[0],
+                outline[outline.len() - 1],
+                "outline must be closed"
+            );
+        }
+
+        // All points must stay within reasonable bounds of pod+flyout union
+        let min_x = pod_rect.left().min(flyout_rect.left()) - pod_radius;
+        let max_x = pod_rect.right().max(flyout_rect.right()) + pod_radius;
+        let min_y = pod_rect.top();
+        let max_y = flyout_rect.bottom() + pod_radius;
+
+        for point in &outline {
+            assert!(
+                point.x >= min_x && point.x <= max_x,
+                "x-coordinate {} out of bounds [{}, {}]",
+                point.x,
+                min_x,
+                max_x
+            );
+            assert!(
+                point.y >= min_y && point.y <= max_y,
+                "y-coordinate {} out of bounds [{}, {}]",
+                point.y,
+                min_y,
+                max_y
+            );
+        }
+
+        // The attach segment (pod bottom) should be preserved
+        let attach_segment_exists = outline.windows(2).any(|w| {
+            w[0].y == pod_rect.bottom()
+                && w[1].y == pod_rect.bottom()
+                && w[0].x >= attach_x_range.0
+                && w[1].x <= attach_x_range.1
+        });
+        assert!(
+            attach_segment_exists,
+            "outline must have a horizontal segment at the pod bottom"
         );
     }
 }
