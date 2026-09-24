@@ -855,12 +855,8 @@ pub fn ribbon_panel<A: Clone>(
                 if i == 0 {
                     ui.add_space(GAP);
                 }
-                let content_w = group_content_width_var(
-                    ui,
-                    &group.buttons,
-                    host,
-                    ui.spacing().item_spacing.x,
-                );
+                let content_w =
+                    group_content_width_var(ui, &group.buttons, host, ui.spacing().item_spacing.x);
                 let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
                 draw_button_row(&mut child, group, host, &mut actions);
             }
