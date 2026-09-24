@@ -1,1 +1,1 @@
-# SpatialUiKit project agreements
+@AGENTS.md
