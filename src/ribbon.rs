@@ -53,7 +53,7 @@
 //! per-host-configurable -- widen them to parameters if SSP's needs
 //! diverge from SDB's rather than forking the file.
 
-use crate::motion::{presence_with, MotionSpec};
+use crate::motion::MotionSpec;
 
 /// One button in a ribbon group, generic over the app's action type.
 /// `selected` is precomputed by the caller (each app compares its own
@@ -421,7 +421,32 @@ fn module_frame(
 ) -> egui::Ui {
     let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
-    let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
+    module_frame_at(ui, outer_rect, label, content_w, row_h, style, 1.0)
+}
+
+/// As [`module_frame`], but painted at a caller-given `outer_rect` instead
+/// of sequentially allocating one -- [`ribbon_panel_modules`]'s spring-
+/// animated pods need this: their rect comes from a per-pod position/width
+/// spring, not from egui's own left-to-right cursor, since several pods'
+/// rects change together every frame while their springs settle (see that
+/// function's doc comment). `content_opacity` scales the content child
+/// (`Ui::set_opacity`) as well as the frame/border paint, for a pod
+/// fading in its content (a morph target) or as a whole (a fully-transparent
+/// caller could fade the frame too, though no current caller does).
+fn module_frame_at(
+    ui: &mut egui::Ui,
+    outer_rect: egui::Rect,
+    label: &str,
+    content_w: f32,
+    row_h: f32,
+    style: ModuleFrameStyle,
+    content_opacity: f32,
+) -> egui::Ui {
+    // Clamp the label strip to the pod's own current width so a pod mid-
+    // shrink (or a brand-new one still growing from near-zero) never draws
+    // a label wider than the capsule it's supposed to sit inside.
+    let label_w = LABEL_STRIP_W.min(outer_rect.width().max(0.0));
+    let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(label_w, row_h));
     let frame_radius = pod_corner_radius(row_h);
     // Remembered for this frame so a flyout on the pod's first/last button
     // can sit flush with the pod's *outer* edge, not the button's (the pod
@@ -432,7 +457,7 @@ fn module_frame(
     // gave a different color than the pod it grows out of.
     let pod_fill = ui.visuals().window_fill();
     ui.data_mut(|d| d.insert_temp(current_pod_fill_id(), pod_fill));
-    if ui.is_rect_visible(outer_rect) {
+    if ui.is_rect_visible(outer_rect) && outer_rect.width() > 0.5 {
         // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
         // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
         // full-width panel strip is gone (see `ribbon_panel_modules`'s
@@ -446,39 +471,49 @@ fn module_frame(
         // lost the visual contrast entirely, "back where we started" --
         // see `sdb_app::frame`'s dock-`Area` doc comment for the fuller
         // fix that replaced it.)
-        ui.painter()
-            .rect_filled(outer_rect, frame_radius, ui.visuals().window_fill());
+        ui.painter().rect_filled(outer_rect, frame_radius, pod_fill);
         ui.painter().rect_stroke(
             outer_rect,
             frame_radius,
             egui::Stroke::new(style.border_width, style.border),
             egui::StrokeKind::Inside,
         );
-        let radius = frame_radius.round().clamp(0.0, u8::MAX as f32) as u8;
-        let pill_radius = egui::CornerRadius {
-            nw: radius,
-            sw: radius,
-            ne: 0,
-            se: 0,
-        };
-        vertical_label_pill(
-            ui,
-            label_rect,
-            &label.to_uppercase(),
-            style.label_foreground,
-            style.label_background,
-            pill_radius,
-        );
+        if label_w > 4.0 {
+            let radius = frame_radius.round().clamp(0.0, u8::MAX as f32) as u8;
+            let pill_radius = egui::CornerRadius {
+                nw: radius,
+                sw: radius,
+                ne: 0,
+                se: 0,
+            };
+            vertical_label_pill(
+                ui,
+                label_rect,
+                &label.to_uppercase(),
+                style.label_foreground,
+                style.label_background,
+                pill_radius,
+            );
+        }
     }
+    let content_left = (outer_rect.min.x + label_w + GAP).min(outer_rect.max.x);
     let content_rect = egui::Rect::from_min_size(
-        outer_rect.min + egui::vec2(LABEL_STRIP_W + GAP, 0.0),
-        egui::vec2(content_w, row_h),
+        egui::pos2(content_left, outer_rect.min.y),
+        egui::vec2(
+            (outer_rect.max.x - content_left)
+                .max(0.0)
+                .min(content_w.max(0.0)),
+            row_h,
+        ),
     );
-    ui.new_child(
+    let mut child = ui.new_child(
         egui::UiBuilder::new()
             .max_rect(content_rect)
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    )
+    );
+    child.set_clip_rect(content_rect.intersect(ui.clip_rect()));
+    child.set_opacity(content_opacity.clamp(0.0, 1.0));
+    child
 }
 
 /// Paints the activation flash: a brief amber pulse over a just-clicked
@@ -687,12 +722,19 @@ pub fn button_with_flyout_joined<A: Clone>(
         resp.is_pointer_button_down_on(),
     );
 
-    let presence = presence_with(
+    // Spring physics (2026-09-24, Chris: "gently bouncy, Apple spring"
+    // feel) rather than the fixed-duration `MotionSpec` tween: `BOUNCY`
+    // opening is interruptible and velocity-preserving, so five rapid
+    // hold/release cycles reverse smoothly instead of restarting from a
+    // standstill each time. `SMOOTH` closing stays critically damped (no
+    // bounce on the way out) regardless of the global bounce-amount
+    // setting -- see `Spring::scaled_by_bounce`.
+    let presence = crate::motion::spring_presence_with(
         &ctx,
         presence_id,
         held_open,
-        MotionSpec::EXPAND,
-        MotionSpec::COLLAPSE,
+        crate::motion::Spring::BOUNCY,
+        crate::motion::Spring::SMOOTH,
     );
 
     let mut hovered_item: Option<usize> = None;
@@ -1345,14 +1387,83 @@ pub fn ribbon_panel<A: Clone>(
     actions
 }
 
+/// One pod's animated position/width -- `x` is the pod's left edge relative
+/// to the row's own origin, `w` its full outer width (label strip + content
+/// + padding, i.e. what `module_frame_at` calls `outer_rect.width()`), each
+/// a spring so a change in the row's module set moves *every* pod's `x`
+/// and `w` together as one continuous rebalancing motion rather than each
+/// module jumping straight to its new slot (Chris, 2026-09-24, on the
+/// Quickshell layout-morph reference: pods "shift and shuffle"). `x` and
+/// `w` retarget together, from the same spring, every frame the packed
+/// layout changes -- including frames where nothing *looks* different to
+/// the caller, since a still-settling neighbour keeps nudging every later
+/// pod's target `x` until it settles too.
+#[derive(Clone, Copy, Debug)]
+struct PodAnim {
+    x: crate::motion::SpringTween,
+    w: crate::motion::SpringTween,
+    /// When this pod's *content* started fading in -- either just now (a
+    /// brand-new pod) or the moment a morph replaced its predecessor. Only
+    /// used for the content cross-fade opacity; position/width are the
+    /// springs above.
+    content_started: f64,
+}
+
+/// Per-row animation state, keyed by [`ribbon_panel_modules`]'s `row_id` in
+/// `ctx` memory. `pods` is keyed by pod label, which doubles as this
+/// function's stable per-pod identity -- see that function's doc comment.
+#[derive(Clone, Default)]
+struct RibbonRowAnim {
+    pods: std::collections::HashMap<&'static str, PodAnim>,
+}
+
+/// How long a morph target's content takes to cross-fade in once its
+/// outline starts reshaping from the pod it replaced -- `docs/design/
+/// 2026-09-24_quickshell-morph-reference.md`: "contents cross-fade (old out
+/// in the first ~40%, new in after ~50%)". A single linear ramp over the
+/// whole window approximates that close enough for a pod-sized capsule
+/// without a second animation channel per pod.
+const POD_CONTENT_CROSSFADE_SECS: f64 = 0.22;
+
 /// Render an ordered list of modules -- the generalized form of
 /// `ribbon_panel` that also accepts `RibbonModule::Custom` groups (tool
 /// option fields, category units, ...) alongside plain button groups, each
 /// drawn with the same module-frame treatment so the row reads as one
 /// consistent set of modules.
+///
+/// **Spring-animated pods** (2026-09-24, `docs/design/
+/// 2026-09-24_ribbon-pods-spec.md` "Motion" +
+/// `docs/design/2026-09-24_quickshell-morph-reference.md`): every pod's
+/// outer rect (`x`, `w`) is a spring retargeted every frame from the
+/// current packed layout, keyed by `row_id` + the pod's own `label` in
+/// `ctx` memory, so:
+/// - a pod entering the row grows its width from `0` while its `x` starts
+///   already at its target slot (no slide-in from elsewhere);
+/// - a pod leaving keeps rendering an emptying capsule outline (no content
+///   -- see below) at its last `x`, width springing to `0`, while every
+///   other pod's `x`/`w` retarget to the new packed layout *immediately*,
+///   so neighbours visibly close the gap rather than waiting;
+/// - `morphs` lets a caller declare "this pod (by label) replaces that one
+///   from last frame" (e.g. CREATE -> a tool's own pod when a draw tool
+///   activates): the new pod's spring state is seeded from the old pod's
+///   current `(x, w)` instead of growing from `0`, so the outline reshapes
+///   continuously rather than one pod vanishing and another popping in;
+///   its content cross-fades in over `POD_CONTENT_CROSSFADE_SECS`.
+///
+/// **Limit, by design**: a leaving pod that isn't claimed by a `morphs`
+/// entry has no content to keep rendering -- this function only ever
+/// receives *this* frame's `modules`, and a pod the host stopped passing is
+/// gone from that list for good, closure and all. It still shrinks
+/// visually (an empty capsule outline, no icons/labels) so neighbours read
+/// as sliding into its space rather than jumping, but "the departing pod's
+/// own icons visibly shrinking away" would need the host to keep
+/// supplying a leaving pod's module for its collapse duration, which no
+/// SDB caller does yet -- call this out to Chris rather than fake it.
 pub fn ribbon_panel_modules<A: Clone>(
     ui: &mut egui::Ui,
+    row_id: egui::Id,
     modules: Vec<RibbonModule<A>>,
+    morphs: &[(&'static str, &'static str)],
     host: &impl RibbonHost,
 ) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
@@ -1360,46 +1471,177 @@ pub fn ribbon_panel_modules<A: Clone>(
     let row_h = button_size.y + GAP * 2.0;
     // See `ribbon_panel`'s identical lookup for why this is hoisted.
     let frame_style = host.module_frame_style();
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    let reduce = crate::motion::reduce_motion(&ctx);
+    let bounce = crate::motion::bounce_amount(&ctx);
+    // "Not too much" (Chris, 2026-09-24): `SNAPPY`'s small bounce for the
+    // rebalance, not the flyout's full `BOUNCY` -- a pod-sized capsule
+    // sliding across the row reads as busy with a bigger overshoot.
+    let rebalance_spring = crate::motion::Spring::SNAPPY.scaled_by_bounce(bounce);
+    let exit_spring = crate::motion::Spring::SMOOTH.scaled_by_bounce(bounce);
+    let item_spacing = ui.spacing().item_spacing.x;
 
-    // No `ScrollArea` -- Chris, 2026-08-30, live: "the ribbon does NOT need
-    // any scrolling capability". (It also used to paint a fade-to-
-    // transparent gradient at its scrollable edge, invisible against the
-    // ribbon's old opaque strip; disabling just the fade turned out not to
-    // be the actual source of what looked like fading once the row sat on
-    // a transparent `Area` over the viewport -- that's the viewport's own
-    // content showing through the row's empty space as designed, not a
-    // residual artifact. Removing `ScrollArea` outright is simpler either
-    // way, and is what was actually asked for.)
-    ui.horizontal(|ui| {
-        // See `ribbon_panel`'s identical loop for why this is only before
-        // the first module.
-        for (i, module) in modules.into_iter().enumerate() {
-            if i == 0 {
-                ui.add_space(GAP);
+    struct Placed<'a, A> {
+        label: &'static str,
+        natural_content_w: f32,
+        module: RibbonModule<'a, A>,
+    }
+    let mut placed: Vec<Placed<'_, A>> = Vec::new();
+    for module in modules {
+        let (label, natural_content_w) = match &module {
+            RibbonModule::Buttons(group) => {
+                let w = group_content_width_var(ui, &group.buttons, host, item_spacing);
+                (group.label, w)
             }
-            match module {
-                RibbonModule::Buttons(group) => {
-                    let content_w = group_content_width_var(
-                        ui,
-                        &group.buttons,
-                        host,
-                        ui.spacing().item_spacing.x,
-                    );
-                    let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
-                    draw_button_row(&mut child, &group, host, &mut actions);
-                }
-                RibbonModule::Custom {
-                    label,
-                    width,
-                    render,
-                } => {
-                    let mut child = module_frame(ui, label, width, row_h, frame_style);
-                    let acts = render(&mut child);
-                    actions.extend(acts);
-                }
-            }
+            RibbonModule::Custom { label, width, .. } => (*label, *width),
+        };
+        placed.push(Placed {
+            label,
+            natural_content_w,
+            module,
+        });
+    }
+
+    // Pack target `(x, outer_w)` left to right at natural size -- the
+    // layout every pod's spring is chasing this frame.
+    let mut cursor = GAP;
+    let mut targets: Vec<(f32, f32)> = Vec::with_capacity(placed.len());
+    for (i, p) in placed.iter().enumerate() {
+        if i > 0 {
+            cursor += item_spacing;
         }
+        let outer_w = LABEL_STRIP_W + GAP + p.natural_content_w + GAP;
+        targets.push((cursor, outer_w));
+        cursor += outer_w;
+    }
+    let total_w = cursor + GAP;
+
+    let anim_key = row_id.with("spatial_ui_kit::ribbon::row_anim");
+    let mut anim: RibbonRowAnim = ctx.data(|d| d.get_temp(anim_key)).unwrap_or_default();
+    let present: std::collections::HashSet<&'static str> = placed.iter().map(|p| p.label).collect();
+
+    for (p, (tx, tw)) in placed.iter().zip(targets.iter()) {
+        let morph_source = morphs
+            .iter()
+            .find(|(new_label, _)| *new_label == p.label)
+            .and_then(|(_, old_label)| anim.pods.remove(old_label));
+        anim.pods.entry(p.label).or_insert_with(|| {
+            if let Some(seed) = morph_source {
+                PodAnim {
+                    x: seed.x,
+                    w: seed.w,
+                    content_started: now,
+                }
+            } else {
+                PodAnim {
+                    x: crate::motion::SpringTween::new(*tx),
+                    w: crate::motion::SpringTween::new(0.0),
+                    content_started: now,
+                }
+            }
+        });
+        let pod = anim.pods.get_mut(p.label).expect("just inserted above");
+        if reduce {
+            pod.x.snap(*tx);
+            pod.w.snap(*tw);
+        } else {
+            pod.x.retarget(now, *tx, rebalance_spring);
+            pod.w.retarget(now, *tw, rebalance_spring);
+        }
+    }
+
+    // Pods no longer present this frame: keep their `PodAnim` (so
+    // neighbours' `x` keeps reading a real last-known slot instead of one
+    // popping out of existence) and spring their width to `0`; drop them
+    // once collapsed. See this function's doc comment for why they can't
+    // keep rendering real content.
+    anim.pods.retain(|label, pod| {
+        if present.contains(label) {
+            return true;
+        }
+        if reduce {
+            pod.w.snap(0.0);
+        } else {
+            pod.w.retarget(now, 0.0, exit_spring);
+        }
+        pod.w.value(now) > 0.5 || pod.w.is_animating(now)
     });
+
+    let leaving_labels: Vec<&'static str> = anim
+        .pods
+        .keys()
+        .filter(|l| !present.contains(*l))
+        .copied()
+        .collect();
+
+    let (row_rect, _) =
+        ui.allocate_exact_size(egui::vec2(total_w.max(1.0), row_h), egui::Sense::hover());
+    let row_origin = row_rect.min;
+    let mut animating_any = false;
+
+    // Leaving pods first, so present pods (drawn after) paint on top as
+    // they slide across a shrinking neighbour's space.
+    for label in leaving_labels {
+        let pod = *anim
+            .pods
+            .get(label)
+            .expect("label came from anim.pods.keys() above");
+        animating_any |= pod.w.is_animating(now) || pod.x.is_animating(now);
+        let w = pod.w.value(now).max(0.0);
+        if w < 0.5 {
+            continue;
+        }
+        let x = pod.x.value(now);
+        let outer =
+            egui::Rect::from_min_size(row_origin + egui::vec2(x, 0.0), egui::vec2(w, row_h));
+        let content_w = (w - LABEL_STRIP_W - 2.0 * GAP).max(0.0);
+        module_frame_at(ui, outer, label, content_w, row_h, frame_style, 1.0);
+    }
+
+    for (p, (tx, tw)) in placed.into_iter().zip(targets.iter()) {
+        let pod = *anim
+            .pods
+            .get(p.label)
+            .expect("retargeted into anim.pods above");
+        animating_any |= pod.w.is_animating(now) || pod.x.is_animating(now);
+        let x = pod.x.value(now);
+        let w = pod.w.value(now).max(0.0);
+        let outer =
+            egui::Rect::from_min_size(row_origin + egui::vec2(x, 0.0), egui::vec2(w, row_h));
+        let content_w = (w - LABEL_STRIP_W - 2.0 * GAP).max(0.0);
+
+        let since_content = (now - pod.content_started).max(0.0);
+        let content_opacity = if reduce {
+            1.0
+        } else {
+            ((since_content / POD_CONTENT_CROSSFADE_SECS) as f32).clamp(0.0, 1.0)
+        };
+        if content_opacity < 1.0 {
+            animating_any = true;
+        }
+
+        let mut child = module_frame_at(
+            ui,
+            outer,
+            p.label,
+            content_w,
+            row_h,
+            frame_style,
+            content_opacity,
+        );
+        match p.module {
+            RibbonModule::Buttons(group) => draw_button_row(&mut child, &group, host, &mut actions),
+            RibbonModule::Custom { render, .. } => actions.extend(render(&mut child)),
+        }
+        let _ = tx;
+        let _ = tw;
+    }
+
+    if animating_any {
+        ctx.request_repaint();
+    }
+    ctx.data_mut(|d| d.insert_temp(anim_key, anim));
 
     actions
 }
@@ -1570,41 +1812,55 @@ mod tests {
         let ctx = egui::Context::default();
         let presence_id = egui::Id::new(("ribbon_flyout_button", "test_btn")).with("presence");
 
-        // Open, then immediately request closed -- mirrors what
-        // `button_with_flyout` does internally on a release-elsewhere.
-        let opened = crate::motion::presence_with(
+        // Open at t=0, then request closed a frame later (real usage always
+        // has *some* elapsed time between frames -- a spring, unlike a
+        // fixed-duration tween, settles by distance-to-target, so retargeting
+        // at the exact same instant as the previous retarget, with zero
+        // elapsed time, is a degenerate case a real frame loop never hits).
+        ctx.begin_pass(egui::RawInput {
+            time: Some(0.0),
+            ..Default::default()
+        });
+        let opened = crate::motion::spring_presence_with(
             &ctx,
             presence_id,
             true,
-            MotionSpec::EXPAND,
-            MotionSpec::COLLAPSE,
+            crate::motion::Spring::BOUNCY,
+            crate::motion::Spring::SMOOTH,
         );
+        let _ = ctx.end_pass();
         assert!(opened.render);
-        let closing = crate::motion::presence_with(
+
+        ctx.begin_pass(egui::RawInput {
+            time: Some(0.05),
+            ..Default::default()
+        });
+        let closing = crate::motion::spring_presence_with(
             &ctx,
             presence_id,
             false,
-            MotionSpec::EXPAND,
-            MotionSpec::COLLAPSE,
+            crate::motion::Spring::BOUNCY,
+            crate::motion::Spring::SMOOTH,
         );
+        let _ = ctx.end_pass();
         assert!(
             closing.render && !closing.interactive,
             "must still render, non-interactively, right as closing starts"
         );
 
-        // Advance a context pass well past COLLAPSE's duration -- `should_render`
-        // is read at that later time, so drive the input clock forward the
-        // way `motion.rs`'s own tests do.
+        // Advance a context pass well past the collapse spring's settling
+        // time -- `should_render` is read at that later time, so drive the
+        // input clock forward the way `motion.rs`'s own tests do.
         ctx.begin_pass(egui::RawInput {
-            time: Some(MotionSpec::COLLAPSE.duration as f64 + 1.0),
+            time: Some(2.0),
             ..Default::default()
         });
-        let settled = crate::motion::presence_with(
+        let settled = crate::motion::spring_presence_with(
             &ctx,
             presence_id,
             false,
-            MotionSpec::EXPAND,
-            MotionSpec::COLLAPSE,
+            crate::motion::Spring::BOUNCY,
+            crate::motion::Spring::SMOOTH,
         );
         let _ = ctx.end_pass();
         assert!(!settled.render, "must stop rendering once collapse settles");
@@ -1767,5 +2023,161 @@ mod tests {
         assert!(outline.iter().all(|p| p.y >= y0 - 1e-4));
         let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         assert!((max_y - column.bottom()).abs() < 1e-4);
+    }
+
+    // ---------------------------------------------------------------
+    // `ribbon_panel_modules`'s spring-animated pods (2026-09-24): enter/
+    // exit, rebalance-on-insert, and morph. Drives the public function
+    // through real egui passes at explicit times, then inspects the
+    // private `RibbonRowAnim` this module stores in `ctx` -- same pattern
+    // `motion.rs`'s own tests use for `Presence`/`SpringPresence`.
+    // ---------------------------------------------------------------
+
+    fn run_row(ctx: &egui::Context, t: f64, row_id: egui::Id, labels: &[&'static str]) {
+        ctx.begin_pass(egui::RawInput {
+            time: Some(t),
+            ..Default::default()
+        });
+        egui::Area::new(egui::Id::new("pod_test_area"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .show(ctx, |ui| {
+                let host = TestHost;
+                let modules: Vec<RibbonModule<i32>> = labels
+                    .iter()
+                    .map(|&label| {
+                        RibbonModule::Buttons(RibbonGroup {
+                            label,
+                            buttons: vec![test_button()],
+                        })
+                    })
+                    .collect();
+                ribbon_panel_modules(ui, row_id, modules, &[], &host);
+            });
+        let _ = ctx.end_pass();
+    }
+
+    fn anim_snapshot(ctx: &egui::Context, row_id: egui::Id) -> RibbonRowAnim {
+        let key = row_id.with("spatial_ui_kit::ribbon::row_anim");
+        ctx.data(|d| d.get_temp(key)).unwrap_or_default()
+    }
+
+    #[test]
+    fn new_pod_width_grows_from_zero_then_settles() {
+        let ctx = egui::Context::default();
+        let row_id = egui::Id::new("test_row_new_pod");
+        run_row(&ctx, 0.0, row_id, &["FILE"]);
+        let anim = anim_snapshot(&ctx, row_id);
+        let pod = anim.pods.get("FILE").unwrap();
+        assert_eq!(pod.w.value(0.0), 0.0, "brand-new pod starts at width 0");
+
+        run_row(&ctx, 2.0, row_id, &["FILE"]);
+        let anim = anim_snapshot(&ctx, row_id);
+        let pod = anim.pods.get("FILE").unwrap();
+        assert!(
+            pod.w.value(2.0) > 10.0,
+            "pod should have grown well past 0 by now"
+        );
+    }
+
+    #[test]
+    fn leaving_pod_shrinks_then_is_dropped() {
+        let ctx = egui::Context::default();
+        let row_id = egui::Id::new("test_row_leaving");
+        run_row(&ctx, 0.0, row_id, &["FILE", "CREATE"]);
+        run_row(&ctx, 2.0, row_id, &["FILE", "CREATE"]);
+
+        run_row(&ctx, 2.01, row_id, &["FILE"]);
+        let anim = anim_snapshot(&ctx, row_id);
+        assert!(
+            anim.pods.contains_key("CREATE"),
+            "must keep animating a departed pod, not drop it instantly"
+        );
+
+        run_row(&ctx, 6.0, row_id, &["FILE"]);
+        let anim = anim_snapshot(&ctx, row_id);
+        assert!(
+            !anim.pods.contains_key("CREATE"),
+            "must drop the pod once its collapse settles"
+        );
+    }
+
+    #[test]
+    fn inserting_a_pod_retargets_a_later_pods_x_smoothly() {
+        let ctx = egui::Context::default();
+        let row_id = egui::Id::new("test_row_rebalance");
+        run_row(&ctx, 0.0, row_id, &["FILE", "MODIFY"]);
+        run_row(&ctx, 2.0, row_id, &["FILE", "MODIFY"]);
+        let modify_x_before = anim_snapshot(&ctx, row_id)
+            .pods
+            .get("MODIFY")
+            .unwrap()
+            .x
+            .value(2.0);
+
+        run_row(&ctx, 2.01, row_id, &["FILE", "CREATE", "MODIFY"]);
+        let anim = anim_snapshot(&ctx, row_id);
+        let modify = anim.pods.get("MODIFY").unwrap();
+        assert!(
+            (modify.x.value(2.01) - modify_x_before).abs() < 1.0,
+            "x must not jump instantly when a pod is inserted before it"
+        );
+        assert!(
+            modify.x.target() > modify_x_before,
+            "target should have moved right to make room for the new pod"
+        );
+
+        run_row(&ctx, 6.0, row_id, &["FILE", "CREATE", "MODIFY"]);
+        let modify_x_settled = anim_snapshot(&ctx, row_id)
+            .pods
+            .get("MODIFY")
+            .unwrap()
+            .x
+            .value(6.0);
+        assert!(
+            modify_x_settled > modify_x_before + 5.0,
+            "must eventually settle at its new, further-right slot"
+        );
+    }
+
+    #[test]
+    fn morph_seeds_new_pod_from_old_pods_current_width() {
+        let ctx = egui::Context::default();
+        let row_id = egui::Id::new("test_row_morph");
+        run_row(&ctx, 0.0, row_id, &["CREATE"]);
+        run_row(&ctx, 2.0, row_id, &["CREATE"]);
+        let create_w = anim_snapshot(&ctx, row_id)
+            .pods
+            .get("CREATE")
+            .unwrap()
+            .w
+            .value(2.0);
+        assert!(create_w > 10.0);
+
+        ctx.begin_pass(egui::RawInput {
+            time: Some(2.01),
+            ..Default::default()
+        });
+        egui::Area::new(egui::Id::new("pod_test_area"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                let host = TestHost;
+                let modules = vec![RibbonModule::Buttons(RibbonGroup {
+                    label: "LINE_TOOL",
+                    buttons: vec![test_button()],
+                })];
+                ribbon_panel_modules(ui, row_id, modules, &[("LINE_TOOL", "CREATE")], &host);
+            });
+        let _ = ctx.end_pass();
+
+        let anim = anim_snapshot(&ctx, row_id);
+        let morphed_w = anim.pods.get("LINE_TOOL").unwrap().w.value(2.01);
+        assert!(
+            morphed_w > create_w - 5.0,
+            "morph target should start from the old pod's width ({create_w}), not 0 (got {morphed_w})"
+        );
+        assert!(
+            !anim.pods.contains_key("CREATE"),
+            "old pod's anim state should be consumed by the morph, not left behind separately"
+        );
     }
 }

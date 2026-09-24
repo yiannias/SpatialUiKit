@@ -298,6 +298,380 @@ pub fn reduce_motion(ctx: &egui::Context) -> bool {
         .unwrap_or(false)
 }
 
+// =========================================================================
+// Spring physics -- SwiftUI-style damped-spring motion.
+//
+// `Tween`/`MotionSpec` above are duration + easing-curve: a fixed-length
+// animation that always finishes in exactly `duration` seconds no matter
+// where it started. That's the wrong model for the "gently bouncy, Apple
+// spring" feel Chris asked for (2026-09-24): real springs are
+// *interruptible and velocity-preserving* -- retargeting mid-flight must
+// continue from the current position **and** the current velocity, or the
+// motion visibly kinks. A duration+curve tween can only ever restart from
+// position (see `Tween::retarget`'s `self.from = self.value(now)`); it has
+// no notion of velocity to carry over.
+//
+// `Spring` models a damped harmonic oscillator (`SwiftUI.Spring`'s own
+// model) and solves it analytically -- `SpringTween` stores the oscillator's
+// initial conditions at the moment of the last retarget (`x0`, `v0`) rather
+// than integrating step by step, so it stays pure and time-injected exactly
+// like `Tween` (no `Instant`, testable headless).
+// =========================================================================
+
+/// A damped-spring motion, modelled the way SwiftUI's `Spring` is:
+/// `response` is roughly the spring's natural period in seconds (how fast
+/// it would oscillate undamped), `damping_fraction` is the classic control-
+/// theory damping ratio `zeta` -- `1.0` is critically damped (fastest
+/// approach with no overshoot), `< 1.0` underdamped (bounces), `> 1.0`
+/// overdamped (slower than critical, no overshoot).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spring {
+    pub response: f32,
+    pub damping_fraction: f32,
+}
+
+impl Spring {
+    /// No bounce -- critically damped. SwiftUI's `.smooth` default
+    /// (`response: 0.5, dampingFraction: 1.0`), trimmed slightly (0.45s)
+    /// since Chris's brief is "not too much".
+    pub const SMOOTH: Spring = Spring {
+        response: 0.45,
+        damping_fraction: 1.0,
+    };
+
+    /// A small bounce -- SwiftUI's `.snappy` (`response: 0.5,
+    /// dampingFraction: 0.85`).
+    pub const SNAPPY: Spring = Spring {
+        response: 0.3,
+        damping_fraction: 0.85,
+    };
+
+    /// More bounce -- SwiftUI's `.bouncy` (`response: 0.5,
+    /// dampingFraction: 0.7`).
+    pub const BOUNCY: Spring = Spring {
+        response: 0.5,
+        damping_fraction: 0.7,
+    };
+
+    /// SwiftUI's `.spring(duration:bounce:)` constructor. `bounce` is
+    /// `-1.0..=1.0` (0 = no bounce); mapped the same way SwiftUI documents
+    /// it -- `duration` becomes `response` directly, `damping_fraction =
+    /// 1.0 - bounce`. Clamped so a pathological `bounce` can't produce a
+    /// non-physical (zero or negative) damping fraction.
+    pub fn new(duration: f32, bounce: f32) -> Spring {
+        Spring {
+            response: duration.max(0.001),
+            damping_fraction: (1.0 - bounce).clamp(0.05, 2.0),
+        }
+    }
+
+    fn omega(&self) -> f32 {
+        (2.0 * std::f32::consts::PI) / self.response.max(1e-4)
+    }
+
+    /// Applies the global bounce-amount multiplier (see
+    /// `set_bounce_amount`): `amount == 0.0` forces critical damping (no
+    /// overshoot at all); `amount == 1.0` is this spring unchanged;
+    /// `amount > 1.0` pushes damping *below* this spring's own fraction,
+    /// i.e. more bounce. A spring that is already critically/over-damped
+    /// (`damping_fraction >= 1.0`, e.g. `SMOOTH`) is unaffected at any
+    /// `amount` -- there's no bounce in it to scale, which is exactly why
+    /// `COLLAPSE`-style springs stay non-bouncy even when Chris turns the
+    /// slider up.
+    pub fn scaled_by_bounce(&self, amount: f32) -> Spring {
+        let amount = amount.max(0.0);
+        let inherent_bounce = (1.0 - self.damping_fraction).max(0.0);
+        Spring {
+            response: self.response,
+            damping_fraction: (1.0 - inherent_bounce * amount).max(0.05),
+        }
+    }
+
+    /// Analytic solution of the damped harmonic oscillator `y'' + 2*zeta*
+    /// omega*y' + omega^2*y = 0` at elapsed time `t`, given displacement
+    /// `x0` and velocity `v0` from the target (target held at `0`; callers
+    /// add their own target back). Returns `(displacement, velocity)`.
+    /// Handles all three regimes (under/critically/over-damped) since a
+    /// caller-supplied `Spring` (via `new`/`scaled_by_bounce`) can land in
+    /// any of them.
+    pub fn sample(&self, t: f32, x0: f32, v0: f32) -> (f32, f32) {
+        if t <= 0.0 {
+            return (x0, v0);
+        }
+        let omega = self.omega();
+        let zeta = self.damping_fraction;
+        if (zeta - 1.0).abs() < 1e-3 {
+            // Critically damped: y = e^-wt * (x0 + c*t), c = v0 + w*x0.
+            let c = v0 + omega * x0;
+            let e = (-omega * t).exp();
+            let x = e * (x0 + c * t);
+            let v = e * (c - omega * (x0 + c * t));
+            (x, v)
+        } else if zeta < 1.0 {
+            // Underdamped: y = e^-zwt * (A cos(wd t) + B sin(wd t)).
+            let omega_d = omega * (1.0 - zeta * zeta).sqrt();
+            let a = x0;
+            let b = (v0 + zeta * omega * x0) / omega_d;
+            let e = (-zeta * omega * t).exp();
+            let (s, c) = (omega_d * t).sin_cos();
+            let osc = a * c + b * s;
+            let d_osc = -a * omega_d * s + b * omega_d * c;
+            let x = e * osc;
+            let v = e * (-zeta * omega * osc + d_osc);
+            (x, v)
+        } else {
+            // Overdamped: y = C1 e^(r1 t) + C2 e^(r2 t), both roots real
+            // and negative.
+            let disc = (zeta * zeta - 1.0).sqrt();
+            let r1 = omega * (-zeta + disc);
+            let r2 = omega * (-zeta - disc);
+            let c1 = (v0 - r2 * x0) / (r1 - r2);
+            let c2 = x0 - c1;
+            let e1 = (r1 * t).exp();
+            let e2 = (r2 * t).exp();
+            let x = c1 * e1 + c2 * e2;
+            let v = c1 * r1 * e1 + c2 * r2 * e2;
+            (x, v)
+        }
+    }
+}
+
+/// How close to the target (value and velocity) a `SpringTween` must get
+/// before it reports settled and stops requesting repaints.
+const SPRING_EPS_X: f32 = 0.0015;
+const SPRING_EPS_V: f32 = 0.002;
+/// Safety cutoff: forces settled after this long regardless of the
+/// analytic epsilon check, so a pathological spring (near-zero damping,
+/// tiny `response`) can never pin a widget in a perpetual repaint loop.
+const SPRING_MAX_SECONDS: f32 = 4.0;
+
+/// Time-driven, retargetable spring motion for one scalar property --
+/// `Tween`'s spring-physics counterpart. Stores the oscillator's initial
+/// conditions at the last retarget (`x0`/`v0`, displacement and velocity
+/// from `target` at that moment) rather than integrating frame to frame, so
+/// `value(now)`/`velocity(now)` are exact closed-form evaluations at any
+/// `now` -- pure, time injected, no `Instant`.
+#[derive(Clone, Copy, Debug)]
+pub struct SpringTween {
+    x0: f32,
+    v0: f32,
+    target: f32,
+    start: f64,
+    spring: Spring,
+}
+
+impl SpringTween {
+    /// Starts settled at `value`.
+    pub fn new(value: f32) -> Self {
+        Self {
+            x0: 0.0,
+            v0: 0.0,
+            target: value,
+            start: 0.0,
+            spring: Spring::SMOOTH,
+        }
+    }
+
+    fn sample_absolute(&self, now: f64) -> (f32, f32) {
+        let t = (now - self.start) as f32;
+        let (y, v) = self.spring.sample(t, self.x0, self.v0);
+        (self.target + y, v)
+    }
+
+    /// Retargets toward `to`, sampling the *current* value and velocity as
+    /// the new initial conditions -- this is the whole point of a spring
+    /// model: an interruption (five rapid hold/release cycles, say) carries
+    /// momentum through rather than snapping to a fresh standstill. A
+    /// no-op if `to` already equals the current target, same as `Tween`
+    /// (continuous per-frame callers -- window resize, Text Size -- must
+    /// not restart the animation every frame).
+    pub fn retarget(&mut self, now: f64, to: f32, spring: Spring) {
+        if (self.target - to).abs() <= f32::EPSILON {
+            return;
+        }
+        let (x, v) = self.sample_absolute(now);
+        self.x0 = x - to;
+        self.v0 = v;
+        self.target = to;
+        self.start = now;
+        self.spring = spring;
+    }
+
+    pub fn value(&self, now: f64) -> f32 {
+        self.sample_absolute(now).0
+    }
+
+    pub fn velocity(&self, now: f64) -> f32 {
+        self.sample_absolute(now).1
+    }
+
+    pub fn target(&self) -> f32 {
+        self.target
+    }
+
+    /// True until both displacement and velocity fall under their epsilons
+    /// (or the safety cutoff elapses), same contract as `Tween::
+    /// is_animating` -- false from the settling frame onward.
+    pub fn is_animating(&self, now: f64) -> bool {
+        let elapsed = (now - self.start) as f32;
+        if elapsed >= SPRING_MAX_SECONDS {
+            return false;
+        }
+        let (x, v) = self.sample_absolute(now);
+        (x - self.target).abs() > SPRING_EPS_X || v.abs() > SPRING_EPS_V
+    }
+
+    /// Jumps straight to `to`, no animation, zero velocity -- Reduce Motion
+    /// and a fresh instance's initial value.
+    pub fn snap(&mut self, to: f32) {
+        self.x0 = 0.0;
+        self.v0 = 0.0;
+        self.target = to;
+        self.start = 0.0;
+    }
+}
+
+/// `Presence`'s spring-physics counterpart -- same `Phase` state machine
+/// (a Closing element keeps rendering, non-interactive, until it settles;
+/// reopening mid-close reverses from the current reveal *and velocity*
+/// rather than jumping), driven by a `SpringTween` instead of a `Tween`.
+#[derive(Clone, Copy, Debug)]
+pub struct SpringPresence {
+    tween: SpringTween,
+    open: bool,
+}
+
+impl SpringPresence {
+    pub fn closed() -> Self {
+        Self {
+            tween: SpringTween::new(0.0),
+            open: false,
+        }
+    }
+
+    pub fn set_open(&mut self, now: f64, open: bool, expand: Spring, collapse: Spring) {
+        if open == self.open {
+            return;
+        }
+        self.open = open;
+        self.tween.retarget(
+            now,
+            if open { 1.0 } else { 0.0 },
+            if open { expand } else { collapse },
+        );
+    }
+
+    pub fn snap_open(&mut self, open: bool) {
+        self.open = open;
+        self.tween.snap(if open { 1.0 } else { 0.0 });
+    }
+
+    /// `0.0` closed .. `1.0` open; may exceed `1.0` while Opening if the
+    /// expand spring is underdamped (bounces).
+    pub fn reveal(&self, now: f64) -> f32 {
+        self.tween.value(now)
+    }
+
+    pub fn velocity(&self, now: f64) -> f32 {
+        self.tween.velocity(now)
+    }
+
+    pub fn phase(&self, now: f64) -> Phase {
+        if self.open {
+            if self.tween.is_animating(now) {
+                Phase::Opening
+            } else {
+                Phase::Open
+            }
+        } else if self.tween.is_animating(now) {
+            Phase::Closing
+        } else {
+            Phase::Closed
+        }
+    }
+
+    pub fn should_render(&self, now: f64) -> bool {
+        self.phase(now) != Phase::Closed
+    }
+
+    pub fn interactive(&self, now: f64) -> bool {
+        matches!(self.phase(now), Phase::Opening | Phase::Open)
+    }
+
+    pub fn is_animating(&self, now: f64) -> bool {
+        self.tween.is_animating(now)
+    }
+}
+
+fn spring_presence_key(id: egui::Id) -> egui::Id {
+    id.with("spatial_ui_kit::motion::spring_presence")
+}
+
+fn bounce_amount_key() -> egui::Id {
+    egui::Id::new("spatial_ui_kit::motion::bounce_amount")
+}
+
+/// Global bounce-amount multiplier for every `spring_presence`/
+/// `spring_presence_with` call against this `ctx` from now on -- SDB's
+/// Settings > Appearance > "Animation Bounce" slider (0%..150%) calls this
+/// each frame/on change. `0.0` removes all overshoot; `1.0` (default) is
+/// each spring's own preset; above `1.0` exaggerates it. See `Spring::
+/// scaled_by_bounce` for the exact mapping and why a non-bouncy spring
+/// (`SMOOTH`) is unaffected at any value.
+pub fn set_bounce_amount(ctx: &egui::Context, amount: f32) {
+    ctx.data_mut(|d| d.insert_temp(bounce_amount_key(), amount));
+}
+
+pub fn bounce_amount(ctx: &egui::Context) -> f32 {
+    ctx.data(|d| d.get_temp(bounce_amount_key())).unwrap_or(1.0)
+}
+
+/// Drives a [`SpringPresence`] stored in `ctx` memory for `id` from `open`,
+/// using `Spring::BOUNCY` to open and `Spring::SMOOTH` to close (both
+/// scaled by the global bounce amount, see `set_bounce_amount`) -- the
+/// "expand springs, collapse doesn't" rule, spring-physics version of
+/// [`presence`]. See `spring_presence_with` for custom springs.
+pub fn spring_presence(ctx: &egui::Context, id: egui::Id, open: bool) -> PresenceFrame {
+    spring_presence_with(ctx, id, open, Spring::BOUNCY, Spring::SMOOTH)
+}
+
+/// As [`spring_presence`], with caller-chosen expand/collapse springs.
+pub fn spring_presence_with(
+    ctx: &egui::Context,
+    id: egui::Id,
+    open: bool,
+    expand: Spring,
+    collapse: Spring,
+) -> PresenceFrame {
+    let now = ctx.input(|i| i.time);
+    let bounce = bounce_amount(ctx);
+    let expand = expand.scaled_by_bounce(bounce);
+    let collapse = collapse.scaled_by_bounce(bounce);
+    let key = spring_presence_key(id);
+    let mut presence: SpringPresence = ctx
+        .data(|d| d.get_temp(key))
+        .unwrap_or_else(SpringPresence::closed);
+
+    if reduce_motion(ctx) {
+        presence.snap_open(open);
+    } else {
+        presence.set_open(now, open, expand, collapse);
+    }
+
+    let frame = PresenceFrame {
+        reveal: presence.reveal(now),
+        render: presence.should_render(now),
+        interactive: presence.interactive(now),
+        animating: presence.is_animating(now),
+    };
+    if frame.animating {
+        ctx.request_repaint();
+    }
+
+    ctx.data_mut(|d| d.insert_temp(key, presence));
+    frame
+}
+
 /// Drives a [`Presence`] stored in `ctx` memory for `id` from `open`, using
 /// `MotionSpec::EXPAND`/`MotionSpec::COLLAPSE`. See `presence_with` for
 /// custom specs.
@@ -349,6 +723,175 @@ pub fn presence_with(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // -- Spring ----------------------------------------------------------
+
+    #[test]
+    fn spring_sample_endpoints() {
+        // Settled: no displacement, no velocity -> stays put at any t.
+        let (x, v) = Spring::SMOOTH.sample(1.0, 0.0, 0.0);
+        assert_eq!(x, 0.0);
+        assert_eq!(v, 0.0);
+        // t == 0 always returns the initial conditions unchanged.
+        let (x, v) = Spring::BOUNCY.sample(0.0, 1.0, 2.0);
+        assert_eq!(x, 1.0);
+        assert_eq!(v, 2.0);
+    }
+
+    #[test]
+    fn spring_reaches_target_eventually() {
+        for spring in [Spring::SMOOTH, Spring::SNAPPY, Spring::BOUNCY] {
+            let (x, v) = spring.sample(5.0, 1.0, 0.0);
+            assert!(x.abs() < 0.01, "{spring:?} left x={x} after 5s");
+            assert!(v.abs() < 0.01, "{spring:?} left v={v} after 5s");
+        }
+    }
+
+    #[test]
+    fn critically_damped_never_overshoots() {
+        let spring = Spring {
+            response: 0.4,
+            damping_fraction: 1.0,
+        };
+        let mut t = 0.0f32;
+        while t <= 3.0 {
+            let (x, _) = spring.sample(t, 1.0, 0.0);
+            // Displacement starts at 1.0 (target 0) and must only shrink in
+            // magnitude, never cross past 0 and back (that would be
+            // overshoot for a unit step).
+            assert!(x >= -1e-4, "critically damped overshot: x={x} at t={t}");
+            t += 0.01;
+        }
+    }
+
+    #[test]
+    fn underdamped_overshoot_matches_analytic_peak() {
+        // Underdamped step response peak (unit step, i.e. x0 = -1 relative
+        // to a target reached from below) overshoots by
+        // exp(-zeta*pi/sqrt(1-zeta^2)) fraction of the step -- the standard
+        // control-theory result. Verify our numeric peak matches it for a
+        // couple of damping ratios.
+        for zeta in [0.3f32, 0.7] {
+            let spring = Spring {
+                response: 0.5,
+                damping_fraction: zeta,
+            };
+            let expected_overshoot_frac =
+                (-zeta * std::f32::consts::PI / (1.0 - zeta * zeta).sqrt()).exp();
+            // Step from x0 = -1 (below target 0) up toward 0; track the max
+            // overshoot above 0.
+            let mut peak = 0.0f32;
+            let mut t = 0.0f32;
+            while t <= 3.0 {
+                let (x, _) = spring.sample(t, -1.0, 0.0);
+                peak = peak.max(x);
+                t += 0.001;
+            }
+            assert!(
+                (peak - expected_overshoot_frac).abs() < 0.02,
+                "zeta={zeta}: peak={peak}, expected={expected_overshoot_frac}"
+            );
+        }
+    }
+
+    #[test]
+    fn spring_tween_retarget_preserves_value_and_velocity_continuity() {
+        let mut tw = SpringTween::new(0.0);
+        tw.retarget(0.0, 1.0, Spring::BOUNCY);
+        let now = 0.15;
+        let value_before = tw.value(now);
+        let velocity_before = tw.velocity(now);
+        tw.retarget(now, 0.0, Spring::SMOOTH);
+        let value_after = tw.value(now);
+        let velocity_after = tw.velocity(now);
+        assert!(
+            (value_before - value_after).abs() < 1e-4,
+            "value jumped: {value_before} -> {value_after}"
+        );
+        assert!(
+            (velocity_before - velocity_after).abs() < 1e-3,
+            "velocity jumped: {velocity_before} -> {velocity_after}"
+        );
+    }
+
+    #[test]
+    fn spring_tween_settles_in_finite_time() {
+        let mut tw = SpringTween::new(0.0);
+        tw.retarget(0.0, 1.0, Spring::BOUNCY);
+        assert!(tw.is_animating(0.05));
+        assert!(!tw.is_animating(SPRING_MAX_SECONDS as f64 + 0.01));
+        // Well before the safety cutoff too, for a spring this fast.
+        assert!(!tw.is_animating(3.0));
+    }
+
+    #[test]
+    fn spring_tween_same_target_retarget_does_not_restart() {
+        let mut tw = SpringTween::new(0.0);
+        tw.retarget(0.0, 1.0, Spring::BOUNCY);
+        let mid = tw.value(0.1);
+        tw.retarget(0.1, 1.0, Spring::BOUNCY); // same target -- no-op
+        assert_eq!(tw.value(0.1), mid);
+    }
+
+    #[test]
+    fn spring_presence_reduce_motion_snaps() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("spring_motion_test_reduce");
+        set_reduce_motion(&ctx, true);
+        let frame = spring_presence(&ctx, id, true);
+        assert_eq!(frame.reveal, 1.0);
+        assert!(!frame.animating);
+        set_reduce_motion(&ctx, false);
+    }
+
+    #[test]
+    fn bounce_amount_zero_means_no_overshoot() {
+        let ctx = egui::Context::default();
+        set_bounce_amount(&ctx, 0.0);
+        let spring = Spring::BOUNCY.scaled_by_bounce(bounce_amount(&ctx));
+        assert_eq!(
+            spring.damping_fraction, 1.0,
+            "amount=0 must fully remove bounce"
+        );
+
+        let mut peak = 0.0f32;
+        let mut t = 0.0f32;
+        while t <= 2.0 {
+            let (x, _) = spring.sample(t, -1.0, 0.0);
+            peak = peak.max(x);
+            t += 0.001;
+        }
+        assert!(peak <= 1e-4, "no overshoot expected, peak was {peak}");
+        set_bounce_amount(&ctx, 1.0);
+    }
+
+    #[test]
+    fn bounce_amount_scales_smooth_spring_not_at_all() {
+        // SMOOTH's damping_fraction is already 1.0 (no inherent bounce) --
+        // scaling it must be a no-op at any amount, which is what keeps
+        // COLLAPSE-style motion non-bouncy regardless of the slider.
+        for amount in [0.0f32, 1.0, 1.5] {
+            let scaled = Spring::SMOOTH.scaled_by_bounce(amount);
+            assert_eq!(scaled.damping_fraction, 1.0);
+        }
+    }
+
+    #[test]
+    fn bounce_amount_above_one_increases_bounce() {
+        let default_spring = Spring::BOUNCY.scaled_by_bounce(1.0);
+        let more_bounce = Spring::BOUNCY.scaled_by_bounce(1.5);
+        assert!(more_bounce.damping_fraction < default_spring.damping_fraction);
+    }
+
+    #[test]
+    fn spring_tween_snap_zeroes_velocity() {
+        let mut tw = SpringTween::new(0.0);
+        tw.retarget(0.0, 1.0, Spring::BOUNCY);
+        tw.snap(2.0);
+        assert_eq!(tw.value(0.0), 2.0);
+        assert_eq!(tw.velocity(0.0), 0.0);
+        assert!(!tw.is_animating(0.0));
+    }
 
     // -- easing --------------------------------------------------------
 

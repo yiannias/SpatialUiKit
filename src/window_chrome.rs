@@ -311,12 +311,18 @@ impl<'a> ThemedWindow<'a> {
         open: &mut bool,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) -> Option<egui::Response> {
-        let presence_frame = motion::presence_with(
+        // Spring physics (2026-09-24, Chris: "gently bouncy, Apple spring"
+        // feel): `SNAPPY` opening carries a small bounce -- interruptible
+        // and velocity-preserving, so a rapid re-open/close doesn't kink --
+        // `SMOOTH` closing stays critically damped, no bounce on the way
+        // out. Both scaled by the global bounce-amount setting (`SMOOTH`'s
+        // is a no-op there, see `Spring::scaled_by_bounce`).
+        let presence_frame = motion::spring_presence_with(
             ctx,
             self.id.with("sheet_presence"),
             *open,
-            MotionSpec::EXPAND,
-            MotionSpec::COLLAPSE,
+            motion::Spring::SNAPPY,
+            motion::Spring::SMOOTH,
         );
         if !presence_frame.render {
             return None;
@@ -638,7 +644,7 @@ struct ResolvedChrome {
 #[cfg(test)]
 mod modal_tests {
     use super::*;
-    use crate::motion::Presence;
+    use crate::motion::SpringPresence;
 
     /// Drives one egui pass at time `t` (see `motion.rs`'s own `step` test
     /// helper for why `begin_pass`/`end_pass` rather than `Context::run`).
@@ -652,18 +658,23 @@ mod modal_tests {
         result
     }
 
-    /// Mirrors `motion::presence_key`'s (private) key composition --
-    /// `show_modal` stores its `Presence` under `self.id.with("sheet_
-    /// presence")`, which `presence_with` further salts internally.
+    /// Mirrors `motion::spring_presence_key`'s (private) key composition --
+    /// `show_modal` stores its `SpringPresence` under `self.id.with("sheet_
+    /// presence")`, which `spring_presence_with` further salts internally.
     fn reveal_of(ctx: &egui::Context, id: egui::Id, now: f64) -> f32 {
         let key = id
             .with("sheet_presence")
-            .with("spatial_ui_kit::motion::presence");
-        let presence: Presence = ctx
+            .with("spatial_ui_kit::motion::spring_presence");
+        let presence: SpringPresence = ctx
             .data(|d| d.get_temp(key))
             .expect("presence should exist after showing a modal ThemedWindow at least once");
         presence.reveal(now)
     }
+
+    /// Generous settling time for a spring -- unlike the old fixed-duration
+    /// `MotionSpec`, a spring settles asymptotically, so tests wait a fixed
+    /// "plenty of time" rather than reading an exact duration constant.
+    const SPRING_SETTLE_SECS: f64 = 2.0;
 
     fn show_sheet(
         ctx: &egui::Context,
@@ -701,14 +712,14 @@ mod modal_tests {
 
         // First open, then settle.
         show_sheet(&ctx, &palette, "modal_regression_b", &mut open, 0.0);
-        let settled = MotionSpec::EXPAND.duration as f64 + 1.0;
+        let settled = SPRING_SETTLE_SECS;
         show_sheet(&ctx, &palette, "modal_regression_b", &mut open, settled);
-        assert!((reveal_of(&ctx, id, settled) - 1.0).abs() < 1e-4);
+        assert!((reveal_of(&ctx, id, settled) - 1.0).abs() < 1e-2);
 
         // Close, then settle -- must stop rendering once fully closed.
         open = false;
         show_sheet(&ctx, &palette, "modal_regression_b", &mut open, settled);
-        let closed_at = settled + MotionSpec::COLLAPSE.duration as f64 + 1.0;
+        let closed_at = settled + SPRING_SETTLE_SECS;
         let response = show_sheet(&ctx, &palette, "modal_regression_b", &mut open, closed_at);
         assert!(response.is_none());
 
@@ -726,16 +737,16 @@ mod modal_tests {
         let mut open = true;
 
         show_sheet(&ctx, &palette, "modal_regression_c", &mut open, 0.0);
-        let settled = MotionSpec::EXPAND.duration as f64 + 1.0;
+        let settled = SPRING_SETTLE_SECS;
         show_sheet(&ctx, &palette, "modal_regression_c", &mut open, settled);
 
         open = false;
-        let mid_close = settled + MotionSpec::COLLAPSE.duration as f64 * 0.5;
+        let mid_close = settled + 0.05;
         let rendered_mid_close =
             show_sheet(&ctx, &palette, "modal_regression_c", &mut open, mid_close);
         assert!(rendered_mid_close.is_some());
 
-        let after_close = settled + MotionSpec::COLLAPSE.duration as f64 + 1.0;
+        let after_close = settled + SPRING_SETTLE_SECS;
         let rendered_after_close =
             show_sheet(&ctx, &palette, "modal_regression_c", &mut open, after_close);
         assert!(rendered_after_close.is_none());
@@ -758,7 +769,7 @@ mod modal_tests {
                 },
             );
         });
-        let stored: Option<Presence> = ctx.data(|d| d.get_temp(id.with("sheet_presence")));
+        let stored: Option<SpringPresence> = ctx.data(|d| d.get_temp(id.with("sheet_presence")));
         assert!(stored.is_none());
     }
 }
