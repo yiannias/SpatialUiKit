@@ -7,7 +7,7 @@
 //! applies `visuals()` to its `egui::Context` on change.
 
 use crate::tokens::{ColorToken, DimensionToken};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Theme {
@@ -34,125 +34,182 @@ impl Theme {
     pub const ALL: [Theme; 2] = [Theme::Dark, Theme::Light];
 }
 
-/// UI text-size preset (Tier-1 "Application-Wide" setting, alongside
-/// `Theme`) -- Chris, 2026-07-21: "lots of the interface text is too small
-/// or inconsistent." A discrete multiplier over egui's default font sizes,
-/// not a continuous slider -- matches the rest of this settings tree's
-/// dropdown-of-presets style (see `Theme`) rather than adding a new slider
-/// `FieldControl` variant for one setting.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
-pub enum TextScale {
-    Small,
-    #[default]
-    Default,
-    Large,
-    ExtraLarge,
-}
+/// UI text-size scale: continuous percent value (75–175%, clamped).
+/// Defaults to 100. Serializes/deserializes with backward compatibility:
+/// accepts old enum names (Small→90, Default→100, Large→115, ExtraLarge→130)
+/// or a plain number.
+#[derive(Clone, Copy, PartialEq, Debug, Eq, PartialOrd, Ord)]
+pub struct TextScale(pub u16);
 
 impl TextScale {
+    /// Minimum percent, clamped.
+    pub const MIN: u16 = 75;
+    /// Maximum percent, clamped.
+    pub const MAX: u16 = 175;
+    /// Default percent (100).
+    pub const DEFAULT: u16 = 100;
+
+    /// Clamps the given percent to the valid range.
+    pub fn new(percent: u16) -> Self {
+        TextScale(percent.clamp(Self::MIN, Self::MAX))
+    }
+
     pub fn multiplier(&self) -> f32 {
-        match self {
-            TextScale::Small => 0.9,
-            TextScale::Default => 1.0,
-            TextScale::Large => 1.15,
-            TextScale::ExtraLarge => 1.3,
-        }
+        self.0 as f32 / 100.0
     }
 
-    pub fn label(&self) -> &'static str {
-        match self {
-            TextScale::Small => "Small (90%)",
-            TextScale::Default => "Default (100%)",
-            TextScale::Large => "Large (115%)",
-            TextScale::ExtraLarge => "Extra Large (130%)",
-        }
+    pub fn label(&self) -> String {
+        format!("{}%", self.0)
     }
 
-    pub const ALL: [TextScale; 4] = [
-        TextScale::Small,
-        TextScale::Default,
-        TextScale::Large,
-        TextScale::ExtraLarge,
-    ];
+    /// Returns the next larger value, stepping by 5%, clamped at MAX.
+    pub fn larger(self) -> TextScale {
+        TextScale::new(self.0.saturating_add(5).min(Self::MAX))
+    }
+
+    /// Returns the next smaller value, stepping by 5%, clamped at MIN.
+    pub fn smaller(self) -> TextScale {
+        TextScale::new(self.0.saturating_sub(5).max(Self::MIN))
+    }
 }
 
-/// Whole-UI scale preset (Chris, 2026-09-24) -- makes the ribbon, panels,
-/// icons, spacing *and* text larger or smaller together, like Lunacy's
-/// View > Interface Scale. Applied as egui's zoom factor, which multiplies
-/// the OS DPI scale, so [`TextScale`] stays a separate refinement that
-/// multiplies on top: Interface 115% + Text 115% draws text at ~132%.
-#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
-pub enum InterfaceScale {
-    P80,
-    P90,
-    #[default]
-    P100,
-    P110,
-    P115,
-    P125,
-    P150,
+impl Default for TextScale {
+    fn default() -> Self {
+        TextScale(Self::DEFAULT)
+    }
 }
+
+impl Serialize for TextScale {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u16(self.0)
+    }
+}
+
+// Helper enum for deserialization to accept both old enum names and new numbers
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum TextScaleRepr {
+    Number(u16),
+    String(String),
+}
+
+impl<'de> Deserialize<'de> for TextScale {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let repr = TextScaleRepr::deserialize(deserializer)?;
+        match repr {
+            TextScaleRepr::Number(percent) => Ok(TextScale::new(percent)),
+            TextScaleRepr::String(s) => {
+                // Backward compatibility: accept old enum names
+                match s.as_str() {
+                    "Small" => Ok(TextScale::new(90)),
+                    "Default" => Ok(TextScale::new(100)),
+                    "Large" => Ok(TextScale::new(115)),
+                    "ExtraLarge" => Ok(TextScale::new(130)),
+                    _ => Err(D::Error::custom(&format!("unknown TextScale: {}", s))),
+                }
+            }
+        }
+    }
+}
+
+/// Whole-UI scale: continuous percent value (75–200%, clamped).
+/// Makes the ribbon, panels, icons, spacing *and* text larger or smaller together,
+/// like Lunacy's View > Interface Scale. Applied as egui's zoom factor, which multiplies
+/// the OS DPI scale, so [`TextScale`] stays a separate refinement that multiplies on top:
+/// Interface 115% + Text 115% draws text at ~132%.
+/// Defaults to 100. Serializes/deserializes with backward compatibility:
+/// accepts old enum names (P80→80, P90→90, …, P150→150) or a plain number.
+#[derive(Clone, Copy, PartialEq, Debug, Eq, PartialOrd, Ord)]
+pub struct InterfaceScale(pub u16);
 
 impl InterfaceScale {
+    /// Minimum percent, clamped.
+    pub const MIN: u16 = 75;
+    /// Maximum percent, clamped.
+    pub const MAX: u16 = 200;
+    /// Default percent (100).
+    pub const DEFAULT: u16 = 100;
+
+    /// Clamps the given percent to the valid range.
+    pub fn new(percent: u16) -> Self {
+        InterfaceScale(percent.clamp(Self::MIN, Self::MAX))
+    }
+
     pub fn multiplier(&self) -> f32 {
-        match self {
-            InterfaceScale::P80 => 0.8,
-            InterfaceScale::P90 => 0.9,
-            InterfaceScale::P100 => 1.0,
-            InterfaceScale::P110 => 1.1,
-            InterfaceScale::P115 => 1.15,
-            InterfaceScale::P125 => 1.25,
-            InterfaceScale::P150 => 1.5,
-        }
+        self.0 as f32 / 100.0
     }
 
-    pub fn label(&self) -> &'static str {
-        match self {
-            InterfaceScale::P80 => "80%",
-            InterfaceScale::P90 => "90%",
-            InterfaceScale::P100 => "100%",
-            InterfaceScale::P110 => "110%",
-            InterfaceScale::P115 => "115%",
-            InterfaceScale::P125 => "125%",
-            InterfaceScale::P150 => "150%",
-        }
+    pub fn label(&self) -> String {
+        format!("{}%", self.0)
     }
 
-    /// Returns the next larger preset, clamped at P150.
+    /// Returns the next larger value, stepping by 5%, clamped at MAX.
     pub fn larger(self) -> InterfaceScale {
-        match self {
-            InterfaceScale::P80 => InterfaceScale::P90,
-            InterfaceScale::P90 => InterfaceScale::P100,
-            InterfaceScale::P100 => InterfaceScale::P110,
-            InterfaceScale::P110 => InterfaceScale::P115,
-            InterfaceScale::P115 => InterfaceScale::P125,
-            InterfaceScale::P125 => InterfaceScale::P150,
-            InterfaceScale::P150 => InterfaceScale::P150,
-        }
+        InterfaceScale::new(self.0.saturating_add(5).min(Self::MAX))
     }
 
-    /// Returns the next smaller preset, clamped at P80.
+    /// Returns the next smaller value, stepping by 5%, clamped at MIN.
     pub fn smaller(self) -> InterfaceScale {
-        match self {
-            InterfaceScale::P80 => InterfaceScale::P80,
-            InterfaceScale::P90 => InterfaceScale::P80,
-            InterfaceScale::P100 => InterfaceScale::P90,
-            InterfaceScale::P110 => InterfaceScale::P100,
-            InterfaceScale::P115 => InterfaceScale::P110,
-            InterfaceScale::P125 => InterfaceScale::P115,
-            InterfaceScale::P150 => InterfaceScale::P125,
+        InterfaceScale::new(self.0.saturating_sub(5).max(Self::MIN))
+    }
+}
+
+impl Default for InterfaceScale {
+    fn default() -> Self {
+        InterfaceScale(Self::DEFAULT)
+    }
+}
+
+impl Serialize for InterfaceScale {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_u16(self.0)
+    }
+}
+
+// Helper enum for deserialization to accept both old enum names and new numbers
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum InterfaceScaleRepr {
+    Number(u16),
+    String(String),
+}
+
+impl<'de> Deserialize<'de> for InterfaceScale {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        use serde::de::Error;
+
+        let repr = InterfaceScaleRepr::deserialize(deserializer)?;
+        match repr {
+            InterfaceScaleRepr::Number(percent) => Ok(InterfaceScale::new(percent)),
+            InterfaceScaleRepr::String(s) => {
+                // Backward compatibility: accept old enum names (P80, P90, etc.)
+                match s.as_str() {
+                    "P80" => Ok(InterfaceScale::new(80)),
+                    "P90" => Ok(InterfaceScale::new(90)),
+                    "P100" => Ok(InterfaceScale::new(100)),
+                    "P110" => Ok(InterfaceScale::new(110)),
+                    "P115" => Ok(InterfaceScale::new(115)),
+                    "P125" => Ok(InterfaceScale::new(125)),
+                    "P150" => Ok(InterfaceScale::new(150)),
+                    _ => Err(D::Error::custom(&format!("unknown InterfaceScale: {}", s))),
+                }
+            }
         }
     }
-
-    pub const ALL: [InterfaceScale; 7] = [
-        InterfaceScale::P80,
-        InterfaceScale::P90,
-        InterfaceScale::P100,
-        InterfaceScale::P110,
-        InterfaceScale::P115,
-        InterfaceScale::P125,
-        InterfaceScale::P150,
-    ];
 }
 
 /// Applies `scale` as egui's zoom factor. Also turns off egui's built-in
@@ -562,8 +619,8 @@ mod theme_palette_tests {
     #[test]
     fn text_size_multiplies_on_top_of_interface_scale() {
         let ctx = egui::Context::default();
-        apply_interface_scale(&ctx, InterfaceScale::P115);
-        apply_text_scale(&ctx, TextScale::Large);
+        apply_interface_scale(&ctx, InterfaceScale::new(115));
+        apply_text_scale(&ctx, TextScale::new(115));
         // egui adopts a new zoom factor at the start of the next pass.
         let _ = ctx.run_ui(Default::default(), |_| {});
         let body_points = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
@@ -574,32 +631,63 @@ mod theme_palette_tests {
     }
 
     #[test]
-    fn interface_scale_labels_are_unique() {
-        let labels: std::collections::HashSet<_> =
-            InterfaceScale::ALL.iter().map(|s| s.label()).collect();
-        assert_eq!(labels.len(), InterfaceScale::ALL.len());
-    }
-
-    #[test]
     fn interface_scale_larger_steps_correctly() {
-        assert_eq!(InterfaceScale::P80.larger(), InterfaceScale::P90);
-        assert_eq!(InterfaceScale::P90.larger(), InterfaceScale::P100);
-        assert_eq!(InterfaceScale::P100.larger(), InterfaceScale::P110);
-        assert_eq!(InterfaceScale::P110.larger(), InterfaceScale::P115);
-        assert_eq!(InterfaceScale::P115.larger(), InterfaceScale::P125);
-        assert_eq!(InterfaceScale::P125.larger(), InterfaceScale::P150);
-        assert_eq!(InterfaceScale::P150.larger(), InterfaceScale::P150);
+        assert_eq!(InterfaceScale::new(80).larger(), InterfaceScale::new(85));
+        assert_eq!(InterfaceScale::new(90).larger(), InterfaceScale::new(95));
+        assert_eq!(InterfaceScale::new(100).larger(), InterfaceScale::new(105));
+        assert_eq!(InterfaceScale::new(110).larger(), InterfaceScale::new(115));
+        assert_eq!(InterfaceScale::new(115).larger(), InterfaceScale::new(120));
+        assert_eq!(InterfaceScale::new(125).larger(), InterfaceScale::new(130));
+        assert_eq!(InterfaceScale::new(200).larger(), InterfaceScale::new(200));
     }
 
     #[test]
     fn interface_scale_smaller_steps_correctly() {
-        assert_eq!(InterfaceScale::P80.smaller(), InterfaceScale::P80);
-        assert_eq!(InterfaceScale::P90.smaller(), InterfaceScale::P80);
-        assert_eq!(InterfaceScale::P100.smaller(), InterfaceScale::P90);
-        assert_eq!(InterfaceScale::P110.smaller(), InterfaceScale::P100);
-        assert_eq!(InterfaceScale::P115.smaller(), InterfaceScale::P110);
-        assert_eq!(InterfaceScale::P125.smaller(), InterfaceScale::P115);
-        assert_eq!(InterfaceScale::P150.smaller(), InterfaceScale::P125);
+        assert_eq!(InterfaceScale::new(75).smaller(), InterfaceScale::new(75));
+        assert_eq!(InterfaceScale::new(80).smaller(), InterfaceScale::new(75));
+        assert_eq!(InterfaceScale::new(100).smaller(), InterfaceScale::new(95));
+        assert_eq!(InterfaceScale::new(110).smaller(), InterfaceScale::new(105));
+        assert_eq!(InterfaceScale::new(115).smaller(), InterfaceScale::new(110));
+        assert_eq!(InterfaceScale::new(125).smaller(), InterfaceScale::new(120));
+        assert_eq!(InterfaceScale::new(200).smaller(), InterfaceScale::new(195));
+    }
+
+    #[test]
+    fn text_scale_larger_steps_correctly() {
+        assert_eq!(TextScale::new(75).larger(), TextScale::new(80));
+        assert_eq!(TextScale::new(100).larger(), TextScale::new(105));
+        assert_eq!(TextScale::new(115).larger(), TextScale::new(120));
+        assert_eq!(TextScale::new(175).larger(), TextScale::new(175));
+    }
+
+    #[test]
+    fn text_scale_smaller_steps_correctly() {
+        assert_eq!(TextScale::new(75).smaller(), TextScale::new(75));
+        assert_eq!(TextScale::new(100).smaller(), TextScale::new(95));
+        assert_eq!(TextScale::new(115).smaller(), TextScale::new(110));
+        assert_eq!(TextScale::new(175).smaller(), TextScale::new(170));
+    }
+
+    #[test]
+    fn scales_clamp_to_valid_ranges() {
+        assert_eq!(InterfaceScale::new(50).0, InterfaceScale::MIN);
+        assert_eq!(InterfaceScale::new(250).0, InterfaceScale::MAX);
+        assert_eq!(TextScale::new(50).0, TextScale::MIN);
+        assert_eq!(TextScale::new(200).0, TextScale::MAX);
+    }
+
+    #[test]
+    fn interface_scale_labels_format_correctly() {
+        assert_eq!(InterfaceScale::new(80).label(), "80%");
+        assert_eq!(InterfaceScale::new(100).label(), "100%");
+        assert_eq!(InterfaceScale::new(125).label(), "125%");
+    }
+
+    #[test]
+    fn text_scale_labels_format_correctly() {
+        assert_eq!(TextScale::new(90).label(), "90%");
+        assert_eq!(TextScale::new(100).label(), "100%");
+        assert_eq!(TextScale::new(115).label(), "115%");
     }
 
     #[test]

@@ -135,6 +135,18 @@ pub enum FieldControl<A, Ctx> {
         button_label: &'static str,
         on_click: Box<dyn Fn(&Ctx) -> A + Send + Sync>,
     },
+    /// A horizontal slider for a numeric range. Emits the action only when the
+    /// value changes (`response.changed()`) to avoid setting the same value
+    /// repeatedly during a no-op drag. For Interface Scale specifically: to avoid
+    /// rescaling the UI under the cursor mid-drag, emits only on drag release or
+    /// when changed by keyboard/click, not during the drag itself.
+    Slider {
+        value: ReadFn<Ctx, f32>,
+        range: std::ops::RangeInclusive<f32>,
+        step: f32,
+        suffix: &'static str,
+        on_change: Box<dyn Fn(f32) -> A + Send + Sync>,
+    },
 }
 
 impl<A, Ctx> Field<A, Ctx> {
@@ -230,6 +242,28 @@ impl<A, Ctx> Field<A, Ctx> {
                 value: Box::new(value),
                 on_change: Box::new(on_change),
                 on_browse: Box::new(on_browse),
+            },
+        ))
+    }
+
+    pub fn slider(
+        id: &'static str,
+        label: &'static str,
+        value: impl Fn(&Ctx) -> f32 + Send + Sync + 'static,
+        range: std::ops::RangeInclusive<f32>,
+        step: f32,
+        suffix: &'static str,
+        on_change: impl Fn(f32) -> A + Send + Sync + 'static,
+    ) -> SettingsNode<A, Ctx> {
+        SettingsNode::Field(Self::base(
+            id,
+            label,
+            FieldControl::Slider {
+                value: Box::new(value),
+                range,
+                step,
+                suffix,
+                on_change: Box::new(on_change),
             },
         ))
     }
@@ -715,6 +749,29 @@ fn render_field_row<A: Clone, Ctx>(
                     if ui.button(*button_label).clicked() {
                         actions.push(on_click(ctx));
                     }
+                }
+                FieldControl::Slider {
+                    value,
+                    range,
+                    step,
+                    suffix,
+                    on_change,
+                } => {
+                    let mut val = value(ctx);
+                    ui.horizontal(|ui| {
+                        ui.set_width(220.0);
+                        let response = ui.add(
+                            egui::Slider::new(&mut val, range.clone())
+                                .step_by(*step as f64)
+                                .suffix(*suffix),
+                        );
+                        // Emit the action only on drag release or when changed by
+                        // keyboard/click (not during a drag itself), to avoid
+                        // rescaling the UI under the cursor mid-drag on Interface Scale.
+                        if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                            actions.push(on_change(val));
+                        }
+                    });
                 }
             }
 
