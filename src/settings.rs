@@ -586,6 +586,49 @@ fn group_header(ui: &mut egui::Ui, label: &str) {
     ui.add_space(unit * 0.3);
 }
 
+/// The widest a tier's `Field` labels get, in points, measured with the
+/// current body font -- nested fields (whose label renders indented) count
+/// their indent as part of their width. Every `egui::Grid` under this tier
+/// is given this as its `min_col_width`, which is what actually lines up
+/// the label/control columns across separate `Section`/`Group` boundaries:
+/// a `Grid`'s own column-width memory is keyed by its id, and each run of
+/// consecutive `Field`s gets its own id (see [`render_section_body`]) rather
+/// than sharing one id across the whole tier -- reusing one `Grid` id for
+/// several `Grid::show` calls at different rects in the same frame is
+/// exactly egui's own "ID clash" antipattern (`Context::warn_on_id_clash`),
+/// and did in fact paint its red "First use of Grid ID" debug overlay all
+/// over this panel before this measurement approach replaced it.
+fn measure_label_col_width<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>]) -> f32 {
+    fn walk<A, Ctx>(
+        ui: &egui::Ui,
+        font_id: &egui::FontId,
+        tree: &[SettingsNode<A, Ctx>],
+        max_w: &mut f32,
+    ) {
+        for node in tree {
+            match node {
+                SettingsNode::Section { children, .. } | SettingsNode::Group { children, .. } => {
+                    walk(ui, font_id, children, max_w);
+                }
+                SettingsNode::Field(f) => {
+                    let w = ui
+                        .painter()
+                        .layout_no_wrap(f.label.to_string(), font_id.clone(), egui::Color32::WHITE)
+                        .size()
+                        .x;
+                    let w = if f.nested { w + row_unit(ui) * 1.1 } else { w };
+                    *max_w = max_w.max(w);
+                }
+                SettingsNode::Custom { .. } => {}
+            }
+        }
+    }
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    let mut max_w: f32 = 0.0;
+    walk(ui, &font_id, tree, &mut max_w);
+    max_w + 4.0
+}
+
 /// Render the single continuously-scrolling content pane: every `Section`
 /// and `Group` as a heading followed by its fields, all in one column. When
 /// `scroll_to` names a `Section` id, that heading's rect is scrolled into
@@ -593,18 +636,13 @@ fn group_header(ui: &mut egui::Ui, label: &str) {
 /// `docs/Sketches/Prefs Panel.md` -- clicking the nav walks you to a
 /// section, it doesn't isolate it).
 ///
-/// Three heading weights, one shared grid per tier: a tier
-/// (Application-Wide/User/Project) gets [`tier_header`]; a nested `Section`
-/// (Themes, GPU & Rendering, ...) gets [`section_header`]; a `Group`
-/// (Selection Highlight, Spacing, ...) gets [`group_header`]. All the
-/// `Field` rows anywhere under one tier -- across every nested `Section` and
-/// `Group` -- share a single `egui::Grid` keyed by that tier's id, so the
-/// label column and control column land at the same x for the whole tier,
-/// not just within whichever run of fields happened to sit next to each
-/// other. (A fresh `Grid::new` call with the same id resumes that id's
-/// column widths from whatever the last call already measured, so
-/// interleaving headings and `Custom` rows between grid calls doesn't reset
-/// alignment.)
+/// Three heading weights: a tier (Application-Wide/User/Project) gets
+/// [`tier_header`]; a nested `Section` (Themes, GPU & Rendering, ...) gets
+/// [`section_header`]; a `Group` (Selection Highlight, Spacing, ...) gets
+/// [`group_header`]. Every `Field` row anywhere under one tier -- across
+/// every nested `Section` and `Group` -- lines up its label/control columns
+/// with every other one in that tier, via [`measure_label_col_width`] rather
+/// than a shared `Grid` id (see that function's doc comment for why).
 pub fn render_content<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
@@ -624,33 +662,31 @@ pub fn render_content<A: Clone, Ctx>(
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                render_section_body(ui, ctx, host, id, children, scroll_to, actions);
+                let label_col_width = measure_label_col_width(ui, children);
+                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
             }
             // Each app's tree root is a flat list of tier `Section`s, so
             // `Group`/`Field`/`Custom` shouldn't appear here in practice --
-            // handled via the same body renderer, keyed to a fallback grid
-            // id, for robustness.
-            _ => render_section_body(
-                ui,
-                ctx,
-                host,
-                "settings_root",
-                std::slice::from_ref(node),
-                scroll_to,
-                actions,
-            ),
+            // handled via the same body renderer for robustness.
+            _ => {
+                let single = std::slice::from_ref(node);
+                let label_col_width = measure_label_col_width(ui, single);
+                render_section_body(ui, ctx, host, label_col_width, single, scroll_to, actions);
+            }
         }
     }
 }
 
 /// Walks one tier's subtree, rendering nested `Section`/`Group` headings
-/// inline and feeding every `Field` run into the one `egui::Grid` keyed by
-/// `grid_id` (see [`render_content`]'s doc comment).
+/// inline and feeding every `Field` run into its own `egui::Grid` (a unique
+/// id per run, per egui's own id-clash rule -- see [`measure_label_col_width`]),
+/// each pinned to `label_col_width` so every run's label column lines up
+/// regardless of which run it's in.
 fn render_section_body<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
     host: &impl SettingsHost,
-    grid_id: &'static str,
+    label_col_width: f32,
     tree: &[SettingsNode<A, Ctx>],
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
@@ -667,12 +703,12 @@ fn render_section_body<A: Clone, Ctx>(
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                render_section_body(ui, ctx, host, grid_id, children, scroll_to, actions);
+                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Group { label, children } => {
                 group_header(ui, label);
-                render_section_body(ui, ctx, host, grid_id, children, scroll_to, actions);
+                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Custom { render, .. } => {
@@ -685,8 +721,17 @@ fn render_section_body<A: Clone, Ctx>(
                     i += 1;
                 }
                 let unit = row_unit(ui);
-                egui::Grid::new(grid_id)
+                // Unique id per run (the first field's own stable id) --
+                // never a shared per-tier id; see `measure_label_col_width`'s
+                // doc comment for why that's an egui id-clash bug, not
+                // harmless reuse.
+                let run_id = match &tree[start] {
+                    SettingsNode::Field(f) => f.id,
+                    _ => unreachable!(),
+                };
+                egui::Grid::new(run_id)
                     .num_columns(2)
+                    .min_col_width(label_col_width)
                     .spacing([unit * 1.3, unit * 0.5])
                     .show(ui, |ui| {
                         for node in &tree[start..i] {
@@ -710,7 +755,9 @@ fn render_field_row<A: Clone, Ctx>(
     let label_col = label_color(ui);
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.scope(|ui| {
-            ui.set_min_width(190.0);
+            // Column width itself comes from the enclosing `Grid`'s
+            // `min_col_width` (set from `measure_label_col_width`), not a
+            // literal here.
             let text = egui::RichText::new(field.label).color(label_col);
             if field.nested {
                 ui.horizontal(|ui| {
