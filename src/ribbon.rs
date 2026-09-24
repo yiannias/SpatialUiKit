@@ -201,6 +201,25 @@ pub trait RibbonHost {
     fn icon_rect(&self, button_rect: egui::Rect) -> egui::Rect {
         button_rect
     }
+
+    /// This one button's own footprint width, height still `button_size().y`
+    /// -- used both to size the module frame's content width (so it matches
+    /// what `icon_button` actually draws) and, per-button, by
+    /// [`draw_button_row`]/[`button_with_flyout`] to allocate that width.
+    /// Defaults to `button_size().x`, i.e. every button the same fixed
+    /// width, which is what every host did before this method existed (SSP
+    /// still does).
+    ///
+    /// **Added 2026-09-24** (`docs/design/2026-09-24_ribbon-pods-spec.md`,
+    /// "Button width: max(glyph, caption text) -- variable, not a fixed
+    /// slot"): SDB's `SdbRibbonHost` overrides this to measure `label`
+    /// against the glyph box so each button is only as wide as its own
+    /// content needs, per the sketch. A defaulted method, not a breaking
+    /// signature change, so SSP's fixed-width layout is untouched.
+    fn button_width(&self, ui: &egui::Ui, key: &str, label: &str) -> f32 {
+        let _ = (ui, key, label);
+        self.button_size().x
+    }
 }
 
 /// Per-theme colors for [`module_frame`]'s capsule border and label pill.
@@ -294,7 +313,11 @@ fn vertical_label_pill(
     }
     let painter = ui.painter();
     painter.rect_filled(rect, corner_radius, bg);
-    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::monospace(9.0), fg);
+    // Proportional, not monospace -- `docs/design/
+    // 2026-09-24_ribbon-pods-spec.md`'s proportion table specs "Inter
+    // Regular... ALL CAPS", and monospace read visibly wider/blockier than
+    // the sketch's label pill text once compared side by side.
+    let galley = painter.layout_no_wrap(text.to_string(), egui::FontId::proportional(8.6), fg);
     // Rotated 90 CCW: reads bottom-to-top. The layout origin lands at the
     // bottom-left of the rotated text run.
     let pos = egui::pos2(
@@ -306,12 +329,27 @@ fn vertical_label_pill(
     painter.add(shape);
 }
 
-/// A group/module's content width -- `n` buttons at `button_w` each, with
-/// `n - 1` gaps of the ui's own item spacing between them. Shared by both
-/// entry points below and by `module_frame`'s caller, which needs this
-/// number before it can allocate the frame.
-fn group_content_width(button_count: usize, button_w: f32, spacing_x: f32) -> f32 {
-    button_count as f32 * button_w + button_count.saturating_sub(1) as f32 * spacing_x
+/// A group/module's content width -- each button's own
+/// [`RibbonHost::button_width`], with `n - 1` gaps of the ui's own item
+/// spacing between them. Shared by both entry points below and by
+/// `module_frame`'s caller, which needs this number before it can allocate
+/// the frame. Sums each button's own
+/// [`RibbonHost::button_width`] instead of assuming they're all the same, so
+/// the module frame's content width matches what `icon_button` will actually
+/// draw (see that method's 2026-09-24 doc comment). Falls back to the exact
+/// same total as `group_content_width` for a host that doesn't override
+/// `button_width`.
+fn group_content_width_var<A>(
+    ui: &egui::Ui,
+    buttons: &[RibbonButton<A>],
+    host: &impl RibbonHost,
+    spacing_x: f32,
+) -> f32 {
+    buttons
+        .iter()
+        .map(|b| host.button_width(ui, b.key, b.label))
+        .sum::<f32>()
+        + buttons.len().saturating_sub(1) as f32 * spacing_x
 }
 
 /// Draws one module's rounded-corner frame, with a filled label pill along
@@ -434,6 +472,24 @@ fn draw_button_row<A: Clone>(
     for button in &group.buttons {
         actions.extend(button_with_flyout(ui, host, button));
     }
+}
+
+/// Whether `key`'s button currently has a hold in progress or its flyout
+/// open -- the same temp-data state [`button_with_flyout`] itself tracks,
+/// exposed so a host's `icon_button` can suppress its own hover tooltip
+/// while true. Without this, the tooltip (attached inside `icon_button`,
+/// which runs *before* `button_with_flyout` knows whether a hold started)
+/// pops up over the flyout's own first item the moment the hold opens it --
+/// `docs/design/2026-09-24_ribbon-pods-spec.md`'s flyout-fixes item (a).
+pub fn is_holding(ctx: &egui::Context, key: &str) -> bool {
+    let id_root = egui::Id::new(("ribbon_flyout_button", key));
+    let held_open = ctx
+        .data(|d| d.get_temp::<bool>(id_root.with("held_open")))
+        .unwrap_or(false);
+    let pressing = ctx
+        .data(|d| d.get_temp::<f64>(id_root.with("press_start")))
+        .is_some();
+    held_open || pressing
 }
 
 /// Pure hold-tracking update for [`button_with_flyout`], decoupled from
@@ -627,14 +683,17 @@ pub fn button_with_flyout<A: Clone>(
 /// runs after `RibbonHost::icon_button` has already drawn the button and
 /// has no way to hand back the exact color it used).
 fn draw_hold_hint(ui: &egui::Ui, icon_rect: egui::Rect) {
+    // Downward-pointing (apex at the bottom, base above it) -- Chris's spec
+    // decision 2: "a small downward-facing triangle at the lower-right of
+    // the icon". The previous shape had its two base points at the bottom
+    // and its apex above, which reads as pointing *up*.
     let color = ui.visuals().strong_text_color();
     let size = (icon_rect.width().min(icon_rect.height()) * 0.22).clamp(4.0, 9.0);
-    let tip = icon_rect.right_bottom();
-    let p1 = tip;
-    let p2 = tip - egui::vec2(size, 0.0);
-    let p3 = tip - egui::vec2(size * 0.5, size * 0.8);
+    let apex = icon_rect.right_bottom();
+    let base_left = apex - egui::vec2(size, size * 0.8);
+    let base_right = apex - egui::vec2(0.0, size * 0.8);
     ui.painter().add(egui::Shape::convex_polygon(
-        vec![p1, p2, p3],
+        vec![base_left, base_right, apex],
         color,
         egui::Stroke::NONE,
     ));
@@ -670,7 +729,16 @@ fn draw_flyout_column<A>(
     )
     .clamp(0.0, natural_h + MotionSpec::EXPAND_OVERSHOOT_CAP_PX);
     let opacity = presence.reveal.clamp(0.0, 1.0);
-    let col_w = anchor_rect.width().max(button_size.x);
+    // Wide enough for the anchor button *and* every item's own content --
+    // fixes items with a longer caption than the button that opens them
+    // (e.g. Output's flyout: "print"/"pdf"/"image"/"publish" against the
+    // "output" button) reading clipped at the column's right edge.
+    let col_w = flyout
+        .items
+        .iter()
+        .fold(anchor_rect.width().max(button_size.x), |w, item| {
+            w.max(host.button_width(ui, item.key, item.label))
+        });
     let col_min = anchor_rect.left_bottom();
     let full_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, natural_h));
     let visible_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, revealed_h));
@@ -721,6 +789,14 @@ fn draw_flyout_column<A>(
                     .max_rect(full_rect)
                     .layout(egui::Layout::top_down(egui::Align::Min)),
             );
+            // Zero vertical item spacing -- `natural_h` above is exactly
+            // `item_h * items.len()`, with no room for egui's own default
+            // spacing between stacked widgets. Leaving that default in
+            // pushed the last item (e.g. Output's "publish") past
+            // `visible_rect`'s clip, reading cut off --
+            // `docs/design/2026-09-24_ribbon-pods-spec.md`'s flyout-fixes
+            // item (c).
+            child.spacing_mut().item_spacing.y = 0.0;
             for (i, item) in flyout.items.iter().enumerate() {
                 let resp = host.icon_button(
                     &mut child,
@@ -779,9 +855,10 @@ pub fn ribbon_panel<A: Clone>(
                 if i == 0 {
                     ui.add_space(GAP);
                 }
-                let content_w = group_content_width(
-                    group.buttons.len(),
-                    button_size.x,
+                let content_w = group_content_width_var(
+                    ui,
+                    &group.buttons,
+                    host,
                     ui.spacing().item_spacing.x,
                 );
                 let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
@@ -827,9 +904,10 @@ pub fn ribbon_panel_modules<A: Clone>(
             }
             match module {
                 RibbonModule::Buttons(group) => {
-                    let content_w = group_content_width(
-                        group.buttons.len(),
-                        button_size.x,
+                    let content_w = group_content_width_var(
+                        ui,
+                        &group.buttons,
+                        host,
                         ui.spacing().item_spacing.x,
                     );
                     let mut child = module_frame(ui, group.label, content_w, row_h, frame_style);
@@ -1085,9 +1163,10 @@ mod tests {
             egui::Area::new(egui::Id::new("ribbon_test_area"))
                 .fixed_pos(egui::pos2(0.0, 0.0))
                 .show(ctx, |ui| {
-                    let content_w = group_content_width(
-                        group.buttons.len(),
-                        host.button_size().x,
+                    let content_w = group_content_width_var(
+                        ui,
+                        &group.buttons,
+                        &host,
                         ui.spacing().item_spacing.x,
                     );
                     let mut child =

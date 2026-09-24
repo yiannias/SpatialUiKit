@@ -265,10 +265,14 @@ impl ThemePalette {
             // Status Panel's own lighter, opacity-modulated border that
             // moves onto this value (which is the point -- see
             // `SurfaceTokens::border_color`).
+            // 2026-09-24, ribbon-pods visual-fidelity pass (`docs/design/
+            // 2026-09-24_ribbon-pods-spec.md`): border color/width moved to
+            // Chris's sketch spec (`#2B2C31`, ~0.031*H at H=56px -> ~1.7px)
+            // -- previously `ribbon::FRAME_STROKE`'s `rgb(58,59,64)` at 1.0px.
             surface: SurfaceTokens {
                 background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
-                border_color: ColorToken::new(egui::Color32::from_rgb(58, 59, 64)),
-                border_width: DimensionToken::new(1.0),
+                border_color: ColorToken::new(egui::Color32::from_rgb(0x2B, 0x2C, 0x31)),
+                border_width: DimensionToken::new(1.7),
             },
             // Every value here is the dark-only literal it replaces, so dark
             // mode renders exactly as it did before these tokens existed:
@@ -278,8 +282,8 @@ impl ThemePalette {
             // dim glyph color and two border colors.
             control: ControlTokens {
                 accent: ColorToken::new(egui::Color32::from_rgb(255, 178, 82)),
-                label_background: ColorToken::new(egui::Color32::from_rgb(43, 44, 49)),
-                label_foreground: ColorToken::new(egui::Color32::from_rgb(141, 142, 150)),
+                label_background: ColorToken::new(egui::Color32::from_rgb(0x2B, 0x2C, 0x31)),
+                label_foreground: ColorToken::new(egui::Color32::from_rgb(0x7F, 0x80, 0x88)),
                 cap_background: ColorToken::new(egui::Color32::from_rgb(24, 24, 27)),
                 cap_foreground: ColorToken::new(egui::Color32::from_rgb(104, 104, 112)),
                 cap_border: ColorToken::new(egui::Color32::from_rgb(58, 58, 64)),
@@ -397,28 +401,33 @@ mod theme_palette_tests {
     /// 2026-09-13 token pass -- Chris's one hard constraint on that work was
     /// "dark mode is good as it is." A drift here is a silent dark-mode
     /// regression that no other test would catch.
+    ///
+    /// **2026-09-24 update:** the ribbon capsule border and label pill
+    /// colors moved again, this time to Chris's Lunacy-sketch spec
+    /// (`docs/design/2026-09-24_ribbon-pods-spec.md`'s proportion table --
+    /// `#2B2C31` border/tab fill, `#7F8088` label text, border width
+    /// ~0.031*H at H=56px), so this test's literals were updated to match
+    /// rather than pinning the pre-sketch look forever.
     #[test]
     fn the_dark_palette_reproduces_the_literals_it_replaced() {
         let d = ThemePalette::dark();
-        // `ribbon::FRAME_STROKE`, at its `Stroke::new(1.0, ..)` width.
         assert_eq!(
             d.surface.border_color.color32().unwrap(),
-            egui::Color32::from_rgb(58, 59, 64)
+            egui::Color32::from_rgb(0x2B, 0x2C, 0x31)
         );
-        assert_eq!(d.surface.border_width.px().unwrap(), 1.0);
+        assert_eq!(d.surface.border_width.px().unwrap(), 1.7);
         // `sdb_ui::appearance::ACCENT`.
         assert_eq!(
             d.control.accent.color32().unwrap(),
             egui::Color32::from_rgb(255, 178, 82)
         );
-        // `ribbon::MODULE_LABEL_BG` / `MODULE_LABEL_FG`.
         assert_eq!(
             d.control.label_background.color32().unwrap(),
-            egui::Color32::from_rgb(43, 44, 49)
+            egui::Color32::from_rgb(0x2B, 0x2C, 0x31)
         );
         assert_eq!(
             d.control.label_foreground.color32().unwrap(),
-            egui::Color32::from_rgb(141, 142, 150)
+            egui::Color32::from_rgb(0x7F, 0x80, 0x88)
         );
         // `annunciator_response_sized`'s unlit cap fill, dim glyph color and
         // its two border colors.
