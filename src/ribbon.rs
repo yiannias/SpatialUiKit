@@ -53,6 +53,8 @@
 //! per-host-configurable -- widen them to parameters if SSP's needs
 //! diverge from SDB's rather than forking the file.
 
+use crate::motion::{presence_with, MotionSpec};
+
 /// One button in a ribbon group, generic over the app's action type.
 /// `selected` is precomputed by the caller (each app compares its own
 /// "is this the active tool" state) rather than carrying a tool-type field
@@ -68,6 +70,52 @@ pub struct RibbonButton<A> {
     pub enabled: bool,
     /// Hover text shown on a disabled button explaining why.
     pub disabled_hint: &'static str,
+    /// A hold-past-threshold flyout attached to this button -- see
+    /// [`RibbonFlyout`] and [`button_with_flyout`]. `None` for the common
+    /// case of a plain single-action button.
+    ///
+    /// **Breaking, 2026-09-24:** this field is new on `RibbonButton`, so
+    /// every existing struct literal (SDB's and SSP's) needs a value now.
+    /// Logged in `spatialuikit/docs/ssp-migration-notes.md`.
+    pub flyout: Option<RibbonFlyout<A>>,
+}
+
+/// Which kind of choice a [`RibbonFlyout`] offers -- drives whether picking
+/// an item is remembered and replaces the pod button (per
+/// `docs/design/2026-09-24_ribbon-pods-spec.md`'s "Click-and-hold flyouts").
+/// The kit itself does not implement the remembering (that's a per-app user
+/// setting, e.g. SDB's `ribbon_flyout_picks`); this only tags which kind of
+/// flyout the button carries so an app's dispatch code can tell them apart.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FlyoutKind {
+    /// The flyout offers alternative ways to run a related command (Save →
+    /// Save As, Paste → Paste in Place/as Group). The main button's own
+    /// action and look never change.
+    Alternatives,
+    /// The flyout picks a *variant* of the main command (Output →
+    /// print/pdf/image/publish). An app that remembers the pick swaps the
+    /// main button's icon/label/action for the chosen item's.
+    Variant,
+}
+
+/// One row of a [`RibbonFlyout`]'s column -- icon + caption like a ribbon
+/// button, but firing a caller-chosen bundle of actions on pick rather than
+/// one action on click, so an app can dispatch "remember this pick" and "do
+/// it" together (e.g. `[SetRibbonFlyoutPick, ExportPdf]`).
+pub struct FlyoutItem<A> {
+    /// Icon key, looked up the same way [`RibbonButton::key`] is.
+    pub key: &'static str,
+    pub label: &'static str,
+    pub actions: Vec<A>,
+    pub enabled: bool,
+    pub disabled_hint: &'static str,
+}
+
+/// A hold-flyout attached to a [`RibbonButton`] -- see
+/// `docs/design/2026-09-24_ribbon-pods-spec.md`'s "Click-and-hold flyouts".
+pub struct RibbonFlyout<A> {
+    pub kind: FlyoutKind,
+    pub items: Vec<FlyoutItem<A>>,
 }
 
 /// One labeled cluster of buttons, drawn with a hairline separator before
@@ -141,6 +189,18 @@ pub trait RibbonHost {
     fn module_frame_style(&self) -> ModuleFrameStyle {
         ModuleFrameStyle::default()
     }
+
+    /// The icon's own sub-rect within a button's full `button_rect` --
+    /// used to place the "hold for more" hover-hint triangle
+    /// ([`button_with_flyout`]) at its lower-right corner, above any
+    /// caption. Defaults to the whole button rect, which is correct for a
+    /// host with no separate icon/caption split. A host that draws a
+    /// caption below a smaller icon box (SDB's `SdbRibbonHost`) overrides
+    /// this to match, so the hint lands on the icon, not straddling the
+    /// caption.
+    fn icon_rect(&self, button_rect: egui::Rect) -> egui::Rect {
+        button_rect
+    }
 }
 
 /// Per-theme colors for [`module_frame`]'s capsule border and label pill.
@@ -174,6 +234,12 @@ impl Default for ModuleFrameStyle {
 
 /// How long the clicked-button flash lasts, seconds.
 const FLASH_SECS: f64 = 0.28;
+
+/// How long a button must be held before its [`RibbonFlyout`] opens --
+/// `docs/design/2026-09-24_ribbon-pods-spec.md`'s "Click-and-hold flyouts"
+/// ("Paste uses 0.35s today"). `pub` since every flyout in the app shares
+/// this one threshold rather than each caller guessing its own.
+pub const FLYOUT_HOLD_SECS: f64 = 0.35;
 
 /// The one gap dimension the whole row is built from -- top/bottom padding
 /// inside a module frame, the horizontal gap between adjacent frames (and
@@ -328,9 +394,37 @@ fn module_frame(
     )
 }
 
+/// Paints the activation flash: a brief amber pulse over a just-clicked
+/// button, keyed by `flash_id` in egui temp data (not caller state, since
+/// it's pure presentation). Shared by [`draw_button_row`] and
+/// [`button_with_flyout`] so a flyout button's main click gets the same
+/// feedback as a plain one.
+fn paint_flash(ui: &egui::Ui, rect: egui::Rect, flash_id: egui::Id) {
+    if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
+        let dt = ui.ctx().input(|i| i.time) - t0;
+        if dt < FLASH_SECS {
+            let a = (1.0 - dt / FLASH_SECS) as f32;
+            let amber = egui::Color32::from_rgb(255, 178, 82);
+            ui.painter()
+                .rect_filled(rect, 6.0, amber.gamma_multiply(0.22 * a));
+            ui.painter().rect_stroke(
+                rect,
+                6.0,
+                egui::Stroke::new(1.5, amber.gamma_multiply(a)),
+                egui::StrokeKind::Outside,
+            );
+            ui.ctx().request_repaint();
+        } else {
+            ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
+        }
+    }
+}
+
 /// Draws one button group's row of icon buttons (no label -- the caller's
 /// [`module_frame`] already drew one) into `ui`, which is expected to already
-/// be scoped to the group's content area with a left-to-right layout.
+/// be scoped to the group's content area with a left-to-right layout. Every
+/// button goes through [`button_with_flyout`] -- a plain button (`flyout:
+/// None`) behaves exactly as before.
 fn draw_button_row<A: Clone>(
     ui: &mut egui::Ui,
     group: &RibbonGroup<A>,
@@ -338,42 +432,311 @@ fn draw_button_row<A: Clone>(
     actions: &mut Vec<A>,
 ) {
     for button in &group.buttons {
-        let resp = host.icon_button(
-            ui,
-            button.key,
-            button.label,
-            button.selected,
-            button.enabled,
-            button.disabled_hint,
-        );
-        let flash_id = egui::Id::new(("ribbon_flash", button.key));
-        if resp.clicked() {
-            actions.push(button.action.clone());
-            let now = ui.ctx().input(|i| i.time);
-            ui.ctx().data_mut(|d| d.insert_temp(flash_id, now));
+        actions.extend(button_with_flyout(ui, host, button));
+    }
+}
+
+/// Pure hold-tracking update for [`button_with_flyout`], decoupled from
+/// egui so it's directly unit-testable: given the previous press/held state
+/// and this frame's raw pointer facts, returns the updated `(press_start,
+/// held_open)`. `pressed_on_button` is true only the frame the pointer goes
+/// down directly on the button (`Response::is_pointer_button_down_on`);
+/// once a hold latches `held_open` true, it stays true regardless of
+/// `pressed_on_button` (the pointer may have dragged off the button onto
+/// the flyout column by then) as long as `primary_down` stays true.
+fn update_hold_state(
+    press_start: Option<f64>,
+    held_open: bool,
+    has_flyout: bool,
+    now: f64,
+    primary_down: bool,
+    pressed_on_button: bool,
+) -> (Option<f64>, bool) {
+    if !has_flyout {
+        return (None, false);
+    }
+    let press_start = press_start.or(if pressed_on_button { Some(now) } else { None });
+    let held_open =
+        held_open || (primary_down && press_start.is_some_and(|s| now - s >= FLYOUT_HOLD_SECS));
+    (press_start, held_open)
+}
+
+/// What releasing the pointer resolves to for a button with a flyout --
+/// pure, so [`button_with_flyout`]'s release-frame decision is directly
+/// unit-testable without simulating real egui pointer input.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ReleaseOutcome {
+    /// A short click (never held past the threshold): fire the button's own
+    /// action.
+    MainAction,
+    /// Released over flyout item `usize`, which is enabled.
+    Pick(usize),
+    /// Held open, then released elsewhere or over a disabled item -- or a
+    /// short press that didn't end in a click at all.
+    Cancel,
+}
+
+/// `hovered_item` is the flyout item index under the pointer at release, if
+/// any, **regardless of whether it's enabled** -- `item_enabled` is a
+/// separate query so a disabled item under the pointer resolves to `Cancel`
+/// rather than `Pick`, matching the spec's "disabled items grey with hover
+/// hint" (they don't fire).
+fn resolve_release(
+    held_open: bool,
+    main_clicked: bool,
+    hovered_item: Option<usize>,
+    item_enabled: impl Fn(usize) -> bool,
+) -> ReleaseOutcome {
+    if held_open {
+        match hovered_item {
+            Some(i) if item_enabled(i) => ReleaseOutcome::Pick(i),
+            _ => ReleaseOutcome::Cancel,
         }
-        // Activation flash: a brief amber pulse over the clicked button.
-        // Painted from egui temp data (not caller state) since it's pure
-        // presentation.
-        if let Some(t0) = ui.ctx().data(|d| d.get_temp::<f64>(flash_id)) {
-            let dt = ui.ctx().input(|i| i.time) - t0;
-            if dt < FLASH_SECS {
-                let a = (1.0 - dt / FLASH_SECS) as f32;
-                let amber = egui::Color32::from_rgb(255, 178, 82);
-                ui.painter()
-                    .rect_filled(resp.rect, 6.0, amber.gamma_multiply(0.22 * a));
-                ui.painter().rect_stroke(
-                    resp.rect,
-                    6.0,
-                    egui::Stroke::new(1.5, amber.gamma_multiply(a)),
-                    egui::StrokeKind::Outside,
-                );
-                ui.ctx().request_repaint();
-            } else {
-                ui.ctx().data_mut(|d| d.remove::<f64>(flash_id));
-            }
+    } else if main_clicked {
+        ReleaseOutcome::MainAction
+    } else {
+        ReleaseOutcome::Cancel
+    }
+}
+
+/// Draws one button, plus its hold-flyout if it has one -- see
+/// [`RibbonButton::flyout`] and `docs/design/2026-09-24_ribbon-pods-spec.md`'s
+/// "Click-and-hold flyouts". Shared by [`draw_button_row`] (the kit's own
+/// button-row drawing) and app `RibbonModule::Custom` renders that build a
+/// button row by hand (SDB's EDIT/CREATE pods).
+///
+/// Behavior: a short click fires `button.action`. Holding past
+/// [`FLYOUT_HOLD_SECS`] opens the flyout (grown out of the pod as one
+/// outline, see [`draw_flyout_column`]); releasing over an enabled item
+/// fires that item's `actions`; releasing elsewhere cancels with no action.
+/// A disabled button never opens its flyout (it can't even fire its own
+/// click). All state lives in egui temp memory keyed off `button.key`, so
+/// nothing needs to be threaded back to the caller between frames.
+pub fn button_with_flyout<A: Clone>(
+    ui: &mut egui::Ui,
+    host: &dyn RibbonHost,
+    button: &RibbonButton<A>,
+) -> Vec<A> {
+    let mut actions: Vec<A> = Vec::new();
+    let ctx = ui.ctx().clone();
+    let now = ctx.input(|i| i.time);
+    let id_root = egui::Id::new(("ribbon_flyout_button", button.key));
+    let press_start_id = id_root.with("press_start");
+    let held_open_id = id_root.with("held_open");
+    let presence_id = id_root.with("presence");
+    let flash_id = egui::Id::new(("ribbon_flash", button.key));
+
+    let resp = host.icon_button(
+        ui,
+        button.key,
+        button.label,
+        button.selected,
+        button.enabled,
+        button.disabled_hint,
+    );
+
+    let has_flyout = button.enabled && button.flyout.is_some();
+    let primary_down = ctx.input(|i| i.pointer.primary_down());
+    let primary_released = ctx.input(|i| i.pointer.primary_released());
+
+    // Hold tracking (pure -- see `update_hold_state`): `press_start` is set
+    // the frame the pointer goes down directly on the button; `held_open`
+    // latches true once the hold crosses the threshold and stays true (even
+    // after the pointer drags off the button onto the flyout column below)
+    // until release, since the primary button staying down is what "still
+    // holding" means here, not staying over this one widget.
+    let (press_start, held_open) = update_hold_state(
+        ctx.data(|d| d.get_temp::<f64>(press_start_id)),
+        ctx.data(|d| d.get_temp::<bool>(held_open_id))
+            .unwrap_or(false),
+        has_flyout,
+        now,
+        primary_down,
+        resp.is_pointer_button_down_on(),
+    );
+
+    let presence = presence_with(
+        &ctx,
+        presence_id,
+        held_open,
+        MotionSpec::EXPAND,
+        MotionSpec::COLLAPSE,
+    );
+
+    let mut hovered_item: Option<usize> = None;
+    if let Some(flyout) = &button.flyout {
+        if presence.render {
+            hovered_item = draw_flyout_column(ui, host, button.key, resp.rect, flyout, presence);
         }
     }
+
+    if has_flyout {
+        if primary_released {
+            let outcome = resolve_release(held_open, resp.clicked(), hovered_item, |i| {
+                button.flyout.as_ref().is_some_and(|f| f.items[i].enabled)
+            });
+            match outcome {
+                ReleaseOutcome::MainAction => {
+                    actions.push(button.action.clone());
+                    ctx.data_mut(|d| d.insert_temp(flash_id, now));
+                }
+                ReleaseOutcome::Pick(i) => {
+                    if let Some(flyout) = &button.flyout {
+                        actions.extend(flyout.items[i].actions.iter().cloned());
+                        ctx.data_mut(|d| d.insert_temp(flash_id, now));
+                    }
+                }
+                // Released elsewhere, or over a disabled item: cancel, no
+                // action -- matches the spec's "release elsewhere cancels".
+                ReleaseOutcome::Cancel => {}
+            }
+            ctx.data_mut(|d| {
+                d.remove::<f64>(press_start_id);
+                d.insert_temp(held_open_id, false);
+            });
+        } else {
+            ctx.data_mut(|d| {
+                if let Some(s) = press_start {
+                    d.insert_temp(press_start_id, s);
+                }
+                d.insert_temp(held_open_id, held_open);
+            });
+        }
+    } else if resp.clicked() {
+        actions.push(button.action.clone());
+        ctx.data_mut(|d| d.insert_temp(flash_id, now));
+    }
+
+    paint_flash(ui, resp.rect, flash_id);
+
+    // Hover hint: a small downward-pointing triangle at the lower-right of
+    // the icon area, shown only while hovering a button that has a flyout --
+    // "hold for more" (spec Decision 2). `resp.hovered()` alone (not
+    // `held_open`) is deliberate: the hint's job is to advertise the flyout
+    // before the user starts holding.
+    if button.flyout.is_some() && button.enabled && resp.hovered() {
+        draw_hold_hint(ui, host.icon_rect(resp.rect));
+    }
+
+    actions
+}
+
+/// The "hold for more" hint -- a small filled triangle pointing down, at the
+/// lower-right corner of `icon_rect`, in the button's own foreground color
+/// (approximated here as the hovered strong-text color, since this function
+/// runs after `RibbonHost::icon_button` has already drawn the button and
+/// has no way to hand back the exact color it used).
+fn draw_hold_hint(ui: &egui::Ui, icon_rect: egui::Rect) {
+    let color = ui.visuals().strong_text_color();
+    let size = (icon_rect.width().min(icon_rect.height()) * 0.22).clamp(4.0, 9.0);
+    let tip = icon_rect.right_bottom();
+    let p1 = tip;
+    let p2 = tip - egui::vec2(size, 0.0);
+    let p3 = tip - egui::vec2(size * 0.5, size * 0.8);
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![p1, p2, p3],
+        color,
+        egui::Stroke::NONE,
+    ));
+}
+
+/// Draws the flyout column "growing out of the pod as one outline" below
+/// `anchor_rect` (the held button's own rect) -- same fill/border as the
+/// module capsule, joined to it with no seam (the capsule's bottom border
+/// segment under the button is overpainted, since this Foreground `Area`
+/// always paints after the module frame's own `Middle`-order painting this
+/// frame). Drawn in a Foreground `Area` so it never affects the ribbon row's
+/// own height/layout. Returns the index of the item released over, this
+/// frame, if any -- the caller (`button_with_flyout`) decides whether that
+/// counts as a pick (only while `presence.interactive`, i.e. not while
+/// closing).
+fn draw_flyout_column<A>(
+    ui: &mut egui::Ui,
+    host: &dyn RibbonHost,
+    key: &'static str,
+    anchor_rect: egui::Rect,
+    flyout: &RibbonFlyout<A>,
+    presence: crate::motion::PresenceFrame,
+) -> Option<usize> {
+    let ctx = ui.ctx().clone();
+    let style = host.module_frame_style();
+    let button_size = host.button_size();
+    let item_h = button_size.y;
+    let natural_h = item_h * flyout.items.len().max(1) as f32;
+    let revealed_h = crate::motion::cap_overshoot(
+        natural_h * presence.reveal.max(0.0),
+        natural_h,
+        MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
+    )
+    .clamp(0.0, natural_h + MotionSpec::EXPAND_OVERSHOOT_CAP_PX);
+    let opacity = presence.reveal.clamp(0.0, 1.0);
+    let col_w = anchor_rect.width().max(button_size.x);
+    let col_min = anchor_rect.left_bottom();
+    let full_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, natural_h));
+    let visible_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, revealed_h));
+
+    let mut picked = None;
+    let primary_released = ctx.input(|i| i.pointer.primary_released());
+
+    egui::Area::new(egui::Id::new(("ribbon_flyout_area", key)))
+        .fixed_pos(col_min)
+        .order(egui::Order::Foreground)
+        .interactable(presence.interactive)
+        .show(&ctx, |ui| {
+            ui.set_clip_rect(visible_rect);
+            ui.set_opacity(opacity);
+
+            // Overpaint the capsule's own bottom border directly under the
+            // button -- erases the seam so the column reads as the pod's
+            // own silhouette extending down, not a separate popup.
+            let seam = egui::Rect::from_min_size(
+                anchor_rect.left_bottom() - egui::vec2(0.0, style.border_width),
+                egui::vec2(anchor_rect.width(), style.border_width * 2.0),
+            );
+            ui.painter()
+                .rect_filled(seam, 0.0, ui.visuals().window_fill());
+
+            let radius = FRAME_RADIUS as u8;
+            let corners = egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: radius,
+                se: radius,
+            };
+            ui.painter()
+                .rect_filled(full_rect, corners, ui.visuals().window_fill());
+            // Left/right/bottom border only -- the top edge merges into the
+            // button above, which already reads as one continuous outline
+            // once the seam above is overpainted.
+            let s = egui::Stroke::new(style.border_width, style.border);
+            ui.painter()
+                .line_segment([full_rect.left_top(), full_rect.left_bottom()], s);
+            ui.painter()
+                .line_segment([full_rect.right_top(), full_rect.right_bottom()], s);
+            ui.painter()
+                .rect_stroke(full_rect, corners, s, egui::StrokeKind::Inside);
+
+            let mut child = ui.new_child(
+                egui::UiBuilder::new()
+                    .max_rect(full_rect)
+                    .layout(egui::Layout::top_down(egui::Align::Min)),
+            );
+            for (i, item) in flyout.items.iter().enumerate() {
+                let resp = host.icon_button(
+                    &mut child,
+                    item.key,
+                    item.label,
+                    false,
+                    item.enabled,
+                    item.disabled_hint,
+                );
+                if presence.interactive && primary_released && resp.hovered() {
+                    picked = Some(i);
+                }
+            }
+        });
+
+    picked
 }
 
 /// Render the button groups. Returns the actions clicked this frame. One
@@ -486,4 +849,269 @@ pub fn ribbon_panel_modules<A: Clone>(
     });
 
     actions
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal `RibbonHost` for headless testing -- a fixed 40x40 button,
+    /// same as `RibbonHost::button_size`'s own default, and no theming
+    /// beyond `ModuleFrameStyle::default()`.
+    struct TestHost;
+    impl RibbonHost for TestHost {
+        fn icon_button(
+            &self,
+            ui: &mut egui::Ui,
+            _key: &str,
+            _label: &str,
+            _selected: bool,
+            enabled: bool,
+            _disabled_hint: &str,
+        ) -> egui::Response {
+            let sense = if enabled {
+                egui::Sense::click()
+            } else {
+                egui::Sense::hover()
+            };
+            let (rect, resp) = ui.allocate_exact_size(self.button_size(), sense);
+            ui.painter()
+                .rect_filled(rect, 0.0, egui::Color32::TRANSPARENT);
+            resp
+        }
+    }
+
+    fn test_flyout() -> RibbonFlyout<i32> {
+        RibbonFlyout {
+            kind: FlyoutKind::Alternatives,
+            items: vec![
+                FlyoutItem {
+                    key: "item_a",
+                    label: "Item A",
+                    actions: vec![10],
+                    enabled: true,
+                    disabled_hint: "",
+                },
+                FlyoutItem {
+                    key: "item_b",
+                    label: "Item B",
+                    actions: vec![20],
+                    enabled: false,
+                    disabled_hint: "Not available yet",
+                },
+            ],
+        }
+    }
+
+    fn test_button() -> RibbonButton<i32> {
+        RibbonButton {
+            key: "test_btn",
+            label: "Test",
+            action: 1,
+            selected: false,
+            enabled: true,
+            disabled_hint: "",
+            flyout: Some(test_flyout()),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // Pure interaction-logic tests (`update_hold_state`/`resolve_release`).
+    //
+    // These exercise the exact decision logic `button_with_flyout` runs,
+    // without going through egui's own pointer/hit-testing pipeline --
+    // headless `egui::Context` passes can drive `RawInput::time`
+    // deterministically (see `motion.rs`'s own tests), but egui's hit
+    // testing always tests this frame's pointer position against *last*
+    // frame's registered widget rects (`Context::begin_pass`), which makes
+    // simulating a realistic multi-frame press/hold/release/re-hover
+    // choreography from raw `Event`s exercise egui's own input plumbing far
+    // more than this crate's logic. Factoring the decision itself out as
+    // pure functions (same shape as `motion.rs`'s `Presence`) keeps the
+    // *logic* directly, deterministically testable; the presence-driven
+    // render/animate half is covered below the same way `motion.rs` covers
+    // `Presence` itself.
+    // ---------------------------------------------------------------
+
+    #[test]
+    fn short_click_fires_main_action_not_items() {
+        // Never crosses the hold threshold -- held_open stays false.
+        let (start, held) = update_hold_state(None, false, true, 0.0, true, true);
+        let (start, held) = update_hold_state(start, held, true, 0.05, true, false);
+        assert!(!held, "a short press must never latch open");
+
+        let outcome = resolve_release(held, /* main_clicked */ true, None, |_| true);
+        assert_eq!(
+            outcome,
+            ReleaseOutcome::MainAction,
+            "a short click must fire the main action, not an item"
+        );
+        let _ = start;
+    }
+
+    #[test]
+    fn hold_past_threshold_opens_without_firing_the_main_action() {
+        let (start, held) = update_hold_state(None, false, true, 0.0, true, true);
+        assert!(!held, "must not latch open before the threshold");
+        let (_, held) = update_hold_state(start, held, true, FLYOUT_HOLD_SECS + 0.01, true, false);
+        assert!(held, "must latch open once held past the threshold");
+
+        // Crossing the threshold must not itself resolve to any outcome --
+        // that only happens on release, which hasn't happened yet.
+    }
+
+    #[test]
+    fn held_open_latches_even_after_the_pointer_leaves_the_button() {
+        let (start, held) = update_hold_state(None, false, true, 0.0, true, true);
+        // Pointer drags off the button (pressed_on_button = false) but the
+        // primary button is still down -- held_open must still latch.
+        let (_, held) = update_hold_state(start, held, true, FLYOUT_HOLD_SECS + 0.01, true, false);
+        assert!(held);
+    }
+
+    #[test]
+    fn release_over_an_enabled_item_picks_it() {
+        let outcome = resolve_release(true, false, Some(0), |i| i == 0);
+        assert_eq!(outcome, ReleaseOutcome::Pick(0));
+    }
+
+    #[test]
+    fn release_over_a_disabled_item_cancels() {
+        let outcome = resolve_release(true, false, Some(1), |i| i == 0);
+        assert_eq!(
+            outcome,
+            ReleaseOutcome::Cancel,
+            "a disabled item under the pointer must never fire"
+        );
+    }
+
+    #[test]
+    fn release_elsewhere_cancels() {
+        let outcome = resolve_release(true, false, None, |_| true);
+        assert_eq!(
+            outcome,
+            ReleaseOutcome::Cancel,
+            "releasing off the flyout entirely must cancel"
+        );
+    }
+
+    #[test]
+    fn no_flyout_never_latches_open() {
+        let (start, held) = update_hold_state(None, false, false, 0.0, true, true);
+        let (_, held) = update_hold_state(start, held, false, FLYOUT_HOLD_SECS + 1.0, true, false);
+        assert!(!held, "a button with no flyout must never open one");
+    }
+
+    // ---------------------------------------------------------------
+    // Presence-driven render/animate tests (real `egui::Context`,
+    // `RawInput::time`-driven).
+    // ---------------------------------------------------------------
+
+    /// A held-open flyout that starts closing must keep rendering
+    /// (non-interactively) until its collapse animation finishes, then stop
+    /// -- the same `Presence` guarantee `motion.rs` tests directly, here
+    /// exercised through the exact id `button_with_flyout` derives for its
+    /// own presence state.
+    #[test]
+    fn closing_keeps_rendering_then_stops() {
+        let ctx = egui::Context::default();
+        let presence_id = egui::Id::new(("ribbon_flyout_button", "test_btn")).with("presence");
+
+        // Open, then immediately request closed -- mirrors what
+        // `button_with_flyout` does internally on a release-elsewhere.
+        let opened = crate::motion::presence_with(
+            &ctx,
+            presence_id,
+            true,
+            MotionSpec::EXPAND,
+            MotionSpec::COLLAPSE,
+        );
+        assert!(opened.render);
+        let closing = crate::motion::presence_with(
+            &ctx,
+            presence_id,
+            false,
+            MotionSpec::EXPAND,
+            MotionSpec::COLLAPSE,
+        );
+        assert!(
+            closing.render && !closing.interactive,
+            "must still render, non-interactively, right as closing starts"
+        );
+
+        // Advance a context pass well past COLLAPSE's duration -- `should_render`
+        // is read at that later time, so drive the input clock forward the
+        // way `motion.rs`'s own tests do.
+        ctx.begin_pass(egui::RawInput {
+            time: Some(MotionSpec::COLLAPSE.duration as f64 + 1.0),
+            ..Default::default()
+        });
+        let settled = crate::motion::presence_with(
+            &ctx,
+            presence_id,
+            false,
+            MotionSpec::EXPAND,
+            MotionSpec::COLLAPSE,
+        );
+        let _ = ctx.end_pass();
+        assert!(!settled.render, "must stop rendering once collapse settles");
+    }
+
+    /// A flyout must never grow the module frame's own row height --
+    /// `module_frame`/`ribbon_panel_modules` size the row from
+    /// `RibbonHost::button_size()` alone, and the flyout column paints in a
+    /// Foreground `Area` outside that allocation, so opening one must not
+    /// move `content_rect`'s height. The button's own held-open state is
+    /// written directly into egui temp data (rather than simulated via
+    /// pointer events -- see the pure-logic tests above for why) so the
+    /// flyout is genuinely open for the second measurement.
+    #[test]
+    fn ribbon_row_height_unchanged_with_a_flyout_open() {
+        let ctx = egui::Context::default();
+        let host = TestHost;
+        let row_h = host.button_size().y + GAP * 2.0;
+
+        let group = RibbonGroup {
+            label: "Test",
+            buttons: vec![test_button()],
+        };
+
+        let measure = |ctx: &egui::Context, t: f64| -> f32 {
+            ctx.begin_pass(egui::RawInput {
+                time: Some(t),
+                ..Default::default()
+            });
+            let mut measured_h = 0.0;
+            egui::Area::new(egui::Id::new("ribbon_test_area"))
+                .fixed_pos(egui::pos2(0.0, 0.0))
+                .show(ctx, |ui| {
+                    let content_w = group_content_width(
+                        group.buttons.len(),
+                        host.button_size().x,
+                        ui.spacing().item_spacing.x,
+                    );
+                    let mut child =
+                        module_frame(ui, group.label, content_w, row_h, host.module_frame_style());
+                    measured_h = child.max_rect().height();
+                    draw_button_row(&mut child, &group, &host, &mut Vec::new());
+                });
+            let _ = ctx.end_pass();
+            measured_h
+        };
+
+        let closed_h = measure(&ctx, 0.0);
+
+        // Force the flyout open directly in temp data -- the same keys
+        // `button_with_flyout` itself writes.
+        let id_root = egui::Id::new(("ribbon_flyout_button", "test_btn"));
+        ctx.data_mut(|d| {
+            d.insert_temp(id_root.with("press_start"), 0.0_f64);
+            d.insert_temp(id_root.with("held_open"), true);
+        });
+        let open_h = measure(&ctx, 0.01);
+        assert_eq!(
+            closed_h, open_h,
+            "opening the flyout must not change row height"
+        );
+    }
 }
