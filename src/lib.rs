@@ -9,6 +9,7 @@ pub mod dock;
 pub mod fonts;
 pub mod idle_input;
 pub mod menu;
+pub mod motion;
 pub mod os_style;
 pub mod ribbon;
 pub mod settings;

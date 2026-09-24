@@ -9,6 +9,7 @@
 //! Lunacy mockup's filled circle -- Chris's call, 2026-08-30, after seeing
 //! the mockup-accurate version rendered next to his real title bar.
 
+use crate::motion::{self, MotionSpec};
 use crate::theme::ThemePalette;
 use crate::tokens::{ColorToken, DimensionToken};
 
@@ -178,6 +179,10 @@ impl<'a> ThemedWindow<'a> {
         open: &mut bool,
         add_contents: impl FnOnce(&mut egui::Ui),
     ) -> Option<egui::Response> {
+        if self.modal {
+            return self.show_modal(ctx, open, add_contents);
+        }
+
         if !*open {
             return None;
         }
@@ -185,117 +190,12 @@ impl<'a> ThemedWindow<'a> {
         let state_key = self.id.with("chrome_state");
         let mut state: ChromeState = ctx.data(|d| d.get_temp(state_key)).unwrap_or_default();
 
-        let w = &self.palette.window;
-        let bg = resolved_color(&w.background, egui::Color32::from_rgb(0x22, 0x22, 0x26));
-        let corner_radius = resolved_px(&w.corner_radius, 12.0).round() as u8;
-        let shadow_blur = resolved_px(&w.shadow_blur, 20.0).round() as u8;
-        let shadow_color = resolved_color(&w.shadow_color, egui::Color32::from_black_alpha(0x40));
-        let border_width = resolved_px(&w.border_width, 0.0);
-        let border_color = resolved_color(&w.border_color, egui::Color32::TRANSPARENT);
-        let header_bg = resolved_color(
-            &w.header.background,
-            egui::Color32::from_rgb(0x2E, 0x2E, 0x32),
-        );
-        let header_h = resolved_px(&w.header.height, 32.0);
-        let header_border = resolved_color(
-            &w.header.border_bottom,
-            egui::Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0x26),
-        );
-        let title_color = resolved_color(&w.header.title_color, egui::Color32::WHITE);
-        let button_hover_bg = resolved_color(
-            &w.button.hover_background,
-            egui::Color32::from_rgb(0x38, 0x38, 0x3C),
-        );
-        let button_icon_color = resolved_color(&w.button.icon_color, egui::Color32::WHITE);
-
-        let frame = egui::Frame::new()
-            .fill(bg)
-            .corner_radius(corner_radius)
-            .stroke(egui::Stroke::new(border_width, border_color))
-            .shadow(egui::Shadow {
-                offset: [0, 0],
-                blur: shadow_blur,
-                spread: 0,
-                color: shadow_color,
-            })
-            .inner_margin(0);
-
-        let chrome_colors = ChromeColors {
-            corner_radius,
-            header_bg,
+        let ResolvedChrome {
+            frame,
+            colors: chrome_colors,
             header_h,
-            header_border,
-            title_color,
-            button_hover_bg,
-            button_icon_color,
-            // Sheets always attach flush to whatever's above them -- see
-            // `sheet_anchor_top`'s doc comment -- so the top corners read as
-            // square, matching what they're hanging from, not rounded.
-            flush_top: self.modal,
-        };
-
-        if self.modal {
-            // macOS "sheet" style, per Chris, 2026-08-30: hangs from the top
-            // of the parent window and slides/fades in, rather than
-            // egui::Modal's plain dead-center default. `animate_bool_with_
-            // time_and_easing` eases 0->1 exactly once, the first frame
-            // `open` becomes true, then holds at 1 -- a one-shot open
-            // animation, not a continuous oscillation.
-            //
-            // Flush-attach to `sheet_anchor_top`, per Chris's sketch
-            // (`docs/design/2026-08-30_chrome-ideas-sketch.md` idea 3, SDB
-            // repo): "true macOS sheets attach with no visible seam to the
-            // parent window's title bar" -- no rest gap (unlike the first
-            // version of this animation, which left a 28px gap and rounded
-            // top corners, "stylistically... needs work" per his live
-            // review), and the top corners are squared off above so the
-            // shadow below is the only visual separation from what it's
-            // hanging from.
-            let anim_t = ctx.animate_bool_with_time_and_easing(
-                self.id.with("sheet_anim"),
-                true,
-                0.22,
-                egui::emath::easing::cubic_out,
-            );
-            const SLIDE_FROM_PX: f32 = 40.0;
-            let offset_y = self.sheet_anchor_top - SLIDE_FROM_PX * (1.0 - anim_t);
-            let area = egui::Modal::default_area(self.id)
-                .anchor(egui::Align2::CENTER_TOP, egui::vec2(0.0, offset_y));
-            let backdrop = resolved_color(&w.shadow_color, egui::Color32::from_black_alpha(0x40))
-                .gamma_multiply(anim_t);
-
-            let sheet_frame = frame
-                .corner_radius(egui::CornerRadius {
-                    nw: 0,
-                    ne: 0,
-                    sw: corner_radius,
-                    se: corner_radius,
-                })
-                // Shifted down rather than centered on the rect, so the
-                // blur doesn't bleed out above the flush top edge -- it
-                // reads as the sheet casting a shadow downward onto what's
-                // below it, not floating free on all sides.
-                .shadow(egui::Shadow {
-                    offset: [0, (shadow_blur / 2).max(1) as i8],
-                    blur: shadow_blur,
-                    spread: 0,
-                    color: shadow_color,
-                });
-
-            let modal_response = egui::Modal::new(self.id)
-                .area(area)
-                .frame(sheet_frame)
-                .backdrop_color(backdrop)
-                .show(ctx, |ui| {
-                    ui.multiply_opacity(anim_t);
-                    self.paint_chrome(ui, ctx, open, &mut state, &chrome_colors, add_contents);
-                });
-            if modal_response.should_close() {
-                *open = false;
-            }
-            ctx.data_mut(|d| d.insert_temp(state_key, state));
-            return Some(modal_response.response);
-        }
+            ..
+        } = self.resolve_chrome();
 
         let mut window = egui::Window::new(&self.title)
             .id(self.id)
@@ -329,6 +229,269 @@ impl<'a> ThemedWindow<'a> {
         ctx.data_mut(|d| d.insert_temp(state_key, state));
 
         response.map(|inner| inner.response)
+    }
+
+    /// Resolves this window's theme tokens once into the frame/colors both
+    /// `show` (free-floating) and `show_modal` (sheet) paint with -- they
+    /// used to duplicate this resolution inline.
+    fn resolve_chrome(&self) -> ResolvedChrome {
+        let w = &self.palette.window;
+        let background = resolved_color(&w.background, egui::Color32::from_rgb(0x22, 0x22, 0x26));
+        let corner_radius = resolved_px(&w.corner_radius, 12.0).round() as u8;
+        let shadow_blur = resolved_px(&w.shadow_blur, 20.0).round() as u8;
+        let shadow_color = resolved_color(&w.shadow_color, egui::Color32::from_black_alpha(0x40));
+        let border_width = resolved_px(&w.border_width, 0.0);
+        let border_color = resolved_color(&w.border_color, egui::Color32::TRANSPARENT);
+        let header_bg = resolved_color(
+            &w.header.background,
+            egui::Color32::from_rgb(0x2E, 0x2E, 0x32),
+        );
+        let header_h = resolved_px(&w.header.height, 32.0);
+        let header_border = resolved_color(
+            &w.header.border_bottom,
+            egui::Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0x26),
+        );
+        let title_color = resolved_color(&w.header.title_color, egui::Color32::WHITE);
+        let button_hover_bg = resolved_color(
+            &w.button.hover_background,
+            egui::Color32::from_rgb(0x38, 0x38, 0x3C),
+        );
+        let button_icon_color = resolved_color(&w.button.icon_color, egui::Color32::WHITE);
+
+        let frame = egui::Frame::new()
+            .fill(background)
+            .corner_radius(corner_radius)
+            .stroke(egui::Stroke::new(border_width, border_color))
+            .shadow(egui::Shadow {
+                offset: [0, 0],
+                blur: shadow_blur,
+                spread: 0,
+                color: shadow_color,
+            })
+            .inner_margin(0);
+
+        let colors = ChromeColors {
+            corner_radius,
+            header_bg,
+            header_h,
+            header_border,
+            title_color,
+            button_hover_bg,
+            button_icon_color,
+            // Sheets always attach flush to whatever's above them -- see
+            // `sheet_anchor_top`'s doc comment -- so the top corners read as
+            // square, matching what they're hanging from, not rounded.
+            flush_top: self.modal,
+        };
+
+        ResolvedChrome {
+            frame,
+            colors,
+            header_h,
+            shadow_blur,
+            shadow_color,
+        }
+    }
+
+    /// The `modal` path of `show`: a macOS-"sheet"-style panel hanging
+    /// flush from `sheet_anchor_top`, driven by [`motion::presence_with`]
+    /// instead of the one-shot `animate_bool_with_time_and_easing` this
+    /// used to call (which only ever ran while `open`, and initialized
+    /// unseen ids at their end value -- so the slide-in never actually
+    /// played; see the design doc's 2026-09-24 review). Per Chris's sketch
+    /// (`docs/design/2026-08-30_chrome-ideas-sketch.md` idea 3, SDB repo):
+    /// true macOS sheets attach with no visible seam to what's above them,
+    /// so the top edge stays flush at all times -- the reveal animates the
+    /// *height* downward from that fixed top edge, like a window shade,
+    /// rather than sliding the whole sheet in from above (which would open
+    /// a gap under the title bar during a back-out overshoot).
+    fn show_modal(
+        self,
+        ctx: &egui::Context,
+        open: &mut bool,
+        add_contents: impl FnOnce(&mut egui::Ui),
+    ) -> Option<egui::Response> {
+        let presence_frame = motion::presence_with(
+            ctx,
+            self.id.with("sheet_presence"),
+            *open,
+            MotionSpec::EXPAND,
+            MotionSpec::COLLAPSE,
+        );
+        if !presence_frame.render {
+            return None;
+        }
+
+        let state_key = self.id.with("chrome_state");
+        let mut state: ChromeState = ctx.data(|d| d.get_temp(state_key)).unwrap_or_default();
+
+        let ResolvedChrome {
+            frame,
+            colors: chrome_colors,
+            shadow_blur,
+            shadow_color,
+            ..
+        } = self.resolve_chrome();
+
+        let sheet_frame = frame
+            .corner_radius(egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: chrome_colors.corner_radius,
+                se: chrome_colors.corner_radius,
+            })
+            // Shifted down rather than centered on the rect, so the blur
+            // doesn't bleed out above the flush top edge -- it reads as the
+            // sheet casting a shadow downward onto what's below it, not
+            // floating free on all sides.
+            .shadow(egui::Shadow {
+                offset: [0, (shadow_blur / 2).max(1) as i8],
+                blur: shadow_blur,
+                spread: 0,
+                color: shadow_color,
+            });
+
+        let content_opacity = presence_frame.reveal.clamp(0.0, 1.0);
+        let backdrop = shadow_color.gamma_multiply(content_opacity);
+
+        // The revealed height, in px, content is clipped to -- a fraction
+        // of the sheet's *natural* (fully-open) height, which we only know
+        // after laying content out. `None` on the very first frame this
+        // id is ever shown (nothing cached yet): that one frame renders
+        // unclipped rather than guessing, and every frame after uses the
+        // previous frame's measured height, which is stable for the
+        // content-sized dialogs this renders (see `paint_sheet_content`).
+        let height_key = self.id.with("sheet_natural_height");
+        let prior_height: Option<f32> = ctx.data(|d| d.get_temp(height_key));
+        let revealed_height_px = prior_height.map(|natural| {
+            motion::cap_overshoot(
+                presence_frame.reveal.max(0.0) * natural,
+                natural,
+                MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
+            )
+        });
+
+        let response = if presence_frame.interactive {
+            // Opening/Open: a real blocking modal, same as before -- the
+            // backdrop blocks input to the rest of the app, Esc/backdrop-
+            // click closes it. We paint the sheet's own frame ourselves
+            // (see `paint_sheet_content`), so no frame here.
+            let area = egui::Modal::default_area(self.id).anchor(
+                egui::Align2::CENTER_TOP,
+                egui::vec2(0.0, self.sheet_anchor_top),
+            );
+            let modal_response = egui::Modal::new(self.id)
+                .area(area)
+                .frame(egui::Frame::NONE)
+                .backdrop_color(backdrop)
+                .show(ctx, |ui| {
+                    self.paint_sheet_content(
+                        ui,
+                        ctx,
+                        open,
+                        &mut state,
+                        &chrome_colors,
+                        &sheet_frame,
+                        add_contents,
+                        revealed_height_px,
+                        content_opacity,
+                        height_key,
+                    );
+                });
+            if modal_response.should_close() {
+                *open = false;
+            }
+            modal_response.response
+        } else {
+            // Closing: keep rendering the collapse, but stop blocking the
+            // rest of the app -- a plain, non-interactable, disabled Area
+            // rather than `egui::Modal`, with the backdrop fading out
+            // alongside the content.
+            let area = egui::Area::new(self.id)
+                .order(egui::Order::Foreground)
+                .anchor(
+                    egui::Align2::CENTER_TOP,
+                    egui::vec2(0.0, self.sheet_anchor_top),
+                )
+                .interactable(false)
+                .enabled(false);
+            area.show(ctx, |ui| {
+                let bg_rect = ui.ctx().content_rect();
+                ui.painter().rect_filled(bg_rect, 0.0, backdrop);
+                self.paint_sheet_content(
+                    ui,
+                    ctx,
+                    open,
+                    &mut state,
+                    &chrome_colors,
+                    &sheet_frame,
+                    add_contents,
+                    revealed_height_px,
+                    content_opacity,
+                    height_key,
+                );
+            })
+            .response
+        };
+
+        ctx.data_mut(|d| d.insert_temp(state_key, state));
+        Some(response)
+    }
+
+    /// Paints the sheet's header/content (via `paint_chrome`) at natural
+    /// size, then paints the sheet's own frame/shadow (`sheet_frame`) at
+    /// the *revealed* rect on top -- clipping content to it -- so the
+    /// frame's bottom edge is what animates, window-shade style, while the
+    /// flush top edge never moves. `revealed_height_px` of `None` skips
+    /// clipping for this one frame (see `show_modal`). Caches this frame's
+    /// measured natural height under `natural_height_key` for the next.
+    #[allow(clippy::too_many_arguments)]
+    fn paint_sheet_content(
+        &self,
+        ui: &mut egui::Ui,
+        ctx: &egui::Context,
+        open: &mut bool,
+        state: &mut ChromeState,
+        colors: &ChromeColors,
+        sheet_frame: &egui::Frame,
+        add_contents: impl FnOnce(&mut egui::Ui),
+        revealed_height_px: Option<f32>,
+        content_opacity: f32,
+        natural_height_key: egui::Id,
+    ) {
+        // Reserved now, filled in once the natural rect is known below --
+        // mirrors `egui::Frame`'s own deferred-background-paint pattern
+        // (`Frame::begin`/`Frame::paint`), except sized to the revealed
+        // rect rather than the natural one.
+        let where_to_put_frame = ui.painter().add(egui::Shape::Noop);
+
+        let top_left = ui.cursor().min;
+        if let Some(revealed_height) = revealed_height_px {
+            ui.shrink_clip_rect(egui::Rect::from_min_size(
+                egui::pos2(f32::NEG_INFINITY, top_left.y),
+                egui::vec2(f32::INFINITY, revealed_height.max(0.0)),
+            ));
+        }
+        ui.multiply_opacity(content_opacity);
+
+        self.paint_chrome(ui, ctx, open, state, colors, add_contents);
+
+        let natural_rect = ui.min_rect();
+        ctx.data_mut(|d| d.insert_temp(natural_height_key, natural_rect.height()));
+
+        let frame_height = match revealed_height_px {
+            Some(revealed_height) => {
+                revealed_height.min(natural_rect.height() + MotionSpec::EXPAND_OVERSHOOT_CAP_PX)
+            }
+            None => natural_rect.height(),
+        }
+        .max(0.0);
+        let sheet_rect = egui::Rect::from_min_size(
+            natural_rect.min,
+            egui::vec2(natural_rect.width(), frame_height),
+        );
+        ui.painter()
+            .set(where_to_put_frame, sheet_frame.paint(sheet_rect));
     }
 
     /// Header row (title, close/maximize/minimize glyphs) plus `add_contents`
@@ -460,4 +623,142 @@ struct ChromeColors {
     button_hover_bg: egui::Color32,
     button_icon_color: egui::Color32,
     flush_top: bool,
+}
+
+/// `ThemedWindow`'s theme tokens, resolved once by `resolve_chrome` and
+/// shared by the free-floating (`show`) and sheet (`show_modal`) paths.
+struct ResolvedChrome {
+    frame: egui::Frame,
+    colors: ChromeColors,
+    header_h: f32,
+    shadow_blur: u8,
+    shadow_color: egui::Color32,
+}
+
+#[cfg(test)]
+mod modal_tests {
+    use super::*;
+    use crate::motion::Presence;
+
+    /// Drives one egui pass at time `t` (see `motion.rs`'s own `step` test
+    /// helper for why `begin_pass`/`end_pass` rather than `Context::run`).
+    fn step<R>(ctx: &egui::Context, t: f64, f: impl FnOnce(&egui::Context) -> R) -> R {
+        ctx.begin_pass(egui::RawInput {
+            time: Some(t),
+            ..Default::default()
+        });
+        let result = f(ctx);
+        let _ = ctx.end_pass();
+        result
+    }
+
+    /// Mirrors `motion::presence_key`'s (private) key composition --
+    /// `show_modal` stores its `Presence` under `self.id.with("sheet_
+    /// presence")`, which `presence_with` further salts internally.
+    fn reveal_of(ctx: &egui::Context, id: egui::Id, now: f64) -> f32 {
+        let key = id
+            .with("sheet_presence")
+            .with("spatial_ui_kit::motion::presence");
+        let presence: Presence = ctx
+            .data(|d| d.get_temp(key))
+            .expect("presence should exist after showing a modal ThemedWindow at least once");
+        presence.reveal(now)
+    }
+
+    fn show_sheet(
+        ctx: &egui::Context,
+        palette: &ThemePalette,
+        id_source: &str,
+        open: &mut bool,
+        t: f64,
+    ) -> Option<egui::Response> {
+        step(ctx, t, |ctx| {
+            ThemedWindow::new(id_source, "Test", palette)
+                .modal(true)
+                .headerless(true)
+                .show(ctx, open, |ui| {
+                    ui.label("content");
+                })
+        })
+    }
+
+    #[test]
+    fn sheet_reveal_is_less_than_one_on_first_open_frame() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let id = egui::Id::new("modal_regression_a");
+        let mut open = true;
+        show_sheet(&ctx, &palette, "modal_regression_a", &mut open, 0.0);
+        assert!(reveal_of(&ctx, id, 0.0) < 1.0);
+    }
+
+    #[test]
+    fn sheet_reveal_is_less_than_one_on_second_open_after_closing() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let id = egui::Id::new("modal_regression_b");
+        let mut open = true;
+
+        // First open, then settle.
+        show_sheet(&ctx, &palette, "modal_regression_b", &mut open, 0.0);
+        let settled = MotionSpec::EXPAND.duration as f64 + 1.0;
+        show_sheet(&ctx, &palette, "modal_regression_b", &mut open, settled);
+        assert!((reveal_of(&ctx, id, settled) - 1.0).abs() < 1e-4);
+
+        // Close, then settle -- must stop rendering once fully closed.
+        open = false;
+        show_sheet(&ctx, &palette, "modal_regression_b", &mut open, settled);
+        let closed_at = settled + MotionSpec::COLLAPSE.duration as f64 + 1.0;
+        let response = show_sheet(&ctx, &palette, "modal_regression_b", &mut open, closed_at);
+        assert!(response.is_none());
+
+        // Reopen: must animate again from 0, not jump straight to 1.0.
+        open = true;
+        let reopened_at = closed_at + 1.0;
+        show_sheet(&ctx, &palette, "modal_regression_b", &mut open, reopened_at);
+        assert!(reveal_of(&ctx, id, reopened_at) < 1.0);
+    }
+
+    #[test]
+    fn sheet_keeps_rendering_while_closing_then_stops() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let mut open = true;
+
+        show_sheet(&ctx, &palette, "modal_regression_c", &mut open, 0.0);
+        let settled = MotionSpec::EXPAND.duration as f64 + 1.0;
+        show_sheet(&ctx, &palette, "modal_regression_c", &mut open, settled);
+
+        open = false;
+        let mid_close = settled + MotionSpec::COLLAPSE.duration as f64 * 0.5;
+        let rendered_mid_close =
+            show_sheet(&ctx, &palette, "modal_regression_c", &mut open, mid_close);
+        assert!(rendered_mid_close.is_some());
+
+        let after_close = settled + MotionSpec::COLLAPSE.duration as f64 + 1.0;
+        let rendered_after_close =
+            show_sheet(&ctx, &palette, "modal_regression_c", &mut open, after_close);
+        assert!(rendered_after_close.is_none());
+    }
+
+    #[test]
+    fn non_modal_window_behaves_as_before_no_early_animation_state() {
+        // Non-modal windows must not go through `show_modal` at all -- no
+        // presence stored for them.
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let id = egui::Id::new("non_modal_regression");
+        let mut open = true;
+        step(&ctx, 0.0, |ctx| {
+            ThemedWindow::new("non_modal_regression", "Test", &palette).show(
+                ctx,
+                &mut open,
+                |ui| {
+                    ui.label("content");
+                },
+            );
+        });
+        let stored: Option<Presence> = ctx.data(|d| d.get_temp(id.with("sheet_presence")));
+        assert!(stored.is_none());
+    }
 }
