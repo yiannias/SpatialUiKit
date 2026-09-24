@@ -118,6 +118,32 @@ impl InterfaceScale {
         }
     }
 
+    /// Returns the next larger preset, clamped at P150.
+    pub fn larger(self) -> InterfaceScale {
+        match self {
+            InterfaceScale::P80 => InterfaceScale::P90,
+            InterfaceScale::P90 => InterfaceScale::P100,
+            InterfaceScale::P100 => InterfaceScale::P110,
+            InterfaceScale::P110 => InterfaceScale::P115,
+            InterfaceScale::P115 => InterfaceScale::P125,
+            InterfaceScale::P125 => InterfaceScale::P150,
+            InterfaceScale::P150 => InterfaceScale::P150,
+        }
+    }
+
+    /// Returns the next smaller preset, clamped at P80.
+    pub fn smaller(self) -> InterfaceScale {
+        match self {
+            InterfaceScale::P80 => InterfaceScale::P80,
+            InterfaceScale::P90 => InterfaceScale::P80,
+            InterfaceScale::P100 => InterfaceScale::P90,
+            InterfaceScale::P110 => InterfaceScale::P100,
+            InterfaceScale::P115 => InterfaceScale::P110,
+            InterfaceScale::P125 => InterfaceScale::P115,
+            InterfaceScale::P150 => InterfaceScale::P125,
+        }
+    }
+
     pub const ALL: [InterfaceScale; 7] = [
         InterfaceScale::P80,
         InterfaceScale::P90,
@@ -552,6 +578,28 @@ mod theme_palette_tests {
         let labels: std::collections::HashSet<_> =
             InterfaceScale::ALL.iter().map(|s| s.label()).collect();
         assert_eq!(labels.len(), InterfaceScale::ALL.len());
+    }
+
+    #[test]
+    fn interface_scale_larger_steps_correctly() {
+        assert_eq!(InterfaceScale::P80.larger(), InterfaceScale::P90);
+        assert_eq!(InterfaceScale::P90.larger(), InterfaceScale::P100);
+        assert_eq!(InterfaceScale::P100.larger(), InterfaceScale::P110);
+        assert_eq!(InterfaceScale::P110.larger(), InterfaceScale::P115);
+        assert_eq!(InterfaceScale::P115.larger(), InterfaceScale::P125);
+        assert_eq!(InterfaceScale::P125.larger(), InterfaceScale::P150);
+        assert_eq!(InterfaceScale::P150.larger(), InterfaceScale::P150);
+    }
+
+    #[test]
+    fn interface_scale_smaller_steps_correctly() {
+        assert_eq!(InterfaceScale::P80.smaller(), InterfaceScale::P80);
+        assert_eq!(InterfaceScale::P90.smaller(), InterfaceScale::P80);
+        assert_eq!(InterfaceScale::P100.smaller(), InterfaceScale::P90);
+        assert_eq!(InterfaceScale::P110.smaller(), InterfaceScale::P100);
+        assert_eq!(InterfaceScale::P115.smaller(), InterfaceScale::P110);
+        assert_eq!(InterfaceScale::P125.smaller(), InterfaceScale::P115);
+        assert_eq!(InterfaceScale::P150.smaller(), InterfaceScale::P125);
     }
 
     #[test]
