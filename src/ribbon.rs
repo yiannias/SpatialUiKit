@@ -286,6 +286,11 @@ const LABEL_STRIP_W: f32 = 16.0;
 /// match this one number instead of each guessing its own -- same
 /// motivation as `GAP`'s own `pub` doc comment.
 pub const FRAME_RADIUS: f32 = 8.0;
+/// Proportion of the pod's own height `row_h` that its corner radius (and,
+/// per [`pod_corner_radius`]'s doc comment, the flow-out fillet radius) is
+/// drawn at -- `docs/design/2026-09-24_ribbon-pods-spec.md`'s proportion
+/// table: "Pod corner radius: 18 sketch units / 0.138 of H / 8px at H=56".
+const FRAME_RADIUS_PROPORTION: f32 = 0.138;
 const FRAME_STROKE: egui::Color32 = egui::Color32::from_rgb(58, 59, 64);
 /// A module label pill's own colors -- the same pair the old DRAFT tag used,
 /// carried over because Chris liked that look ("I like the graphical
@@ -373,6 +378,30 @@ fn group_content_width_var<A>(
 /// whoever wrote the label in the first place (`context.rs`'s group
 /// constructors), not a generic truncation rule that would produce
 /// nonsense like "DIME" for an arbitrary cutoff.
+/// Corner radius for a pod (module capsule) *and* its flow-out fillets,
+/// derived from the pod's own height `row_h` -- `0.138 * row_h`, per
+/// `docs/design/2026-09-24_ribbon-pods-spec.md`'s proportion table (8px at
+/// the default `row_h` = 56).
+///
+/// **Root cause of "flares lose their place when Interface Scale is
+/// raised"** (2026-09-24 designer markup, `docs/design/
+/// 2026-09-24_flyout-end-condition.md`): the flyout fillet and the pod's own
+/// corner used to both read the flat literal `FRAME_RADIUS` independently --
+/// two call sites that happened to agree only because nobody had yet made
+/// `row_h` vary without also changing that literal by hand. `row_h` itself
+/// already scales correctly with Interface Scale/Text Size (it flows from
+/// `RibbonHost::button_size()`, all in egui points, so `ctx.set_zoom_factor`
+/// scales it uniformly like everything else painted in points) -- the bug
+/// was never really a points-vs-pixels mismatch, it was that the corner and
+/// the fillet had no enforced relationship, so any future divergence between
+/// them (a host overriding button size, a proportion tweak on one call site
+/// and not the other) reads as the fillet drifting off the corner it is
+/// supposed to continue. Routing both through this one function makes that
+/// class of bug impossible instead of merely coincidentally absent.
+pub fn pod_corner_radius(row_h: f32) -> f32 {
+    (row_h * FRAME_RADIUS_PROPORTION).max(1.0)
+}
+
 fn module_frame(
     ui: &mut egui::Ui,
     label: &str,
@@ -383,6 +412,7 @@ fn module_frame(
     let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
     let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(LABEL_STRIP_W, row_h));
+    let frame_radius = pod_corner_radius(row_h);
     if ui.is_rect_visible(outer_rect) {
         // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
         // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
@@ -398,14 +428,14 @@ fn module_frame(
         // see `sdb_app::frame`'s dock-`Area` doc comment for the fuller
         // fix that replaced it.)
         ui.painter()
-            .rect_filled(outer_rect, FRAME_RADIUS, ui.visuals().window_fill());
+            .rect_filled(outer_rect, frame_radius, ui.visuals().window_fill());
         ui.painter().rect_stroke(
             outer_rect,
-            FRAME_RADIUS,
+            frame_radius,
             egui::Stroke::new(style.border_width, style.border),
             egui::StrokeKind::Inside,
         );
-        let radius = FRAME_RADIUS as u8;
+        let radius = frame_radius.round().clamp(0.0, u8::MAX as f32) as u8;
         let pill_radius = egui::CornerRadius {
             nw: radius,
             sw: radius,
@@ -469,8 +499,16 @@ fn draw_button_row<A: Clone>(
     host: &impl RibbonHost,
     actions: &mut Vec<A>,
 ) {
-    for button in &group.buttons {
-        actions.extend(button_with_flyout(ui, host, button));
+    let last = group.buttons.len().saturating_sub(1);
+    for (i, button) in group.buttons.iter().enumerate() {
+        // First/last button in the pod gets a Flush join on its *outer*
+        // side (left for the first, right for the last) -- an "L" end
+        // condition, per `docs/design/2026-09-24_flyout-end-condition.md`.
+        // A pod with exactly one button is both first and last: both sides
+        // flush, the mirror-image degenerate case.
+        let left = if i == 0 { Join::Flush } else { Join::Flare };
+        let right = if i == last { Join::Flush } else { Join::Flare };
+        actions.extend(button_with_flyout_joined(ui, host, button, left, right));
     }
 }
 
@@ -573,6 +611,25 @@ pub fn button_with_flyout<A: Clone>(
     host: &dyn RibbonHost,
     button: &RibbonButton<A>,
 ) -> Vec<A> {
+    button_with_flyout_joined(ui, host, button, Join::Flare, Join::Flare)
+}
+
+/// As [`button_with_flyout`], with explicit end-condition [`Join`]s for the
+/// flyout's own left/right sides -- [`draw_button_row`] uses this, deriving
+/// `left`/`right` from the button's position in its group (`Flush` on the
+/// pod's own first/last button's outer side, `Flare` everywhere else). A
+/// caller that draws its own button row by hand (an app's `RibbonModule::
+/// Custom` render) and wants correct end conditions should call this
+/// directly instead of the plain `button_with_flyout`, which always flares
+/// both sides (the historical behavior, and still correct for a button that
+/// is never at a pod's own edge).
+pub fn button_with_flyout_joined<A: Clone>(
+    ui: &mut egui::Ui,
+    host: &dyn RibbonHost,
+    button: &RibbonButton<A>,
+    left: Join,
+    right: Join,
+) -> Vec<A> {
     let mut actions: Vec<A> = Vec::new();
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
@@ -622,7 +679,9 @@ pub fn button_with_flyout<A: Clone>(
     let mut hovered_item: Option<usize> = None;
     if let Some(flyout) = &button.flyout {
         if presence.render {
-            hovered_item = draw_flyout_column(ui, host, button.key, resp.rect, flyout, presence);
+            hovered_item = draw_flyout_column(
+                ui, host, button.key, resp.rect, flyout, left, right, presence,
+            );
         }
     }
 
@@ -704,17 +763,59 @@ fn draw_hold_hint(ui: &egui::Ui, icon_rect: egui::Rect) {
 /// point already pushed onto the path).
 const FLOW_OUT_ARC_SEGMENTS: usize = 8;
 
+/// How one side of a [`flow_out_outline`]/[`paint_flow_out`] shape meets the
+/// pod above it -- `docs/design/2026-09-24_flyout-end-condition.md`: a
+/// flyout under a *middle* button gets a flare on both sides (a "T" join); a
+/// flyout under the pod's *first or last* button continues that side's
+/// straight outer edge straight down instead (an "L" join, the flare only on
+/// the inner side). The caller decides which from the held button's position
+/// in its own pod -- this type just carries the decision into the geometry.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Join {
+    /// Concave fillet flaring outward from the pod's straight edge, into a
+    /// convex rounded corner at the column's bottom on this side.
+    Flare,
+    /// This side continues the pod's straight outer edge straight down --
+    /// no flare, no rounded corner, the column's edge flush with the pod's.
+    Flush,
+}
+
+/// Points along a quarter-circle-or-less arc of radius `r` centred at
+/// `centre`, from angle `from` to `to`, `FLOW_OUT_ARC_SEGMENTS` of them, not
+/// including the arc's own mathematical start point (the caller's previous
+/// point already coincides with it). Shared by [`flow_out_outline`] (the
+/// stroked path) and [`paint_flow_out`] (the fanned fill wedges), so the two
+/// can never sample an arc differently.
+fn flow_out_arc_points(r: f32, centre: egui::Pos2, from: f32, to: f32) -> Vec<egui::Pos2> {
+    (1..=FLOW_OUT_ARC_SEGMENTS)
+        .map(|i| {
+            let t = i as f32 / FLOW_OUT_ARC_SEGMENTS as f32;
+            let theta = egui::lerp(from..=to, t);
+            egui::pos2(centre.x + r * theta.cos(), centre.y + r * theta.sin())
+        })
+        .collect()
+}
+
+/// Clamps a fillet radius to what `column` can actually hold: at most half
+/// its width, and at most half its own height above `attach`'s bottom edge
+/// -- so a narrow or barely-open column still produces a valid, finite
+/// outline. Shared by [`flow_out_outline`] and [`paint_flow_out`] so the two
+/// can never clamp differently.
+fn flow_out_radius(attach: egui::Rect, column: egui::Rect, r: f32) -> f32 {
+    let vertical_room = ((column.bottom() - attach.bottom()) / 2.0).max(0.0);
+    r.min(column.width() / 2.0).min(vertical_room).max(0.0)
+}
+
 /// Builds the "flow-out" outline: an OPEN path (not closed along the pod's
 /// bottom edge) that reads as the pod's own silhouette extending down into
 /// the flyout column, per `docs/design/2026-09-24_flyout-flow-out-markup.md`.
 ///
 /// `attach` is the held button's rect (its bottom edge is the pod's bottom
 /// edge, `y0`); `column` is the flyout column's rect (its top is `y0`). `r`
-/// is the fillet radius -- clamped to `column.width() / 2` and
-/// `(column.bottom() - y0) / 2` so a narrow or barely-open column still
-/// produces a valid, finite outline.
+/// is the fillet radius, clamped via [`flow_out_radius`]. `left`/`right`
+/// choose a flare or a flush join per side -- see [`Join`].
 ///
-/// Path, left to right (screen coordinates, y down):
+/// Path, left to right (screen coordinates, y down), both sides flared:
 /// - `(L - r, y0)` on the pod's bottom edge.
 /// - Left concave fillet: quarter circle centred `(L - r, y0 + r)`, angle
 ///   `-90°` to `0°` -- curves from the pod bottom down into the column's
@@ -727,47 +828,90 @@ const FLOW_OUT_ARC_SEGMENTS: usize = 8;
 /// - Right concave fillet: centred `(R + r, y0 + r)`, `180°` to `270°`,
 ///   ending at `(R + r, y0)`.
 ///
+/// A flushed side instead runs a single straight line from `(edge, y0)` down
+/// to `(edge, B)`, with no arc and no flare tip past the column's own edge --
+/// per the spec, "the flush side's outline is a straight vertical line from
+/// y0 down".
+///
 /// Deliberately never closed back along `y = y0` between `L` and `R` -- that
 /// segment is the pod-bottom seam the designer's markup crossed out; the
 /// flyout must not draw it.
-pub fn flow_out_outline(attach: egui::Rect, column: egui::Rect, r: f32) -> Vec<egui::Pos2> {
+pub fn flow_out_outline(
+    attach: egui::Rect,
+    column: egui::Rect,
+    r: f32,
+    left: Join,
+    right: Join,
+) -> Vec<egui::Pos2> {
     use std::f32::consts::{FRAC_PI_2, PI};
 
     let y0 = attach.bottom();
     let l = column.left();
-    let right = column.right();
+    let right_x = column.right();
     let b = column.bottom();
-    let vertical_room = ((b - y0) / 2.0).max(0.0);
-    let r = r.min(column.width() / 2.0).min(vertical_room).max(0.0);
+    let r = flow_out_radius(attach, column, r);
 
     let mut pts = Vec::with_capacity(4 * FLOW_OUT_ARC_SEGMENTS + 5);
-    let arc = |centre: egui::Pos2, from: f32, to: f32, out: &mut Vec<egui::Pos2>| {
-        for i in 1..=FLOW_OUT_ARC_SEGMENTS {
-            let t = i as f32 / FLOW_OUT_ARC_SEGMENTS as f32;
-            let theta = egui::lerp(from..=to, t);
-            out.push(egui::pos2(
-                centre.x + r * theta.cos(),
-                centre.y + r * theta.sin(),
+
+    match left {
+        Join::Flare => {
+            // Start on the pod bottom, left of the column.
+            pts.push(egui::pos2(l - r, y0));
+            // Left concave fillet: -90deg -> 0deg, centred (L - r, y0 + r).
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(l - r, y0 + r),
+                -FRAC_PI_2,
+                0.0,
+            ));
+            // Down the left side.
+            pts.push(egui::pos2(l, b - r));
+            // Bottom-left convex corner: 180deg -> 90deg, centred (L + r, B - r).
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(l + r, b - r),
+                PI,
+                FRAC_PI_2,
             ));
         }
-    };
+        Join::Flush => {
+            // Straight down the pod's own outer edge -- no flare, no rounded
+            // corner, per the end-condition spec.
+            pts.push(egui::pos2(l, y0));
+            pts.push(egui::pos2(l, b));
+        }
+    }
 
-    // Start on the pod bottom, left of the column.
-    pts.push(egui::pos2(l - r, y0));
-    // Left concave fillet: -90deg -> 0deg, centred (L - r, y0 + r).
-    arc(egui::pos2(l - r, y0 + r), -FRAC_PI_2, 0.0, &mut pts);
-    // Down the left side.
-    pts.push(egui::pos2(l, b - r));
-    // Bottom-left convex corner: 180deg -> 90deg, centred (L + r, B - r).
-    arc(egui::pos2(l + r, b - r), PI, FRAC_PI_2, &mut pts);
-    // Along the bottom.
-    pts.push(egui::pos2(right - r, b));
-    // Bottom-right convex corner: 90deg -> 0deg, centred (R - r, B - r).
-    arc(egui::pos2(right - r, b - r), FRAC_PI_2, 0.0, &mut pts);
-    // Up the right side.
-    pts.push(egui::pos2(right, y0 + r));
-    // Right concave fillet: 180deg -> 270deg, centred (R + r, y0 + r).
-    arc(egui::pos2(right + r, y0 + r), PI, PI + FRAC_PI_2, &mut pts);
+    // Along the bottom, to wherever the right side's own segment starts.
+    let right_bottom_x = match right {
+        Join::Flare => right_x - r,
+        Join::Flush => right_x,
+    };
+    pts.push(egui::pos2(right_bottom_x, b));
+
+    match right {
+        Join::Flare => {
+            // Bottom-right convex corner: 90deg -> 0deg, centred (R - r, B - r).
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(right_x - r, b - r),
+                FRAC_PI_2,
+                0.0,
+            ));
+            // Up the right side.
+            pts.push(egui::pos2(right_x, y0 + r));
+            // Right concave fillet: 180deg -> 270deg, centred (R + r, y0 + r).
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(right_x + r, y0 + r),
+                PI,
+                PI + FRAC_PI_2,
+            ));
+        }
+        Join::Flush => {
+            pts.push(egui::pos2(right_x, y0));
+        }
+    }
 
     pts
 }
@@ -779,91 +923,131 @@ pub fn flow_out_outline(attach: egui::Rect, column: egui::Rect, r: f32) -> Vec<e
 /// pod's own border stroke so the two read as one continuous line.
 ///
 /// Fill pieces:
-/// - the column body, rounded only on its bottom corners, with its top
-///   raised by `stroke.width` so it also overpaints the pod's bottom border
-///   under the held button;
-/// - each fillet wedge -- the corner point `(L, y0)` / `(R, y0)` fanned with
-///   that side's arc points, which `egui` can fan-triangulate correctly
-///   because every arc point is visible from the corner point in a single
-///   sweep (the polygon is star-shaped from that corner, even though it
-///   isn't convex as a whole);
-/// - a thin strip above each wedge, `stroke.width` tall, so the pod border
-///   is erased across the fillets' full flare (`[L - r, R + r]`), not just
-///   the column's own width.
+/// - the column body, rounded only on the bottom corners of `Join::Flare`
+///   sides (square on a `Join::Flush` side, per the end-condition spec),
+///   with its top raised by `stroke.width` so it also overpaints the pod's
+///   bottom border under the held button;
+/// - each `Flare` side's fillet wedge -- the corner point `(L, y0)` / `(R,
+///   y0)` fanned with that side's arc points, which `egui` can
+///   fan-triangulate correctly because every arc point is visible from the
+///   corner point in a single sweep (the polygon is star-shaped from that
+///   corner, even though it isn't convex as a whole) -- plus a thin strip
+///   above it, `stroke.width` tall, so the pod border is erased across the
+///   fillet's full flare, not just the column's own width;
+/// - on a `Flush` side, a small square patch sized to `r` at the pod's own
+///   corner instead, so the pod's rounded corner there is painted over and
+///   reads as square -- the straight stroke drawn on top then continues
+///   unbroken from the pod's edge into the column's.
 ///
-/// `painter`'s clip rect must already include that flare -- callers should
-/// expand their clip by `r + stroke.width` on both sides of `column` before
-/// calling this.
+/// `painter`'s clip rect must already include the flare (on whichever sides
+/// have one) -- callers should expand their clip by `r + stroke.width` past
+/// `column` on a `Flare` side, `stroke.width` alone on a `Flush` side.
 pub fn paint_flow_out(
     painter: &egui::Painter,
     attach: egui::Rect,
     column: egui::Rect,
     r: f32,
+    left: Join,
+    right: Join,
     fill: egui::Color32,
     stroke: egui::Stroke,
 ) {
     let y0 = attach.bottom();
     let l = column.left();
-    let right = column.right();
+    let right_x = column.right();
     let b = column.bottom();
-    let vertical_room = ((b - y0) / 2.0).max(0.0);
-    let r = r.min(column.width() / 2.0).min(vertical_room).max(0.0);
+    let r = flow_out_radius(attach, column, r);
     let bw = stroke.width.max(0.0);
 
-    let outline = flow_out_outline(attach, column, r);
-    // `outline` layout: [seam-left, 8 left-arc pts, side, 8 corner pts, bottom,
-    // 8 corner pts, side, 8 right-arc pts]. The left arc (seam point through
-    // (L, y0+r)) is the first 9 points; the right arc (through (R+r, y0)) is
-    // the last 9.
-    let left_arc = &outline[0..=FLOW_OUT_ARC_SEGMENTS];
-    let right_arc = &outline[outline.len() - FLOW_OUT_ARC_SEGMENTS - 1..];
+    let outline = flow_out_outline(attach, column, r, left, right);
 
-    // (a) column body, bottom corners rounded, top raised to erase the pod
-    // border under the button.
+    // (a) column body, bottom corners rounded only on `Flare` sides, top
+    // raised to erase the pod border under the button.
     if b > y0 - bw {
-        let body = egui::Rect::from_min_max(egui::pos2(l, y0 - bw), egui::pos2(right, b));
-        let corner_r = r.round().clamp(0.0, u8::MAX as f32) as u8;
+        let body = egui::Rect::from_min_max(egui::pos2(l, y0 - bw), egui::pos2(right_x, b));
+        let flare_r = r.round().clamp(0.0, u8::MAX as f32) as u8;
+        let sw = if left == Join::Flare { flare_r } else { 0 };
+        let se = if right == Join::Flare { flare_r } else { 0 };
         painter.rect_filled(
             body,
             egui::CornerRadius {
                 nw: 0,
                 ne: 0,
-                sw: corner_r,
-                se: corner_r,
+                sw,
+                se,
             },
             fill,
         );
     }
 
-    // (b) fillet wedges, fanned from each corner point, plus the erasure
-    // strip above each one.
     if r > 0.0 {
-        let mut left_wedge = Vec::with_capacity(left_arc.len() + 1);
-        left_wedge.push(egui::pos2(l, y0));
-        left_wedge.extend_from_slice(left_arc);
-        painter.add(egui::Shape::convex_polygon(
-            left_wedge,
-            fill,
-            egui::Stroke::NONE,
-        ));
+        // (b) fillet wedges + erasure strip, `Flare` sides only.
+        if left == Join::Flare {
+            let mut left_wedge = Vec::with_capacity(FLOW_OUT_ARC_SEGMENTS + 2);
+            left_wedge.push(egui::pos2(l, y0));
+            left_wedge.push(egui::pos2(l - r, y0));
+            left_wedge.extend(flow_out_arc_points(
+                r,
+                egui::pos2(l - r, y0 + r),
+                -std::f32::consts::FRAC_PI_2,
+                0.0,
+            ));
+            painter.add(egui::Shape::convex_polygon(
+                left_wedge,
+                fill,
+                egui::Stroke::NONE,
+            ));
+            if bw > 0.0 {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(egui::pos2(l - r, y0 - bw), egui::pos2(l, y0)),
+                    0.0,
+                    fill,
+                );
+            }
+        }
+        if right == Join::Flare {
+            let mut right_wedge = Vec::with_capacity(FLOW_OUT_ARC_SEGMENTS + 2);
+            right_wedge.push(egui::pos2(right_x, y0));
+            right_wedge.push(egui::pos2(right_x, y0 + r));
+            right_wedge.extend(flow_out_arc_points(
+                r,
+                egui::pos2(right_x + r, y0 + r),
+                std::f32::consts::PI,
+                std::f32::consts::PI + std::f32::consts::FRAC_PI_2,
+            ));
+            painter.add(egui::Shape::convex_polygon(
+                right_wedge,
+                fill,
+                egui::Stroke::NONE,
+            ));
+            if bw > 0.0 {
+                painter.rect_filled(
+                    egui::Rect::from_min_max(
+                        egui::pos2(right_x, y0 - bw),
+                        egui::pos2(right_x + r, y0),
+                    ),
+                    0.0,
+                    fill,
+                );
+            }
+        }
 
-        let mut right_wedge = Vec::with_capacity(right_arc.len() + 1);
-        right_wedge.push(egui::pos2(right, y0));
-        right_wedge.extend_from_slice(right_arc);
-        painter.add(egui::Shape::convex_polygon(
-            right_wedge,
-            fill,
-            egui::Stroke::NONE,
-        ));
-
-        if bw > 0.0 {
+        // (c) `Flush` sides: cover the pod's own rounded corner so it reads
+        // square -- a patch the size of that corner's own radius, right at
+        // the pod's edge.
+        if left == Join::Flush {
             painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(l - r, y0 - bw), egui::pos2(l, y0)),
+                egui::Rect::from_min_max(egui::pos2(l, y0 - r - bw), egui::pos2(l + r, y0)),
                 0.0,
                 fill,
             );
+        }
+        if right == Join::Flush {
             painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(right, y0 - bw), egui::pos2(right + r, y0)),
+                egui::Rect::from_min_max(
+                    egui::pos2(right_x - r, y0 - r - bw),
+                    egui::pos2(right_x, y0),
+                ),
                 0.0,
                 fill,
             );
@@ -885,81 +1069,146 @@ pub fn paint_flow_out(
 /// frame, if any -- the caller (`button_with_flyout`) decides whether that
 /// counts as a pick (only while `presence.interactive`, i.e. not while
 /// closing).
+/// Fraction of the final width/height/radius the flyout starts at, at
+/// `reveal == 0` -- the "small bump/neck emerging from the pod bottom" shape
+/// the Dynamic-Island-style morph opens from
+/// (`docs/design/2026-09-19_animated-reveals-transforms.md`), rather than a
+/// full-width column that merely grows downward.
+const FLOW_OUT_NECK_FRACTION: f32 = 0.4;
+
+/// Reveal threshold past which items start fading/sliding in -- below this
+/// the flyout is still mostly "shape", per the morph spec's "items fade/
+/// slide in only after the shape is ~60% open". Also, run in reverse, the
+/// reason closing reads as "items fade first, then the shape retracts": the
+/// same single `presence.reveal` value drives both, so items reach zero
+/// opacity at `reveal == ITEMS_REVEAL_THRESHOLD` while the shape itself
+/// keeps shrinking all the way down to `reveal == 0`.
+const ITEMS_REVEAL_THRESHOLD: f32 = 0.6;
+
 fn draw_flyout_column<A>(
     ui: &mut egui::Ui,
     host: &dyn RibbonHost,
     key: &'static str,
     anchor_rect: egui::Rect,
     flyout: &RibbonFlyout<A>,
+    left: Join,
+    right: Join,
     presence: crate::motion::PresenceFrame,
 ) -> Option<usize> {
     let ctx = ui.ctx().clone();
     let style = host.module_frame_style();
     let button_size = host.button_size();
     let item_h = button_size.y;
-    let natural_h = item_h * flyout.items.len().max(1) as f32;
-    // The flow-out shape's fillets must be present from the first frame
-    // (`docs/design/2026-09-24_flyout-flow-out-markup.md`), so the reveal
-    // animation grows the column's bottom edge from `y0 + 2*FRAME_RADIUS`
-    // (clamped to `natural_h`, for very short columns) up to the full
-    // height, rather than from zero.
-    let min_reveal_h = (2.0 * FRAME_RADIUS).min(natural_h);
-    let grow_span = (natural_h - min_reveal_h).max(0.0);
-    let revealed_h = min_reveal_h
-        + crate::motion::cap_overshoot(
-            grow_span * presence.reveal.max(0.0),
-            grow_span,
-            MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
-        )
-        .clamp(0.0, grow_span + MotionSpec::EXPAND_OVERSHOOT_CAP_PX);
-    let opacity = presence.reveal.clamp(0.0, 1.0);
-    // Wide enough for the anchor button *and* every item's own content --
-    // fixes items with a longer caption than the button that opens them
-    // (e.g. Output's flyout: "print"/"pdf"/"image"/"publish" against the
-    // "output" button) reading clipped at the column's right edge.
-    let col_w = flyout
+    let row_h = item_h + GAP * 2.0;
+    let r = pod_corner_radius(row_h);
+
+    // Padding around each item's glyph+caption, and around the column as a
+    // whole -- `docs/design/2026-09-24_flyout-end-condition.md`: "we don't
+    // have to be quite so stingy with the screen real estate", sized off the
+    // pod's own proportion system (`~0.17*H` is the same gap the pod uses
+    // between its own buttons; `~0.12*H`/`~0.15*H` are new flyout-only
+    // proportions in that spirit).
+    let pad_h = 0.17 * row_h;
+    let pad_v_between = 0.12 * row_h;
+    let pad_v_col = 0.15 * row_h;
+
+    let n = flyout.items.len().max(1) as f32;
+    let natural_h = 2.0 * pad_v_col + item_h * n + pad_v_between * (n - 1.0).max(0.0);
+
+    // Wide enough for the anchor button *and* every item's own content, plus
+    // horizontal padding each side -- fixes items with a longer caption than
+    // the button that opens them (e.g. Output's flyout: "print"/"pdf"/
+    // "image"/"publish" against the "output" button) reading clipped or
+    // packed tight at the column's edge.
+    let content_w = flyout
         .items
         .iter()
         .fold(anchor_rect.width().max(button_size.x), |w, item| {
             w.max(host.button_width(ui, item.key, item.label))
         });
-    let col_min = anchor_rect.left_bottom();
-    let full_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, natural_h));
-    let visible_rect = egui::Rect::from_min_size(col_min, egui::vec2(col_w, revealed_h));
+    let final_w = content_w + 2.0 * pad_h;
+
+    // The column's final left edge and horizontal centre -- symmetric growth
+    // past the anchor button on both sides for a T join, but pinned flush to
+    // the anchor's outer edge (growing only inward) on a Flush side, per the
+    // end-condition spec's "if wider, it grows symmetrically (but a Flush
+    // side stays flush -- grow toward the inner side)".
+    let final_left = match (left, right) {
+        (Join::Flush, _) => anchor_rect.left(),
+        (_, Join::Flush) => anchor_rect.right() - final_w,
+        _ => anchor_rect.center().x - final_w / 2.0,
+    };
+    let final_centre_x = final_left + final_w / 2.0;
+
+    // -- Shape morph: width, height and fillet radius all animate together
+    // from a small neck to the final shape, using the same `presence.reveal`
+    // (already `MotionSpec::EXPAND`'s springy back-out while opening,
+    // `MotionSpec::COLLAPSE`'s plain ease-out while closing -- see
+    // `button_with_flyout`). Overshoot on each is capped at
+    // `MotionSpec::EXPAND_OVERSHOOT_CAP_PX`, paint-only, and never feeds back
+    // into ribbon layout (this whole function draws into a Foreground `Area`
+    // that never affects row height).
+    let grow = |start_frac: f32, target: f32| -> f32 {
+        let start = target * start_frac;
+        let span = (target - start).max(0.0);
+        start
+            + crate::motion::cap_overshoot(
+                span * presence.reveal.max(0.0),
+                span,
+                MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
+            )
+            .clamp(0.0, span + MotionSpec::EXPAND_OVERSHOOT_CAP_PX)
+    };
+    let revealed_w = grow(FLOW_OUT_NECK_FRACTION, final_w);
+    let revealed_h = grow(FLOW_OUT_NECK_FRACTION, natural_h);
+    let revealed_r = grow(FLOW_OUT_NECK_FRACTION, r);
+    let revealed_left = final_centre_x - revealed_w / 2.0;
+
+    // Shape opacity ramps in fast (this is a size morph, not a fade); item
+    // opacity only starts past `ITEMS_REVEAL_THRESHOLD` -- see that const's
+    // doc comment for why this also gives closing its "items fade first"
+    // read for free.
+    let shape_opacity = (presence.reveal.clamp(0.0, 1.0) / 0.15).min(1.0);
+    let items_opacity = ((presence.reveal.clamp(0.0, 1.0) - ITEMS_REVEAL_THRESHOLD)
+        / (1.0 - ITEMS_REVEAL_THRESHOLD))
+        .clamp(0.0, 1.0);
+
+    let col_min = egui::pos2(revealed_left, anchor_rect.bottom());
+    let full_rect = egui::Rect::from_min_size(
+        egui::pos2(final_left, anchor_rect.bottom()),
+        egui::vec2(final_w, natural_h),
+    );
+    let reveal_column = egui::Rect::from_min_size(col_min, egui::vec2(revealed_w, revealed_h));
 
     let mut picked = None;
     let primary_released = ctx.input(|i| i.pointer.primary_released());
 
     egui::Area::new(egui::Id::new(("ribbon_flyout_area", key)))
-        .fixed_pos(col_min)
+        .fixed_pos(full_rect.left_top())
         .order(egui::Order::Foreground)
         .interactable(presence.interactive)
         .show(&ctx, |ui| {
-            // Expand the clip past `visible_rect`'s own width -- the
-            // fillets flare outside the column (down to `-FRAME_RADIUS` on
-            // each side), and the border-erasure strips reach up by
-            // `border_width` above `visible_rect`'s top -- so a plain clip
-            // to `visible_rect` would cut the flare off.
-            let flare = FRAME_RADIUS + style.border_width;
+            // Expand the clip past the widest the shape can get this frame
+            // (`full_rect`, plus the flare and border erasure past it on
+            // `Flare` sides) -- otherwise the fillets/erasure strips, which
+            // paint outside the column's own rect, get cut off.
+            let flare = r + style.border_width;
             let paint_clip = egui::Rect::from_min_max(
-                visible_rect.left_top() - egui::vec2(flare, style.border_width),
-                visible_rect.right_bottom() + egui::vec2(flare, 0.0),
+                full_rect.left_top() - egui::vec2(flare, style.border_width + flare),
+                full_rect.right_bottom() + egui::vec2(flare, 0.0),
             );
             ui.set_clip_rect(paint_clip);
-            ui.set_opacity(opacity);
+            ui.set_opacity(shape_opacity);
 
-            // The column rect used for the shape grows with the reveal
-            // animation (its bottom is `revealed_h`, not the full natural
-            // height) so the fillets are correct from the first frame --
-            // see `revealed_h`'s doc comment above.
-            let reveal_column = egui::Rect::from_min_size(col_min, egui::vec2(col_w, revealed_h));
             let fill_color = ui.visuals().window_fill();
             let stroke = egui::Stroke::new(style.border_width, style.border);
             paint_flow_out(
                 ui.painter(),
                 anchor_rect,
                 reveal_column,
-                FRAME_RADIUS,
+                revealed_r,
+                left,
+                right,
                 fill_color,
                 stroke,
             );
@@ -969,14 +1218,9 @@ fn draw_flyout_column<A>(
                     .max_rect(full_rect)
                     .layout(egui::Layout::top_down(egui::Align::Center)),
             );
-            // Zero vertical item spacing -- `natural_h` above is exactly
-            // `item_h * items.len()`, with no room for egui's own default
-            // spacing between stacked widgets. Leaving that default in
-            // pushed the last item (e.g. Output's "publish") past
-            // `visible_rect`'s clip, reading cut off --
-            // `docs/design/2026-09-24_ribbon-pods-spec.md`'s flyout-fixes
-            // item (c).
-            child.spacing_mut().item_spacing.y = 0.0;
+            child.set_opacity(items_opacity);
+            child.spacing_mut().item_spacing.y = pad_v_between;
+            child.add_space(pad_v_col);
             for (i, item) in flyout.items.iter().enumerate() {
                 let resp = host.icon_button(
                     &mut child,
@@ -1379,7 +1623,7 @@ mod tests {
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
         let r = 8.0;
 
-        let outline = flow_out_outline(attach, column, r);
+        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
         let y0 = attach.bottom();
 
         assert_eq!(outline.first().copied(), Some(egui::pos2(100.0 - r, y0)));
@@ -1409,7 +1653,7 @@ mod tests {
         let r = 8.0;
         let y0 = attach.bottom();
 
-        let outline = flow_out_outline(attach, column, r);
+        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
         for w in outline.windows(2) {
             let seg_on_y0 = (w[0].y - y0).abs() < 1e-4 && (w[1].y - y0).abs() < 1e-4;
             if seg_on_y0 {
@@ -1433,7 +1677,7 @@ mod tests {
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
         let r = 8.0;
 
-        let outline = flow_out_outline(attach, column, r);
+        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
         // Each arc is `FLOW_OUT_ARC_SEGMENTS + 1` points: the point that
         // precedes it (either the outline's start, or the straight edge's
         // endpoint, which coincides with the arc's own mathematical start)
@@ -1463,7 +1707,7 @@ mod tests {
         let r = 8.0;
         let y0 = attach.bottom();
 
-        let outline = flow_out_outline(attach, column, r);
+        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
         assert!(outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
         assert!(outline.iter().all(|p| p.y >= y0 - 1e-4));
         let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
