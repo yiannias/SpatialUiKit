@@ -699,108 +699,180 @@ fn draw_hold_hint(ui: &egui::Ui, icon_rect: egui::Rect) {
     ));
 }
 
-/// Builds a "flow-out" shape polygon where the flyout extends from the pod's
-/// bottom edge with concave fillets that blend the pod and flyout into one
-/// continuous silhouette. Returns points for both the outline (open path) and
-/// the fill areas.
+/// Number of sampled points per quarter-circle arc in [`flow_out_outline`],
+/// not counting the arc's own start point (which is always the previous
+/// point already pushed onto the path).
+const FLOW_OUT_ARC_SEGMENTS: usize = 8;
+
+/// Builds the "flow-out" outline: an OPEN path (not closed along the pod's
+/// bottom edge) that reads as the pod's own silhouette extending down into
+/// the flyout column, per `docs/design/2026-09-24_flyout-flow-out-markup.md`.
 ///
-/// # Arguments
-/// - `pod_rect`: the pod button's rectangle (the attachment point is its bottom edge)
-/// - `flyout_rect`: the full flyout column's rectangle
-/// - `pod_radius`: the pod's corner radius (used for fillet curves)
-/// - `attach_x_range`: a tuple `(min, max)` x-coordinates where the flyout
-///   attaches to the pod's bottom edge (typically the pod button's width)
+/// `attach` is the held button's rect (its bottom edge is the pod's bottom
+/// edge, `y0`); `column` is the flyout column's rect (its top is `y0`). `r`
+/// is the fillet radius -- clamped to `column.width() / 2` and
+/// `(column.bottom() - y0) / 2` so a narrow or barely-open column still
+/// produces a valid, finite outline.
 ///
-/// # Returns
-/// A tuple of `(outline_points, fill_areas)` where:
-/// - `outline_points`: vec of points forming the closed outline (for stroke)
-/// - `fill_areas`: vec of rects/shapes to fill for the fill color
-fn build_flow_out_shape(
-    pod_rect: egui::Rect,
-    flyout_rect: egui::Rect,
-    pod_radius: f32,
-    attach_x_range: (f32, f32),
-) -> (Vec<egui::Pos2>, Vec<egui::Shape>) {
-    let mut outline = Vec::new();
-    let fill_areas = Vec::new();
+/// Path, left to right (screen coordinates, y down):
+/// - `(L - r, y0)` on the pod's bottom edge.
+/// - Left concave fillet: quarter circle centred `(L - r, y0 + r)`, angle
+///   `-90°` to `0°` -- curves from the pod bottom down into the column's
+///   left side, concave as seen from outside the shape.
+/// - Straight down the left side to `(L, B - r)`.
+/// - Bottom-left convex corner: centred `(L + r, B - r)`, `180°` to `90°`.
+/// - Along the bottom to `(R - r, B)`.
+/// - Bottom-right convex corner: centred `(R - r, B - r)`, `90°` to `0°`.
+/// - Up the right side to `(R, y0 + r)`.
+/// - Right concave fillet: centred `(R + r, y0 + r)`, `180°` to `270°`,
+///   ending at `(R + r, y0)`.
+///
+/// Deliberately never closed back along `y = y0` between `L` and `R` -- that
+/// segment is the pod-bottom seam the designer's markup crossed out; the
+/// flyout must not draw it.
+pub fn flow_out_outline(attach: egui::Rect, column: egui::Rect, r: f32) -> Vec<egui::Pos2> {
+    use std::f32::consts::{FRAC_PI_2, PI};
 
-    // Approximate arc segments with ~6-8 points for smooth curves
-    const FILLET_SEGMENTS: usize = 6;
+    let y0 = attach.bottom();
+    let l = column.left();
+    let right = column.right();
+    let b = column.bottom();
+    let vertical_room = ((b - y0) / 2.0).max(0.0);
+    let r = r.min(column.width() / 2.0).min(vertical_room).max(0.0);
 
-    let attach_left = attach_x_range.0;
-    let attach_right = attach_x_range.1;
-    let pod_bottom = pod_rect.bottom(); // top of the flyout attachment
-    let flyout_left = flyout_rect.left();
-    let flyout_right = flyout_rect.right();
-    let flyout_top = flyout_rect.top();
-    let flyout_bottom = flyout_rect.bottom();
+    let mut pts = Vec::with_capacity(4 * FLOW_OUT_ARC_SEGMENTS + 5);
+    let arc = |centre: egui::Pos2, from: f32, to: f32, out: &mut Vec<egui::Pos2>| {
+        for i in 1..=FLOW_OUT_ARC_SEGMENTS {
+            let t = i as f32 / FLOW_OUT_ARC_SEGMENTS as f32;
+            let theta = egui::lerp(from..=to, t);
+            out.push(egui::pos2(
+                centre.x + r * theta.cos(),
+                centre.y + r * theta.sin(),
+            ));
+        }
+    };
 
-    // Left concave fillet: curves outward and down from pod bottom
-    // Start at pod's bottom left edge of attachment
-    outline.push(egui::pos2(attach_left, pod_bottom));
+    // Start on the pod bottom, left of the column.
+    pts.push(egui::pos2(l - r, y0));
+    // Left concave fillet: -90deg -> 0deg, centred (L - r, y0 + r).
+    arc(egui::pos2(l - r, y0 + r), -FRAC_PI_2, 0.0, &mut pts);
+    // Down the left side.
+    pts.push(egui::pos2(l, b - r));
+    // Bottom-left convex corner: 180deg -> 90deg, centred (L + r, B - r).
+    arc(egui::pos2(l + r, b - r), PI, FRAC_PI_2, &mut pts);
+    // Along the bottom.
+    pts.push(egui::pos2(right - r, b));
+    // Bottom-right convex corner: 90deg -> 0deg, centred (R - r, B - r).
+    arc(egui::pos2(right - r, b - r), FRAC_PI_2, 0.0, &mut pts);
+    // Up the right side.
+    pts.push(egui::pos2(right, y0 + r));
+    // Right concave fillet: 180deg -> 270deg, centred (R + r, y0 + r).
+    arc(egui::pos2(right + r, y0 + r), PI, PI + FRAC_PI_2, &mut pts);
 
-    // Concave fillet on the left side
-    // Curve goes from (attach_left, pod_bottom) to (flyout_left, flyout_top)
-    // with a concave (outward) curve
-    for i in 0..=FILLET_SEGMENTS {
-        let t = i as f32 / FILLET_SEGMENTS as f32;
-        // Use a smooth bezier-like curve: start curving out, then back in
-        let ease_t = t; // parametric curve
-        let curve_out = (pod_radius * 0.8 * (1.0 - ease_t.powi(2))).max(0.0);
-        let x = egui::lerp(attach_left..=flyout_left, ease_t) - curve_out;
-        let y = egui::lerp(pod_bottom..=flyout_top, ease_t);
-        outline.push(egui::pos2(x, y));
+    pts
+}
+
+/// Paints the flow-out shape: the fill first (as convex pieces -- the
+/// overall outline is non-convex, so `egui`'s fan-triangulated
+/// `convex_polygon` would spill/miss in the concave fillets if handed the
+/// whole thing at once), then the open outline stroked on top, matching the
+/// pod's own border stroke so the two read as one continuous line.
+///
+/// Fill pieces:
+/// - the column body, rounded only on its bottom corners, with its top
+///   raised by `stroke.width` so it also overpaints the pod's bottom border
+///   under the held button;
+/// - each fillet wedge -- the corner point `(L, y0)` / `(R, y0)` fanned with
+///   that side's arc points, which `egui` can fan-triangulate correctly
+///   because every arc point is visible from the corner point in a single
+///   sweep (the polygon is star-shaped from that corner, even though it
+///   isn't convex as a whole);
+/// - a thin strip above each wedge, `stroke.width` tall, so the pod border
+///   is erased across the fillets' full flare (`[L - r, R + r]`), not just
+///   the column's own width.
+///
+/// `painter`'s clip rect must already include that flare -- callers should
+/// expand their clip by `r + stroke.width` on both sides of `column` before
+/// calling this.
+pub fn paint_flow_out(
+    painter: &egui::Painter,
+    attach: egui::Rect,
+    column: egui::Rect,
+    r: f32,
+    fill: egui::Color32,
+    stroke: egui::Stroke,
+) {
+    let y0 = attach.bottom();
+    let l = column.left();
+    let right = column.right();
+    let b = column.bottom();
+    let vertical_room = ((b - y0) / 2.0).max(0.0);
+    let r = r.min(column.width() / 2.0).min(vertical_room).max(0.0);
+    let bw = stroke.width.max(0.0);
+
+    let outline = flow_out_outline(attach, column, r);
+    // `outline` layout: [seam-left, 8 left-arc pts, side, 8 corner pts, bottom,
+    // 8 corner pts, side, 8 right-arc pts]. The left arc (seam point through
+    // (L, y0+r)) is the first 9 points; the right arc (through (R+r, y0)) is
+    // the last 9.
+    let left_arc = &outline[0..=FLOW_OUT_ARC_SEGMENTS];
+    let right_arc = &outline[outline.len() - FLOW_OUT_ARC_SEGMENTS - 1..];
+
+    // (a) column body, bottom corners rounded, top raised to erase the pod
+    // border under the button.
+    if b > y0 - bw {
+        let body = egui::Rect::from_min_max(egui::pos2(l, y0 - bw), egui::pos2(right, b));
+        let corner_r = r.round().clamp(0.0, u8::MAX as f32) as u8;
+        painter.rect_filled(
+            body,
+            egui::CornerRadius {
+                nw: 0,
+                ne: 0,
+                sw: corner_r,
+                se: corner_r,
+            },
+            fill,
+        );
     }
 
-    // Left side of flyout column
-    outline.push(egui::pos2(flyout_left, flyout_top));
+    // (b) fillet wedges, fanned from each corner point, plus the erasure
+    // strip above each one.
+    if r > 0.0 {
+        let mut left_wedge = Vec::with_capacity(left_arc.len() + 1);
+        left_wedge.push(egui::pos2(l, y0));
+        left_wedge.extend_from_slice(left_arc);
+        painter.add(egui::Shape::convex_polygon(
+            left_wedge,
+            fill,
+            egui::Stroke::NONE,
+        ));
 
-    // Bottom-left convex fillet
-    for i in 1..=FILLET_SEGMENTS {
-        let t = i as f32 / FILLET_SEGMENTS as f32;
-        let angle = std::f32::consts::PI * t; // quarter circle
-        let x = flyout_left + pod_radius * (1.0 - angle.cos());
-        let y = flyout_bottom - pod_radius * (1.0 - angle.sin());
-        outline.push(egui::pos2(x, y));
+        let mut right_wedge = Vec::with_capacity(right_arc.len() + 1);
+        right_wedge.push(egui::pos2(right, y0));
+        right_wedge.extend_from_slice(right_arc);
+        painter.add(egui::Shape::convex_polygon(
+            right_wedge,
+            fill,
+            egui::Stroke::NONE,
+        ));
+
+        if bw > 0.0 {
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(l - r, y0 - bw), egui::pos2(l, y0)),
+                0.0,
+                fill,
+            );
+            painter.rect_filled(
+                egui::Rect::from_min_max(egui::pos2(right, y0 - bw), egui::pos2(right + r, y0)),
+                0.0,
+                fill,
+            );
+        }
     }
 
-    // Bottom of flyout
-    outline.push(egui::pos2(flyout_left + pod_radius, flyout_bottom));
-    outline.push(egui::pos2(flyout_right - pod_radius, flyout_bottom));
-
-    // Bottom-right convex fillet
-    for i in 1..=FILLET_SEGMENTS {
-        let t = i as f32 / FILLET_SEGMENTS as f32;
-        let angle = std::f32::consts::PI * (1.0 - t); // quarter circle
-        let x = flyout_right - pod_radius * (1.0 - angle.cos());
-        let y = flyout_bottom - pod_radius * (1.0 - angle.sin());
-        outline.push(egui::pos2(x, y));
-    }
-
-    // Right side of flyout column
-    outline.push(egui::pos2(flyout_right, flyout_top));
-
-    // Right concave fillet: mirrors the left side
-    for i in 0..=FILLET_SEGMENTS {
-        let t = i as f32 / FILLET_SEGMENTS as f32;
-        let ease_t = 1.0 - t; // reverse direction
-        let curve_out = (pod_radius * 0.8 * (1.0 - ease_t.powi(2))).max(0.0);
-        let x = egui::lerp(flyout_right..=attach_right, t) + curve_out;
-        let y = egui::lerp(flyout_top..=pod_bottom, t);
-        outline.push(egui::pos2(x, y));
-    }
-
-    // Right edge of pod attachment (top of flyout)
-    outline.push(egui::pos2(attach_right, pod_bottom));
-
-    // Top edge from right to left along the pod bottom (closes the shape)
-    outline.push(egui::pos2(attach_left, pod_bottom));
-
-    // For fill: we'll use the outline as a convex polygon approximation
-    // (it's not convex, so we need to be careful with painting)
-    // Return the outline points and let the caller handle fill/stroke
-
-    (outline, fill_areas)
+    // The flowing outline itself -- the only visible line, since everything
+    // it crosses has already been painted in the fill color above.
+    painter.add(egui::Shape::line(outline, stroke));
 }
 
 /// Draws the flyout column "growing out of the pod as one outline" below
@@ -826,12 +898,20 @@ fn draw_flyout_column<A>(
     let button_size = host.button_size();
     let item_h = button_size.y;
     let natural_h = item_h * flyout.items.len().max(1) as f32;
-    let revealed_h = crate::motion::cap_overshoot(
-        natural_h * presence.reveal.max(0.0),
-        natural_h,
-        MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
-    )
-    .clamp(0.0, natural_h + MotionSpec::EXPAND_OVERSHOOT_CAP_PX);
+    // The flow-out shape's fillets must be present from the first frame
+    // (`docs/design/2026-09-24_flyout-flow-out-markup.md`), so the reveal
+    // animation grows the column's bottom edge from `y0 + 2*FRAME_RADIUS`
+    // (clamped to `natural_h`, for very short columns) up to the full
+    // height, rather than from zero.
+    let min_reveal_h = (2.0 * FRAME_RADIUS).min(natural_h);
+    let grow_span = (natural_h - min_reveal_h).max(0.0);
+    let revealed_h = min_reveal_h
+        + crate::motion::cap_overshoot(
+            grow_span * presence.reveal.max(0.0),
+            grow_span,
+            MotionSpec::EXPAND_OVERSHOOT_CAP_PX,
+        )
+        .clamp(0.0, grow_span + MotionSpec::EXPAND_OVERSHOOT_CAP_PX);
     let opacity = presence.reveal.clamp(0.0, 1.0);
     // Wide enough for the anchor button *and* every item's own content --
     // fixes items with a longer caption than the button that opens them
@@ -855,37 +935,34 @@ fn draw_flyout_column<A>(
         .order(egui::Order::Foreground)
         .interactable(presence.interactive)
         .show(&ctx, |ui| {
-            ui.set_clip_rect(visible_rect);
+            // Expand the clip past `visible_rect`'s own width -- the
+            // fillets flare outside the column (down to `-FRAME_RADIUS` on
+            // each side), and the border-erasure strips reach up by
+            // `border_width` above `visible_rect`'s top -- so a plain clip
+            // to `visible_rect` would cut the flare off.
+            let flare = FRAME_RADIUS + style.border_width;
+            let paint_clip = egui::Rect::from_min_max(
+                visible_rect.left_top() - egui::vec2(flare, style.border_width),
+                visible_rect.right_bottom() + egui::vec2(flare, 0.0),
+            );
+            ui.set_clip_rect(paint_clip);
             ui.set_opacity(opacity);
 
-            // Build and paint the flow-out shape that blends pod and flyout
-            let (outline_points, _fill_areas) = build_flow_out_shape(
-                anchor_rect,
-                full_rect,
-                FRAME_RADIUS,
-                (anchor_rect.left(), anchor_rect.right()),
-            );
-
-            // Paint the fill using the outline polygon
+            // The column rect used for the shape grows with the reveal
+            // animation (its bottom is `revealed_h`, not the full natural
+            // height) so the fillets are correct from the first frame --
+            // see `revealed_h`'s doc comment above.
+            let reveal_column = egui::Rect::from_min_size(col_min, egui::vec2(col_w, revealed_h));
             let fill_color = ui.visuals().window_fill();
-            ui.painter().add(egui::Shape::convex_polygon(
-                outline_points.clone(),
-                fill_color,
-                egui::Stroke::NONE,
-            ));
-
-            // Paint the outline stroke
             let stroke = egui::Stroke::new(style.border_width, style.border);
-            ui.painter()
-                .add(egui::Shape::line(outline_points.clone(), stroke));
-
-            // Paint over the pod's bottom border in the attachment area to
-            // create seamless flow
-            let seam = egui::Rect::from_min_size(
-                anchor_rect.left_bottom() - egui::vec2(0.0, style.border_width),
-                egui::vec2(anchor_rect.width(), style.border_width * 2.0),
+            paint_flow_out(
+                ui.painter(),
+                anchor_rect,
+                reveal_column,
+                FRAME_RADIUS,
+                fill_color,
+                stroke,
             );
-            ui.painter().rect_filled(seam, 0.0, fill_color);
 
             let mut child = ui.new_child(
                 egui::UiBuilder::new()
@@ -1293,64 +1370,103 @@ mod tests {
         );
     }
 
-    /// The flow-out shape's outline must stay within the pod+flyout bounding
-    /// box, and the outline must be closed (start and end at the same point).
+    /// The flow-out outline's endpoints must sit on the pod's bottom edge,
+    /// flared out by `r` on each side, and no point may sit above that edge
+    /// (`y < y0`) -- the shape only ever extends downward from the pod.
     #[test]
-    fn flow_out_shape_outline_bounds_and_closure() {
-        let pod_rect = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
-        let flyout_rect =
-            egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
-        let pod_radius = 8.0;
-        let attach_x_range = (pod_rect.left(), pod_rect.right());
+    fn flow_out_outline_endpoints_and_no_point_above_pod_bottom() {
+        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
+        let r = 8.0;
 
-        let (outline, _fill) =
-            build_flow_out_shape(pod_rect, flyout_rect, pod_radius, attach_x_range);
+        let outline = flow_out_outline(attach, column, r);
+        let y0 = attach.bottom();
 
-        // Outline must not be empty
-        assert!(!outline.is_empty(), "outline must have points");
+        assert_eq!(outline.first().copied(), Some(egui::pos2(100.0 - r, y0)));
+        assert_eq!(outline.last().copied(), Some(egui::pos2(180.0 + r, y0)));
 
-        // Outline must be closed: start and end at the same point
-        if outline.len() > 1 {
-            assert_eq!(
-                outline[0],
-                outline[outline.len() - 1],
-                "outline must be closed"
-            );
+        for p in &outline {
+            assert!(p.y >= y0 - 1e-4, "point {p:?} is above the pod bottom {y0}");
         }
-
-        // All points must stay within reasonable bounds of pod+flyout union
-        let min_x = pod_rect.left().min(flyout_rect.left()) - pod_radius;
-        let max_x = pod_rect.right().max(flyout_rect.right()) + pod_radius;
-        let min_y = pod_rect.top();
-        let max_y = flyout_rect.bottom() + pod_radius;
-
-        for point in &outline {
-            assert!(
-                point.x >= min_x && point.x <= max_x,
-                "x-coordinate {} out of bounds [{}, {}]",
-                point.x,
-                min_x,
-                max_x
-            );
-            assert!(
-                point.y >= min_y && point.y <= max_y,
-                "y-coordinate {} out of bounds [{}, {}]",
-                point.y,
-                min_y,
-                max_y
-            );
-        }
-
-        // The attach segment (pod bottom) should be preserved
-        let attach_segment_exists = outline.windows(2).any(|w| {
-            w[0].y == pod_rect.bottom()
-                && w[1].y == pod_rect.bottom()
-                && w[0].x >= attach_x_range.0
-                && w[1].x <= attach_x_range.1
-        });
+        let max_x = outline.iter().map(|p| p.x).fold(f32::MIN, f32::max);
+        let min_x = outline.iter().map(|p| p.x).fold(f32::MAX, f32::min);
+        assert!(max_x <= column.right() + r + 1e-4);
+        assert!(min_x >= column.left() - r - 1e-4);
+        let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         assert!(
-            attach_segment_exists,
-            "outline must have a horizontal segment at the pod bottom"
+            (max_y - column.bottom()).abs() < 1e-4,
+            "outline must reach B"
         );
+    }
+
+    /// The outline must never draw the crossed-out seam along the pod
+    /// bottom between the column's left and right edges -- only the flared
+    /// endpoints outside `[L, R]` may sit at `y0`.
+    #[test]
+    fn flow_out_outline_has_no_seam_segment_along_pod_bottom() {
+        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
+        let r = 8.0;
+        let y0 = attach.bottom();
+
+        let outline = flow_out_outline(attach, column, r);
+        for w in outline.windows(2) {
+            let seg_on_y0 = (w[0].y - y0).abs() < 1e-4 && (w[1].y - y0).abs() < 1e-4;
+            if seg_on_y0 {
+                // Only the flare tips (outside the column) may touch y0.
+                let both_outside = (w[0].x <= column.left() || w[0].x >= column.right())
+                    && (w[1].x <= column.left() || w[1].x >= column.right());
+                assert!(
+                    both_outside,
+                    "segment {:?}-{:?} lies along the seam between L and R",
+                    w[0], w[1]
+                );
+            }
+        }
+    }
+
+    /// Cheap sanity check that the arcs sweep quarter circles rather than
+    /// looping or jumping: consecutive points must stay close together.
+    #[test]
+    fn flow_out_outline_consecutive_points_stay_close() {
+        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
+        let r = 8.0;
+
+        let outline = flow_out_outline(attach, column, r);
+        // Each arc is `FLOW_OUT_ARC_SEGMENTS + 1` points: the point that
+        // precedes it (either the outline's start, or the straight edge's
+        // endpoint, which coincides with the arc's own mathematical start)
+        // plus its `FLOW_OUT_ARC_SEGMENTS` sampled points. The straight
+        // edges between arcs are deliberately excluded -- they are not arcs
+        // and can be long for a tall column.
+        let arc_len = FLOW_OUT_ARC_SEGMENTS + 1;
+        for arc_start in [0, arc_len, 2 * arc_len, 3 * arc_len] {
+            for w in outline[arc_start..arc_start + arc_len].windows(2) {
+                let d = w[0].distance(w[1]);
+                assert!(
+                    d <= r * 0.5,
+                    "arc points {:?}-{:?} are {d} apart (> r*0.5)",
+                    w[0],
+                    w[1]
+                );
+            }
+        }
+    }
+
+    /// A column too short to fit two full fillet radii still produces a
+    /// finite, well-ordered outline (the clamp in `flow_out_outline`).
+    #[test]
+    fn flow_out_outline_clamps_radius_for_tiny_column() {
+        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 2.0));
+        let r = 8.0;
+        let y0 = attach.bottom();
+
+        let outline = flow_out_outline(attach, column, r);
+        assert!(outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
+        assert!(outline.iter().all(|p| p.y >= y0 - 1e-4));
+        let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+        assert!((max_y - column.bottom()).abs() < 1e-4);
     }
 }
