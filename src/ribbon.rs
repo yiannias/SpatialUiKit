@@ -407,6 +407,11 @@ fn current_pod_rect_id() -> egui::Id {
     egui::Id::new("spatial_ui_kit::ribbon::current_pod_rect")
 }
 
+/// egui temp-data key for that pod's fill color.
+fn current_pod_fill_id() -> egui::Id {
+    egui::Id::new("spatial_ui_kit::ribbon::current_pod_fill")
+}
+
 fn module_frame(
     ui: &mut egui::Ui,
     label: &str,
@@ -422,6 +427,11 @@ fn module_frame(
     // can sit flush with the pod's *outer* edge, not the button's (the pod
     // has end padding past its last button).
     ui.data_mut(|d| d.insert_temp(current_pod_rect_id(), outer_rect));
+    // And its fill: the flyout paints in its own foreground `Area`, whose
+    // style isn't the ribbon's themed one, so reading `window_fill()` there
+    // gave a different color than the pod it grows out of.
+    let pod_fill = ui.visuals().window_fill();
+    ui.data_mut(|d| d.insert_temp(current_pod_fill_id(), pod_fill));
     if ui.is_rect_visible(outer_rect) {
         // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
         // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
@@ -1243,7 +1253,9 @@ fn draw_flyout_column<A>(
             ui.set_clip_rect(paint_clip);
             ui.set_opacity(shape_opacity);
 
-            let fill_color = ui.visuals().window_fill();
+            let fill_color = ui
+                .data(|d| d.get_temp::<egui::Color32>(current_pod_fill_id()))
+                .unwrap_or_else(|| ui.visuals().window_fill());
             let stroke = egui::Stroke::new(style.border_width, style.border);
             paint_flow_out(
                 ui.painter(),
