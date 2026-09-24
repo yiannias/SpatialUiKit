@@ -757,7 +757,14 @@ fn render_field_row<A: Clone, Ctx>(
                     suffix,
                     on_change,
                 } => {
-                    let mut val = value(ctx);
+                    // Mid-drag the value lives in egui memory, not in the
+                    // app: applying Interface Scale while dragging would
+                    // rescale the UI under the cursor. The saved value is
+                    // only read when no drag is in progress.
+                    let drag_id = egui::Id::new(("settings_slider_drag", field.id));
+                    let mut val = ui
+                        .data(|d| d.get_temp::<f32>(drag_id))
+                        .unwrap_or_else(|| value(ctx));
                     ui.horizontal(|ui| {
                         ui.set_width(220.0);
                         let response = ui.add(
@@ -765,10 +772,13 @@ fn render_field_row<A: Clone, Ctx>(
                                 .step_by(*step as f64)
                                 .suffix(*suffix),
                         );
-                        // Emit the action only on drag release or when changed by
-                        // keyboard/click (not during a drag itself), to avoid
-                        // rescaling the UI under the cursor mid-drag on Interface Scale.
-                        if response.drag_stopped() || (response.changed() && !response.dragged()) {
+                        if response.dragged() {
+                            ui.data_mut(|d| d.insert_temp(drag_id, val));
+                        } else if response.drag_stopped() {
+                            ui.data_mut(|d| d.remove::<f32>(drag_id));
+                            actions.push(on_change(val));
+                        } else if response.changed() {
+                            // Keyboard or a single click on the track.
                             actions.push(on_change(val));
                         }
                     });
