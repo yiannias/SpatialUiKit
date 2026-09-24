@@ -96,6 +96,9 @@ pub struct Field<A, Ctx> {
     pub hover: Option<&'static str>,
     pub enabled: bool,
     pub disabled_hint: Option<&'static str>,
+    /// Drawn as a sub-setting of the field above it (label indented) --
+    /// e.g. Text Size under Interface Scale, whose value it refines.
+    pub nested: bool,
     pub control: FieldControl<A, Ctx>,
 }
 
@@ -142,6 +145,7 @@ impl<A, Ctx> Field<A, Ctx> {
             hover: None,
             enabled: true,
             disabled_hint: None,
+            nested: false,
             control,
         }
     }
@@ -235,6 +239,14 @@ impl<A, Ctx> SettingsNode<A, Ctx> {
     pub fn hover(mut self, text: &'static str) -> Self {
         if let SettingsNode::Field(f) = &mut self {
             f.hover = Some(text);
+        }
+        self
+    }
+
+    /// Marks this field as a refinement of the field above it; see [`Field::nested`].
+    pub fn nested(mut self) -> Self {
+        if let SettingsNode::Field(f) = &mut self {
+            f.nested = true;
         }
         self
     }
@@ -624,7 +636,14 @@ fn render_field_row<A: Clone, Ctx>(
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.scope(|ui| {
             ui.set_min_width(190.0);
-            ui.label(field.label);
+            if field.nested {
+                ui.horizontal(|ui| {
+                    ui.add_space(18.0);
+                    ui.label(field.label);
+                });
+            } else {
+                ui.label(field.label);
+            }
         });
     });
 

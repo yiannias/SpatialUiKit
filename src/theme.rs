@@ -76,6 +76,67 @@ impl TextScale {
     ];
 }
 
+/// Whole-UI scale preset (Chris, 2026-09-24) -- makes the ribbon, panels,
+/// icons, spacing *and* text larger or smaller together, like Lunacy's
+/// View > Interface Scale. Applied as egui's zoom factor, which multiplies
+/// the OS DPI scale, so [`TextScale`] stays a separate refinement that
+/// multiplies on top: Interface 115% + Text 115% draws text at ~132%.
+#[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Debug, Default)]
+pub enum InterfaceScale {
+    P80,
+    P90,
+    #[default]
+    P100,
+    P110,
+    P115,
+    P125,
+    P150,
+}
+
+impl InterfaceScale {
+    pub fn multiplier(&self) -> f32 {
+        match self {
+            InterfaceScale::P80 => 0.8,
+            InterfaceScale::P90 => 0.9,
+            InterfaceScale::P100 => 1.0,
+            InterfaceScale::P110 => 1.1,
+            InterfaceScale::P115 => 1.15,
+            InterfaceScale::P125 => 1.25,
+            InterfaceScale::P150 => 1.5,
+        }
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            InterfaceScale::P80 => "80%",
+            InterfaceScale::P90 => "90%",
+            InterfaceScale::P100 => "100%",
+            InterfaceScale::P110 => "110%",
+            InterfaceScale::P115 => "115%",
+            InterfaceScale::P125 => "125%",
+            InterfaceScale::P150 => "150%",
+        }
+    }
+
+    pub const ALL: [InterfaceScale; 7] = [
+        InterfaceScale::P80,
+        InterfaceScale::P90,
+        InterfaceScale::P100,
+        InterfaceScale::P110,
+        InterfaceScale::P115,
+        InterfaceScale::P125,
+        InterfaceScale::P150,
+    ];
+}
+
+/// Applies `scale` as egui's zoom factor. Also turns off egui's built-in
+/// Ctrl +/-/0 UI zoom: left on, it silently changes the same zoom factor
+/// behind the saved setting's back, and those keys belong to the app.
+pub fn apply_interface_scale(ctx: &egui::Context, scale: InterfaceScale) {
+    ctx.options_mut(|o| o.zoom_with_keyboard = false);
+    ctx.set_zoom_factor(scale.multiplier());
+}
+
 /// Applies `scale` to every named `egui::TextStyle`'s font size, scaled from
 /// egui's own default baseline sizes each time (not compounding on whatever
 /// the live style currently holds) -- so switching presets back and forth
@@ -467,6 +528,30 @@ mod theme_palette_tests {
         let accent = l.control.accent.color32().unwrap();
         assert!(accent.b() > accent.r() && accent.b() > accent.g());
         assert!(is_dark(accent), "accent must stay legible on a light chip");
+    }
+
+    /// Chris's 2026-09-24 example: Interface 115% + Text 115% means text
+    /// 15% larger than the already-115% interface. egui's zoom factor
+    /// scales everything, so the two multiply rather than add or override.
+    #[test]
+    fn text_size_multiplies_on_top_of_interface_scale() {
+        let ctx = egui::Context::default();
+        apply_interface_scale(&ctx, InterfaceScale::P115);
+        apply_text_scale(&ctx, TextScale::Large);
+        // egui adopts a new zoom factor at the start of the next pass.
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        let body_points = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
+        let default_body = egui::Style::default().text_styles[&egui::TextStyle::Body].size;
+        let on_screen = body_points * ctx.zoom_factor();
+        assert!((on_screen / default_body - 1.15 * 1.15).abs() < 1e-4);
+        assert!(!ctx.options(|o| o.zoom_with_keyboard));
+    }
+
+    #[test]
+    fn interface_scale_labels_are_unique() {
+        let labels: std::collections::HashSet<_> =
+            InterfaceScale::ALL.iter().map(|s| s.label()).collect();
+        assert_eq!(labels.len(), InterfaceScale::ALL.len());
     }
 
     #[test]
