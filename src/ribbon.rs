@@ -412,6 +412,15 @@ fn current_pod_fill_id() -> egui::Id {
     egui::Id::new("spatial_ui_kit::ribbon::current_pod_fill")
 }
 
+/// egui temp-data key for that pod's own corner radius -- read back by
+/// [`draw_flyout_column`] so its combined pod+column paint uses the exact
+/// radius the pod itself was drawn with, rather than a value recomputed
+/// from a possibly-different `row_h`. See [`flow_out_outline`]'s doc comment
+/// for why this consistency is the whole point of the 2026-09-24 rethink.
+fn current_pod_radius_id() -> egui::Id {
+    egui::Id::new("spatial_ui_kit::ribbon::current_pod_radius")
+}
+
 fn module_frame(
     ui: &mut egui::Ui,
     label: &str,
@@ -457,6 +466,7 @@ fn module_frame_at(
     // gave a different color than the pod it grows out of.
     let pod_fill = ui.visuals().window_fill();
     ui.data_mut(|d| d.insert_temp(current_pod_fill_id(), pod_fill));
+    ui.data_mut(|d| d.insert_temp(current_pod_radius_id(), frame_radius));
     if ui.is_rect_visible(outer_rect) && outer_rect.width() > 0.5 {
         // Filled, not just outlined -- Chris, 2026-08-30 (`docs/design/
         // 2026-08-30_chrome-ideas-sketch.md` idea 1): the ribbon's own
@@ -858,47 +868,46 @@ fn flow_out_arc_points(r: f32, centre: egui::Pos2, from: f32, to: f32) -> Vec<eg
 }
 
 /// Clamps a fillet radius to what `column` can actually hold: at most half
-/// its width, and at most half its own height above `attach`'s bottom edge
-/// -- so a narrow or barely-open column still produces a valid, finite
+/// its width, and at most half its own height above `y0` (the pod's bottom
+/// edge) -- so a narrow or barely-open column still produces a valid, finite
 /// outline. Shared by [`flow_out_outline`] and [`paint_flow_out`] so the two
 /// can never clamp differently.
-fn flow_out_radius(attach: egui::Rect, column: egui::Rect, r: f32) -> f32 {
-    let vertical_room = ((column.bottom() - attach.bottom()) / 2.0).max(0.0);
+fn flow_out_radius(y0: f32, column: egui::Rect, r: f32) -> f32 {
+    let vertical_room = ((column.bottom() - y0) / 2.0).max(0.0);
     r.min(column.width() / 2.0).min(vertical_room).max(0.0)
 }
 
-/// Builds the "flow-out" outline: an OPEN path (not closed along the pod's
-/// bottom edge) that reads as the pod's own silhouette extending down into
-/// the flyout column, per `docs/design/2026-09-24_flyout-flow-out-markup.md`.
+/// Builds the combined "flow-out" outline: a single CLOSED path around the
+/// pod's own silhouette *and* the flyout column growing out of it, as one
+/// shape -- the 2026-09-24 design rethink (`docs/design/
+/// 2026-09-24_flyout-flush-edge-offset.md`) that replaced painting the pod
+/// and the flyout separately and trying to patch the seam between them.
+/// Traversed clockwise starting just past the pod's top-left corner:
 ///
-/// `attach` is the held button's rect (its bottom edge is the pod's bottom
-/// edge, `y0`); `column` is the flyout column's rect (its top is `y0`). `r`
-/// is the fillet radius, clamped via [`flow_out_radius`]. `left`/`right`
-/// choose a flare or a flush join per side -- see [`Join`].
+/// - top edge, top-right corner (always rounded, radius `pod_radius`);
+/// - right edge down to the pod's bottom edge `y0 = pod.bottom()`;
+/// - **right side join**: [`Join::Flare`] draws the pod's own bottom-right
+///   corner (rounded, `pod_radius`) and a flat run of pod-bottom-edge before
+///   curving concave into the column (mirrors the old open path's right
+///   arm); [`Join::Flush`] skips that corner entirely and continues the
+///   pod's straight edge down past `y0` -- no separate corner to go out of
+///   sync with the column, because there no longer is one;
+/// - the column's bottom edge and its two bottom corners (always rounded,
+///   radius `r`, clamped by [`flow_out_radius`]);
+/// - **left side join**, mirroring the right;
+/// - back up the pod's left edge to close.
 ///
-/// Path, left to right (screen coordinates, y down), both sides flared:
-/// - `(L - r, y0)` on the pod's bottom edge.
-/// - Left concave fillet: quarter circle centred `(L - r, y0 + r)`, angle
-///   `-90°` to `0°` -- curves from the pod bottom down into the column's
-///   left side, concave as seen from outside the shape.
-/// - Straight down the left side to `(L, B - r)`.
-/// - Bottom-left convex corner: centred `(L + r, B - r)`, `180°` to `90°`.
-/// - Along the bottom to `(R - r, B)`.
-/// - Bottom-right convex corner: centred `(R - r, B - r)`, `90°` to `0°`.
-/// - Up the right side to `(R, y0 + r)`.
-/// - Right concave fillet: centred `(R + r, y0 + r)`, `180°` to `270°`,
-///   ending at `(R + r, y0)`.
-///
-/// A flushed side instead runs a single straight line from `(edge, y0)` down
-/// to `(edge, B)`, with no arc and no flare tip past the column's own edge --
-/// per the spec, "the flush side's outline is a straight vertical line from
-/// y0 down".
-///
-/// Deliberately never closed back along `y = y0` between `L` and `R` -- that
-/// segment is the pod-bottom seam the designer's markup crossed out; the
-/// flyout must not draw it.
+/// `pod`/`pod_radius` are the pod's own outer rect and corner radius --
+/// exactly the values [`module_frame_at`] paints the pod with, so a caller
+/// that fills and strokes this outline is guaranteed to line up with it
+/// pixel for pixel instead of drifting the way two independently-painted
+/// shapes could. `column`/`r` are the flyout column's current (possibly
+/// mid-morph) rect and fillet radius -- `r` may be smaller than
+/// `pod_radius` while the flyout is still growing out of its neck; the
+/// straight segments between them absorb the difference with no kink.
 pub fn flow_out_outline(
-    attach: egui::Rect,
+    pod: egui::Rect,
+    pod_radius: f32,
     column: egui::Rect,
     r: f32,
     left: Join,
@@ -906,117 +915,150 @@ pub fn flow_out_outline(
 ) -> Vec<egui::Pos2> {
     use std::f32::consts::{FRAC_PI_2, PI};
 
-    let y0 = attach.bottom();
+    let y0 = pod.bottom();
     let l = column.left();
     let right_x = column.right();
     let b = column.bottom();
-    let r = flow_out_radius(attach, column, r);
+    let r = flow_out_radius(y0, column, r);
+    let pr = pod_radius
+        .max(0.0)
+        .min(pod.width() / 2.0)
+        .min(pod.height() / 2.0);
 
-    let mut pts = Vec::with_capacity(4 * FLOW_OUT_ARC_SEGMENTS + 5);
+    let mut pts = Vec::with_capacity(8 * FLOW_OUT_ARC_SEGMENTS + 16);
 
-    match left {
-        Join::Flare => {
-            // Start on the pod bottom, left of the column.
-            pts.push(egui::pos2(l - r, y0));
-            // Left concave fillet: -90deg -> 0deg, centred (L - r, y0 + r).
-            pts.extend(flow_out_arc_points(
-                r,
-                egui::pos2(l - r, y0 + r),
-                -FRAC_PI_2,
-                0.0,
-            ));
-            // Down the left side.
-            pts.push(egui::pos2(l, b - r));
-            // Bottom-left convex corner: 180deg -> 90deg, centred (L + r, B - r).
-            pts.extend(flow_out_arc_points(
-                r,
-                egui::pos2(l + r, b - r),
-                PI,
-                FRAC_PI_2,
-            ));
-        }
-        Join::Flush => {
-            // Straight down the pod's own outer edge, starting where the
-            // pod's (now covered) rounded corner began so the pod's side
-            // stroke runs unbroken into the column's; the bottom corner is
-            // still rounded.
-            pts.push(egui::pos2(l, y0 - r));
-            pts.push(egui::pos2(l, b - r));
-            pts.extend(flow_out_arc_points(
-                r,
-                egui::pos2(l + r, b - r),
-                PI,
-                FRAC_PI_2,
-            ));
-        }
-    }
-
-    // Along the bottom, to wherever the right side's own segment starts.
-    let right_bottom_x = right_x - r;
-    pts.push(egui::pos2(right_bottom_x, b));
+    // Top edge (top-left corner is closed implicitly at the end).
+    pts.push(egui::pos2(pod.left() + pr, pod.top()));
+    pts.push(egui::pos2(pod.right() - pr, pod.top()));
+    // Top-right corner: -90deg -> 0deg, centred (R - pr, top + pr).
+    pts.extend(flow_out_arc_points(
+        pr,
+        egui::pos2(pod.right() - pr, pod.top() + pr),
+        -FRAC_PI_2,
+        0.0,
+    ));
+    // Right edge down to just above the pod's bottom edge.
+    pts.push(egui::pos2(pod.right(), y0 - pr));
 
     match right {
         Join::Flare => {
-            // Bottom-right convex corner: 90deg -> 0deg, centred (R - r, B - r).
+            // Pod's own bottom-right corner, still rounded (this side isn't
+            // where the column attaches): 0deg -> 90deg.
             pts.extend(flow_out_arc_points(
-                r,
-                egui::pos2(right_x - r, b - r),
-                FRAC_PI_2,
+                pr,
+                egui::pos2(pod.right() - pr, y0 - pr),
                 0.0,
+                FRAC_PI_2,
             ));
-            // Up the right side.
-            pts.push(egui::pos2(right_x, y0 + r));
-            // Right concave fillet: 180deg -> 270deg, centred (R + r, y0 + r).
+            // Flat run along the pod bottom to the column's own flare start.
+            pts.push(egui::pos2(right_x + r, y0));
+            // Concave fillet down into the column: 270deg -> 180deg
+            // (reverse of the old open path's forward sweep).
             pts.extend(flow_out_arc_points(
                 r,
                 egui::pos2(right_x + r, y0 + r),
-                PI,
                 PI + FRAC_PI_2,
+                PI,
             ));
         }
         Join::Flush => {
-            pts.extend(flow_out_arc_points(
-                r,
-                egui::pos2(right_x - r, b - r),
-                FRAC_PI_2,
-                0.0,
-            ));
-            pts.push(egui::pos2(right_x, y0 - r));
+            // Continue the pod's own straight edge (`right_x == pod.right()`
+            // here) straight down -- no corner, no flare tip. The
+            // unconditional push below carries it the rest of the way.
         }
     }
+    // Down the column's right side to its bottom-right corner, then the
+    // corner itself: 0deg -> 90deg, centred (R - r, B - r).
+    pts.push(egui::pos2(right_x, b - r));
+    pts.extend(flow_out_arc_points(
+        r,
+        egui::pos2(right_x - r, b - r),
+        0.0,
+        FRAC_PI_2,
+    ));
+
+    // Column bottom edge, right to left.
+    pts.push(egui::pos2(l + r, b));
+
+    // Bottom-left column corner: 90deg -> 180deg, centred (L + r, B - r).
+    pts.extend(flow_out_arc_points(
+        r,
+        egui::pos2(l + r, b - r),
+        FRAC_PI_2,
+        PI,
+    ));
+
+    match left {
+        Join::Flare => {
+            // Up the column's left side.
+            pts.push(egui::pos2(l, y0 + r));
+            // Concave fillet back out to the pod bottom: 0deg -> -90deg.
+            pts.extend(flow_out_arc_points(
+                r,
+                egui::pos2(l - r, y0 + r),
+                0.0,
+                -FRAC_PI_2,
+            ));
+            // Flat run back to the pod's own bottom-left corner.
+            pts.push(egui::pos2(pod.left() + pr, y0));
+            // Pod's own bottom-left corner: 90deg -> 180deg.
+            pts.extend(flow_out_arc_points(
+                pr,
+                egui::pos2(pod.left() + pr, y0 - pr),
+                FRAC_PI_2,
+                PI,
+            ));
+        }
+        Join::Flush => {
+            // Continue straight up the pod's own edge (`l == pod.left()`).
+            pts.push(egui::pos2(l, y0 - pr));
+        }
+    }
+
+    // Up the pod's left edge, and the top-left corner closes the loop.
+    pts.push(egui::pos2(pod.left(), pod.top() + pr));
+    pts.extend(flow_out_arc_points(
+        pr,
+        egui::pos2(pod.left() + pr, pod.top() + pr),
+        PI,
+        PI + FRAC_PI_2,
+    ));
 
     pts
 }
 
-/// Paints the flow-out shape: the fill first (as convex pieces -- the
-/// overall outline is non-convex, so `egui`'s fan-triangulated
-/// `convex_polygon` would spill/miss in the concave fillets if handed the
-/// whole thing at once), then the open outline stroked on top, matching the
-/// pod's own border stroke so the two read as one continuous line.
+/// Paints the pod *and* its open flyout column as one silhouette -- the
+/// 2026-09-24 rethink: the pod is redrawn here (in the flyout's own
+/// Foreground `Area`, which always paints after the module frame's
+/// Middle-order pass -- see [`draw_flyout_column`]) from the exact same
+/// `pod`/`pod_radius`/`fill`/`stroke` values [`module_frame_at`] used, so
+/// there is no separate "patch over the old corner" step to drift out of
+/// sync with it; the whole capsule is simply repainted with the correct
+/// corner shape for however it currently joins the column.
 ///
-/// Fill pieces:
-/// - the column body, rounded only on the bottom corners of `Join::Flare`
-///   sides (square on a `Join::Flush` side, per the end-condition spec),
-///   with its top raised by `stroke.width` so it also overpaints the pod's
-///   bottom border under the held button;
-/// - each `Flare` side's fillet wedge -- the corner point `(L, y0)` / `(R,
-///   y0)` fanned with that side's arc points, which `egui` can
-///   fan-triangulate correctly because every arc point is visible from the
-///   corner point in a single sweep (the polygon is star-shaped from that
-///   corner, even though it isn't convex as a whole) -- plus a thin strip
-///   above it, `stroke.width` tall, so the pod border is erased across the
-///   fillet's full flare, not just the column's own width;
-/// - on a `Flush` side, a small square patch sized to `r` at the pod's own
-///   corner instead, so the pod's rounded corner there is painted over and
-///   reads as square -- the straight stroke drawn on top then continues
-///   unbroken from the pod's edge into the column's.
+/// Fill (as convex pieces -- the combined outline is non-convex, so
+/// `egui`'s fan-triangulated `convex_polygon` can't take the whole shape at
+/// once):
+/// - the pod itself, all four corners `pod_radius`-rounded except a
+///   `Join::Flush` side's bottom corner, drawn square so it continues
+///   straight into the column with no corner to erase;
+/// - the column body, bottom corners rounded (radius `r`) on both sides --
+///   flush or flare, the *column's* own bottom corner is always rounded,
+///   only the *pod's* corner above it is conditionally squared off;
+/// - each `Flare` side's fillet wedge, fanned from the pod-bottom corner
+///   point, same as before.
+///
+/// Then the combined outline (pod + column, [`flow_out_outline`]) is
+/// stroked once on top -- the only visible line, since the fill above
+/// already covers everything it crosses.
 ///
 /// `painter`'s clip rect must already include the flare (on whichever sides
-/// have one) -- callers should expand their clip by `r + stroke.width` past
-/// `column` on a `Flare` side, `stroke.width` alone on a `Flush` side.
+/// have one) and the full `pod` rect -- callers should expand their clip by
+/// `r + stroke.width` past `column` on a `Flare` side.
 pub fn paint_flow_out(
     painter: &egui::Painter,
-    attach: egui::Rect,
+    pod: egui::Rect,
+    pod_radius: f32,
     column: egui::Rect,
     r: f32,
     left: Join,
@@ -1024,39 +1066,51 @@ pub fn paint_flow_out(
     fill: egui::Color32,
     stroke: egui::Stroke,
 ) {
-    let y0 = attach.bottom();
+    let y0 = pod.bottom();
     let l = column.left();
     let right_x = column.right();
     let b = column.bottom();
-    let r = flow_out_radius(attach, column, r);
-    let bw = stroke.width.max(0.0);
+    let r = flow_out_radius(y0, column, r);
+    let pr = pod_radius
+        .max(0.0)
+        .min(pod.width() / 2.0)
+        .min(pod.height() / 2.0);
 
-    let outline = flow_out_outline(attach, column, r, left, right);
+    let outline = flow_out_outline(pod, pod_radius, column, r, left, right);
 
-    // (a) column body, bottom corners rounded only on `Flare` sides, top
-    // raised to erase the pod border under the button.
-    if b > y0 - bw {
-        let body = egui::Rect::from_min_max(egui::pos2(l, y0 - bw), egui::pos2(right_x, b));
+    // (a) the pod itself -- square only the corner a `Flush` join replaces.
+    let pod_r = pr.round().clamp(0.0, u8::MAX as f32) as u8;
+    painter.rect_filled(
+        pod,
+        egui::CornerRadius {
+            nw: pod_r,
+            ne: pod_r,
+            sw: if left == Join::Flush { 0 } else { pod_r },
+            se: if right == Join::Flush { 0 } else { pod_r },
+        },
+        fill,
+    );
+
+    // (b) the column body -- bottom corners always rounded (radius `r`),
+    // regardless of join: the *pod's* corner above is what a `Flush` side
+    // squares off, not the column's own.
+    if b > y0 {
+        let body = egui::Rect::from_min_max(egui::pos2(l, y0), egui::pos2(right_x, b));
         let flare_r = r.round().clamp(0.0, u8::MAX as f32) as u8;
-        // Bottom corners are always rounded -- only the *top* of a `Flush`
-        // side is square, continuing the pod's straight end edge (Chris,
-        // 2026-09-24: "rounded is nicer" at the bottom of the L).
-        let sw = flare_r;
-        let se = flare_r;
         painter.rect_filled(
             body,
             egui::CornerRadius {
                 nw: 0,
                 ne: 0,
-                sw,
-                se,
+                sw: flare_r,
+                se: flare_r,
             },
             fill,
         );
     }
 
     if r > 0.0 {
-        // (b) fillet wedges + erasure strip, `Flare` sides only.
+        // (c) fillet wedges, `Flare` sides only.
         if left == Join::Flare {
             let mut left_wedge = Vec::with_capacity(FLOW_OUT_ARC_SEGMENTS + 2);
             left_wedge.push(egui::pos2(l, y0));
@@ -1072,13 +1126,6 @@ pub fn paint_flow_out(
                 fill,
                 egui::Stroke::NONE,
             ));
-            if bw > 0.0 {
-                painter.rect_filled(
-                    egui::Rect::from_min_max(egui::pos2(l - r, y0 - bw), egui::pos2(l, y0)),
-                    0.0,
-                    fill,
-                );
-            }
         }
         if right == Join::Flare {
             let mut right_wedge = Vec::with_capacity(FLOW_OUT_ARC_SEGMENTS + 2);
@@ -1095,43 +1142,11 @@ pub fn paint_flow_out(
                 fill,
                 egui::Stroke::NONE,
             ));
-            if bw > 0.0 {
-                painter.rect_filled(
-                    egui::Rect::from_min_max(
-                        egui::pos2(right_x, y0 - bw),
-                        egui::pos2(right_x + r, y0),
-                    ),
-                    0.0,
-                    fill,
-                );
-            }
-        }
-
-        // (c) `Flush` sides: cover the pod's own rounded corner so it reads
-        // square -- a patch the size of that corner's own radius, right at
-        // the pod's edge.
-        if left == Join::Flush {
-            painter.rect_filled(
-                egui::Rect::from_min_max(egui::pos2(l, y0 - r - bw), egui::pos2(l + r, y0)),
-                0.0,
-                fill,
-            );
-        }
-        if right == Join::Flush {
-            painter.rect_filled(
-                egui::Rect::from_min_max(
-                    egui::pos2(right_x - r, y0 - r - bw),
-                    egui::pos2(right_x, y0),
-                ),
-                0.0,
-                fill,
-            );
         }
     }
 
-    // The flowing outline itself -- the only visible line, since everything
-    // it crosses has already been painted in the fill color above.
-    painter.add(egui::Shape::line(outline, stroke));
+    // The combined outline -- pod + column as one closed, stroked shape.
+    painter.add(egui::Shape::closed_line(outline, stroke));
 }
 
 /// Draws the flyout column "growing out of the pod as one outline" below
@@ -1278,19 +1293,30 @@ fn draw_flyout_column<A>(
     let mut picked = None;
     let primary_released = ctx.input(|i| i.pointer.primary_released());
 
+    // Read back the exact radius `module_frame_at` painted this pod with --
+    // see `current_pod_radius_id`'s doc comment. Falls back to the locally
+    // computed `r` (which agrees with it in the ordinary case) if nothing
+    // was recorded this frame, e.g. a test driving `draw_flyout_column`
+    // directly without going through a module frame first.
+    let pod_radius = ctx
+        .data(|d| d.get_temp::<f32>(current_pod_radius_id()))
+        .unwrap_or(r);
+
     egui::Area::new(egui::Id::new(("ribbon_flyout_area", key)))
         .fixed_pos(full_rect.left_top())
         .order(egui::Order::Foreground)
         .interactable(presence.interactive)
         .show(&ctx, |ui| {
             // Expand the clip past the widest the shape can get this frame
-            // (`full_rect`, plus the flare and border erasure past it on
-            // `Flare` sides) -- otherwise the fillets/erasure strips, which
-            // paint outside the column's own rect, get cut off.
+            // (`full_rect`, plus the flare past it on `Flare` sides) --
+            // *and* past the whole pod, which this Area now repaints in
+            // full (see `paint_flow_out`'s doc comment) -- otherwise the
+            // fillets or the pod's own top/sides get cut off.
             let flare = r + style.border_width;
+            let base = pod.union(full_rect);
             let paint_clip = egui::Rect::from_min_max(
-                full_rect.left_top() - egui::vec2(flare, style.border_width + flare),
-                full_rect.right_bottom() + egui::vec2(flare, 0.0),
+                base.left_top() - egui::vec2(flare, style.border_width + flare),
+                base.right_bottom() + egui::vec2(flare, 0.0),
             );
             ui.set_clip_rect(paint_clip);
             ui.set_opacity(shape_opacity);
@@ -1301,7 +1327,8 @@ fn draw_flyout_column<A>(
             let stroke = egui::Stroke::new(style.border_width, style.border);
             paint_flow_out(
                 ui.painter(),
-                attach,
+                pod,
+                pod_radius,
                 reveal_column,
                 revealed_r,
                 left,
@@ -1925,87 +1952,160 @@ mod tests {
         );
     }
 
-    /// The flow-out outline's endpoints must sit on the pod's bottom edge,
-    /// flared out by `r` on each side, and no point may sit above that edge
-    /// (`y < y0`) -- the shape only ever extends downward from the pod.
+    /// A middle-button (T-join, both sides `Flare`) pod, with the flyout
+    /// column narrower than the pod -- the realistic case. No point of the
+    /// combined outline may sit above the pod's own top edge, and the
+    /// lowest point must reach the column's bottom.
     #[test]
-    fn flow_out_outline_endpoints_and_no_point_above_pod_bottom() {
-        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+    fn flow_out_outline_stays_within_pod_and_column_bounds() {
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, 40.0));
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
         let r = 8.0;
 
-        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
-        let y0 = attach.bottom();
-
-        assert_eq!(outline.first().copied(), Some(egui::pos2(100.0 - r, y0)));
-        assert_eq!(outline.last().copied(), Some(egui::pos2(180.0 + r, y0)));
+        let outline = flow_out_outline(pod, r, column, r, Join::Flare, Join::Flare);
 
         for p in &outline {
-            assert!(p.y >= y0 - 1e-4, "point {p:?} is above the pod bottom {y0}");
+            assert!(
+                p.y >= pod.top() - 1e-4,
+                "point {p:?} is above the pod's top"
+            );
+            assert!(p.x >= pod.left() - 1e-4 && p.x <= pod.right() + 1e-4);
         }
-        let max_x = outline.iter().map(|p| p.x).fold(f32::MIN, f32::max);
-        let min_x = outline.iter().map(|p| p.x).fold(f32::MAX, f32::min);
-        assert!(max_x <= column.right() + r + 1e-4);
-        assert!(min_x >= column.left() - r - 1e-4);
         let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         assert!(
             (max_y - column.bottom()).abs() < 1e-4,
-            "outline must reach B"
+            "outline must reach the column's bottom"
         );
     }
 
     /// The outline must never draw the crossed-out seam along the pod
-    /// bottom between the column's left and right edges -- only the flared
-    /// endpoints outside `[L, R]` may sit at `y0`.
+    /// bottom directly under the column -- only points outside the column's
+    /// own `[L, R]` span may sit at `y0 = pod.bottom()`.
     #[test]
-    fn flow_out_outline_has_no_seam_segment_along_pod_bottom() {
-        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+    fn flow_out_outline_has_no_seam_under_the_column() {
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, 40.0));
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
         let r = 8.0;
-        let y0 = attach.bottom();
+        let y0 = pod.bottom();
 
-        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
+        let outline = flow_out_outline(pod, r, column, r, Join::Flare, Join::Flare);
         for w in outline.windows(2) {
             let seg_on_y0 = (w[0].y - y0).abs() < 1e-4 && (w[1].y - y0).abs() < 1e-4;
             if seg_on_y0 {
-                // Only the flare tips (outside the column) may touch y0.
                 let both_outside = (w[0].x <= column.left() || w[0].x >= column.right())
                     && (w[1].x <= column.left() || w[1].x >= column.right());
                 assert!(
                     both_outside,
-                    "segment {:?}-{:?} lies along the seam between L and R",
+                    "segment {:?}-{:?} lies along the seam under the column",
                     w[0], w[1]
                 );
             }
         }
     }
 
-    /// Cheap sanity check that the arcs sweep quarter circles rather than
-    /// looping or jumping: consecutive points must stay close together.
+    /// On a `Join::Flush` side, the outline runs a single straight line
+    /// collinear with the pod's own edge, from above the (now-absent) pod
+    /// corner all the way down to the column's own bottom corner -- no
+    /// separate pod corner to drift out of alignment with the column.
     #[test]
-    fn flow_out_outline_consecutive_points_stay_close() {
-        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+    fn flow_out_outline_flush_side_collinear_with_pod_edge() {
+        // Column pinned flush to the pod's right edge, as
+        // `draw_flyout_column` does for the pod's last button.
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(170.0, 90.0), egui::vec2(80.0, 120.0));
+        assert_eq!(pod.right(), column.right(), "test fixture must be flush");
+        let r = 8.0;
+        let y0 = pod.bottom();
+
+        let outline = flow_out_outline(pod, r, column, r, Join::Flare, Join::Flush);
+
+        // Every point between the top of the flush run and the column's own
+        // bottom corner sits on the pod's right edge -- one straight line,
+        // no kink.
+        for p in &outline {
+            if p.y >= y0 - r - 1e-3 && p.y <= column.bottom() - r + 1e-3 && p.x > pod.right() - r {
+                assert!(
+                    (p.x - pod.right()).abs() < 1e-3,
+                    "point {p:?} is off the pod's flush edge (x = {})",
+                    pod.right()
+                );
+            }
+        }
+    }
+
+    /// All four of the pod's own corners are rounded (radius `pod_radius`)
+    /// except a `Join::Flush` side's bottom corner, which the outline
+    /// replaces with a sharp, unrounded transition straight into the
+    /// column -- no interior arc points near that corner.
+    #[test]
+    fn flow_out_outline_rounds_pod_corners_except_flush_bottom() {
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, 40.0));
+        let column = egui::Rect::from_min_size(egui::pos2(170.0, 90.0), egui::vec2(80.0, 120.0));
+        let pr = 8.0;
+
+        let outline = flow_out_outline(pod, pr, column, 8.0, Join::Flare, Join::Flush);
+
+        // A rounded corner has at least one point strictly inside both
+        // margins around the corner point (curving away from the two
+        // straight edges); an unrounded (flush) corner has none.
+        let has_curvature_near = |corner: egui::Pos2, sx: f32, sy: f32| {
+            outline.iter().any(|p| {
+                let dx = (p.x - corner.x) * sx;
+                let dy = (p.y - corner.y) * sy;
+                dx > 1e-3 && dx < pr - 1e-3 && dy > 1e-3 && dy < pr - 1e-3
+            })
+        };
+        assert!(
+            has_curvature_near(pod.left_top(), 1.0, 1.0),
+            "top-left corner should be rounded"
+        );
+        assert!(
+            has_curvature_near(pod.right_top(), -1.0, 1.0),
+            "top-right corner should be rounded"
+        );
+        assert!(
+            has_curvature_near(pod.left_bottom(), 1.0, -1.0),
+            "bottom-left corner (Flare side) should be rounded"
+        );
+        assert!(
+            !has_curvature_near(pod.right_bottom(), -1.0, -1.0),
+            "bottom-right corner (Flush side) must not be rounded"
+        );
+    }
+
+    /// The combined outline is pure geometry with no fixed pixel constants,
+    /// so it must scale linearly: doubling every input (pod, column, radii)
+    /// about the origin doubles every output point.
+    #[test]
+    fn flow_out_outline_scales_linearly_with_zoom() {
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, 40.0));
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 120.0));
         let r = 8.0;
 
-        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
-        // Each arc is `FLOW_OUT_ARC_SEGMENTS + 1` points: the point that
-        // precedes it (either the outline's start, or the straight edge's
-        // endpoint, which coincides with the arc's own mathematical start)
-        // plus its `FLOW_OUT_ARC_SEGMENTS` sampled points. The straight
-        // edges between arcs are deliberately excluded -- they are not arcs
-        // and can be long for a tall column.
-        let arc_len = FLOW_OUT_ARC_SEGMENTS + 1;
-        for arc_start in [0, arc_len, 2 * arc_len, 3 * arc_len] {
-            for w in outline[arc_start..arc_start + arc_len].windows(2) {
-                let d = w[0].distance(w[1]);
-                assert!(
-                    d <= r * 0.5,
-                    "arc points {:?}-{:?} are {d} apart (> r*0.5)",
-                    w[0],
-                    w[1]
-                );
-            }
+        let base = flow_out_outline(pod, r, column, r, Join::Flare, Join::Flare);
+
+        let scale = 2.0_f32;
+        let scaled_rect = |rect: egui::Rect| {
+            egui::Rect::from_min_max(
+                (rect.min.to_vec2() * scale).to_pos2(),
+                (rect.max.to_vec2() * scale).to_pos2(),
+            )
+        };
+        let scaled = flow_out_outline(
+            scaled_rect(pod),
+            r * scale,
+            scaled_rect(column),
+            r * scale,
+            Join::Flare,
+            Join::Flare,
+        );
+
+        assert_eq!(base.len(), scaled.len());
+        for (a, b) in base.iter().zip(scaled.iter()) {
+            assert!(
+                (b.x - a.x * scale).abs() < 1e-2 && (b.y - a.y * scale).abs() < 1e-2,
+                "point {a:?} did not scale linearly to {b:?}"
+            );
         }
     }
 
@@ -2013,14 +2113,13 @@ mod tests {
     /// finite, well-ordered outline (the clamp in `flow_out_outline`).
     #[test]
     fn flow_out_outline_clamps_radius_for_tiny_column() {
-        let attach = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
+        let pod = egui::Rect::from_min_size(egui::pos2(100.0, 50.0), egui::vec2(80.0, 40.0));
         let column = egui::Rect::from_min_size(egui::pos2(100.0, 90.0), egui::vec2(80.0, 2.0));
         let r = 8.0;
-        let y0 = attach.bottom();
 
-        let outline = flow_out_outline(attach, column, r, Join::Flare, Join::Flare);
+        let outline = flow_out_outline(pod, r, column, r, Join::Flare, Join::Flare);
         assert!(outline.iter().all(|p| p.x.is_finite() && p.y.is_finite()));
-        assert!(outline.iter().all(|p| p.y >= y0 - 1e-4));
+        assert!(outline.iter().all(|p| p.y >= pod.top() - 1e-4));
         let max_y = outline.iter().map(|p| p.y).fold(f32::MIN, f32::max);
         assert!((max_y - column.bottom()).abs() < 1e-4);
     }
