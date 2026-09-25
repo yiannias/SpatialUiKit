@@ -825,18 +825,34 @@ fn render_section_body<A: Clone, Ctx>(
                     SettingsNode::Field(f) => f.id,
                     _ => unreachable!(),
                 };
-                let run_len = i - start;
-                egui::Grid::new(run_id)
+                let mut row_rects: Vec<egui::Rect> = Vec::new();
+                let grid = egui::Grid::new(run_id)
                     .num_columns(2)
                     .spacing([unit * 1.3, unit * 0.5])
                     .show(ui, |ui| {
-                        for (row_idx, node) in tree[start..i].iter().enumerate() {
+                        for node in &tree[start..i] {
                             if let SettingsNode::Field(field) = node {
-                                let is_last = row_idx + 1 == run_len;
-                                render_field_row(ui, ctx, host, field, widths, is_last, actions);
+                                row_rects
+                                    .push(render_field_row(ui, ctx, host, field, widths, actions));
                             }
                         }
                     });
+                // Subdued between-row separators -- a guide for the eye to
+                // track label -> control across a row, never above a run's
+                // first row or below its last, never a background stripe (see
+                // `row_rule_color`). Painted after the Grid from each row's
+                // *measured* rect, midway through the gap between rows: the
+                // earlier in-Grid version read the Grid's cursor after
+                // `end_row()`, which isn't reliable for rows whose wrapped
+                // help text changes height, so some rows got a rule and
+                // others didn't (Chris, 2026-09-24 review).
+                let left = grid.response.rect.left();
+                let right = left + widths.label + unit * 1.3 + widths.control;
+                for pair in row_rects.windows(2) {
+                    let y = ((pair[0].bottom() + pair[1].top()) * 0.5).round() + 0.5;
+                    ui.painter()
+                        .hline(left..=right, y, egui::Stroke::new(1.0, row_rule_color(ui)));
+                }
             }
         }
     }
@@ -848,226 +864,219 @@ fn render_field_row<A: Clone, Ctx>(
     host: &impl SettingsHost,
     field: &Field<A, Ctx>,
     widths: ColumnWidths,
-    is_last_in_run: bool,
     actions: &mut Vec<A>,
-) {
+) -> egui::Rect {
     let label_col = label_color(ui);
-    ui.add_enabled_ui(field.enabled, |ui| {
-        ui.scope(|ui| {
-            // Exact width, not just a minimum -- this is what the `Grid`
-            // actually measures for the column (see `measure_column_widths`).
-            ui.set_width(widths.label);
-            let text = egui::RichText::new(field.label).color(label_col);
-            if field.nested {
-                ui.horizontal(|ui| {
-                    ui.add_space(row_unit(ui) * 1.1);
-                    ui.label(text);
-                });
-            } else {
-                ui.label(text);
-            }
-        });
-    });
-
-    ui.add_enabled_ui(field.enabled, |ui| {
-        ui.vertical(|ui| {
-            // The *column* takes the remaining content-pane width; each
-            // widget below stays at `CONTROL_WIDGET_WIDTH` regardless (see
-            // `ColumnWidths::control`'s doc comment) -- only help text and a
-            // `Static` value actually use the full column.
-            ui.set_width(widths.control);
-            match &field.control {
-                FieldControl::Toggle { value, on_change } => {
-                    let mut val = value(ctx);
-                    if ui.checkbox(&mut val, "").changed() {
-                        actions.push(on_change(val));
-                    }
-                }
-                FieldControl::Text { value, on_change } => {
-                    let mut val = value(ctx);
-                    if ui
-                        .add(
-                            egui::TextEdit::singleline(&mut val)
-                                .desired_width(CONTROL_WIDGET_WIDTH),
-                        )
-                        .changed()
-                    {
-                        actions.push(on_change(val));
-                    }
-                }
-                FieldControl::Dropdown {
-                    value,
-                    options,
-                    on_change,
-                } => {
-                    let current = value(ctx);
-                    egui::ComboBox::from_id_salt(field.id)
-                        .selected_text(current)
-                        .width(CONTROL_WIDGET_WIDTH)
-                        .show_ui(ui, |ui| {
-                            for opt in *options {
-                                if ui.selectable_label(current == *opt, *opt).clicked() {
-                                    actions.push(on_change(opt));
-                                }
-                            }
-                        });
-                }
-                FieldControl::DynamicDropdown {
-                    value,
-                    options,
-                    on_change,
-                } => {
-                    let current = value(ctx);
-                    let opts = options(ctx);
-                    egui::ComboBox::from_id_salt(field.id)
-                        .selected_text(current.clone())
-                        .width(CONTROL_WIDGET_WIDTH)
-                        .show_ui(ui, |ui| {
-                            for opt in &opts {
-                                if ui.selectable_label(&current == opt, opt).clicked() {
-                                    actions.push(on_change(opt, ctx));
-                                }
-                            }
-                        });
-                }
-                FieldControl::Static { value } => {
-                    // Unlike an editable control, a read-only value is
-                    // allowed to actually use the full (wide) column -- it's
-                    // exactly the kind of content [`ColumnWidths::control`]
-                    // exists for.
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(value(ctx)).color(label_col)).wrap(),
-                    );
-                }
-                FieldControl::Path {
-                    value,
-                    on_change,
-                    on_browse,
-                } => {
+    let label_rect = ui
+        .add_enabled_ui(field.enabled, |ui| {
+            ui.scope(|ui| {
+                // Exact width, not just a minimum -- this is what the `Grid`
+                // actually measures for the column (see `measure_column_widths`).
+                ui.set_width(widths.label);
+                let text = egui::RichText::new(field.label).color(label_col);
+                if field.nested {
                     ui.horizontal(|ui| {
+                        ui.add_space(row_unit(ui) * 1.1);
+                        ui.label(text);
+                    });
+                } else {
+                    ui.label(text);
+                }
+            });
+        })
+        .response
+        .rect;
+
+    let control_rect = ui
+        .add_enabled_ui(field.enabled, |ui| {
+            ui.vertical(|ui| {
+                // The *column* takes the remaining content-pane width; each
+                // widget below stays at `CONTROL_WIDGET_WIDTH` regardless (see
+                // `ColumnWidths::control`'s doc comment) -- only help text and a
+                // `Static` value actually use the full column.
+                ui.set_width(widths.control);
+                match &field.control {
+                    FieldControl::Toggle { value, on_change } => {
+                        let mut val = value(ctx);
+                        if ui.checkbox(&mut val, "").changed() {
+                            actions.push(on_change(val));
+                        }
+                    }
+                    FieldControl::Text { value, on_change } => {
                         let mut val = value(ctx);
                         if ui
                             .add(
                                 egui::TextEdit::singleline(&mut val)
-                                    .desired_width(CONTROL_WIDGET_WIDTH - 28.0),
+                                    .desired_width(CONTROL_WIDGET_WIDTH),
                             )
                             .changed()
                         {
                             actions.push(on_change(val));
                         }
-                        // `browse_path` opens a blocking native file dialog --
-                        // must only fire on an actual "..." button click, not
-                        // every frame this field renders (a bug this fixed:
-                        // the dialog previously reopened continuously the
-                        // instant the field was on screen, since there was no
-                        // button here gating the call at all).
-                        if ui.button("...").clicked() {
-                            if let Some(picked) = host.browse_path(ui, &value(ctx)) {
-                                actions.push(on_browse(picked));
+                    }
+                    FieldControl::Dropdown {
+                        value,
+                        options,
+                        on_change,
+                    } => {
+                        let current = value(ctx);
+                        egui::ComboBox::from_id_salt(field.id)
+                            .selected_text(current)
+                            .width(CONTROL_WIDGET_WIDTH)
+                            .show_ui(ui, |ui| {
+                                for opt in *options {
+                                    if ui.selectable_label(current == *opt, *opt).clicked() {
+                                        actions.push(on_change(opt));
+                                    }
+                                }
+                            });
+                    }
+                    FieldControl::DynamicDropdown {
+                        value,
+                        options,
+                        on_change,
+                    } => {
+                        let current = value(ctx);
+                        let opts = options(ctx);
+                        egui::ComboBox::from_id_salt(field.id)
+                            .selected_text(current.clone())
+                            .width(CONTROL_WIDGET_WIDTH)
+                            .show_ui(ui, |ui| {
+                                for opt in &opts {
+                                    if ui.selectable_label(&current == opt, opt).clicked() {
+                                        actions.push(on_change(opt, ctx));
+                                    }
+                                }
+                            });
+                    }
+                    FieldControl::Static { value } => {
+                        // Unlike an editable control, a read-only value is
+                        // allowed to actually use the full (wide) column -- it's
+                        // exactly the kind of content [`ColumnWidths::control`]
+                        // exists for.
+                        ui.add(
+                            egui::Label::new(egui::RichText::new(value(ctx)).color(label_col))
+                                .wrap(),
+                        );
+                    }
+                    FieldControl::Path {
+                        value,
+                        on_change,
+                        on_browse,
+                    } => {
+                        ui.horizontal(|ui| {
+                            let mut val = value(ctx);
+                            if ui
+                                .add(
+                                    egui::TextEdit::singleline(&mut val)
+                                        .desired_width(CONTROL_WIDGET_WIDTH - 28.0),
+                                )
+                                .changed()
+                            {
+                                actions.push(on_change(val));
                             }
+                            // `browse_path` opens a blocking native file dialog --
+                            // must only fire on an actual "..." button click, not
+                            // every frame this field renders (a bug this fixed:
+                            // the dialog previously reopened continuously the
+                            // instant the field was on screen, since there was no
+                            // button here gating the call at all).
+                            if ui.button("...").clicked() {
+                                if let Some(picked) = host.browse_path(ui, &value(ctx)) {
+                                    actions.push(on_browse(picked));
+                                }
+                            }
+                        });
+                    }
+                    FieldControl::Action {
+                        button_label,
+                        on_click,
+                    } => {
+                        if ui.button(*button_label).clicked() {
+                            actions.push(on_click(ctx));
                         }
-                    });
-                }
-                FieldControl::Action {
-                    button_label,
-                    on_click,
-                } => {
-                    if ui.button(*button_label).clicked() {
-                        actions.push(on_click(ctx));
+                    }
+                    FieldControl::Slider {
+                        value,
+                        range,
+                        step,
+                        suffix,
+                        on_change,
+                    } => {
+                        // Mid-drag the value lives in egui memory, not in the
+                        // app: applying Interface Scale while dragging would
+                        // rescale the UI under the cursor. The saved value is
+                        // only read when no drag is in progress.
+                        let drag_id = egui::Id::new(("settings_slider_drag", field.id));
+                        let mut val = ui
+                            .data(|d| d.get_temp::<f32>(drag_id))
+                            .unwrap_or_else(|| value(ctx));
+                        // egui's `Slider` has no `desired_width` of its own --
+                        // its track width comes from `Spacing::slider_width`,
+                        // scoped here (rather than set globally) so it matches
+                        // every other control's `CONTROL_WIDGET_WIDTH` without
+                        // affecting sliders anywhere else in the app. The value
+                        // readout suffix (e.g. "110%") draws past the track, so
+                        // the track itself is narrower than the full width.
+                        ui.spacing_mut().slider_width = CONTROL_WIDGET_WIDTH - 70.0;
+                        let response = ui.add(
+                            egui::Slider::new(&mut val, range.clone())
+                                .step_by(*step as f64)
+                                // Whole-number steps read "110%", not "110.0%".
+                                .fixed_decimals(if step.fract() == 0.0 { 0 } else { 2 })
+                                .suffix(*suffix),
+                        );
+                        if response.dragged() {
+                            ui.data_mut(|d| d.insert_temp(drag_id, val));
+                        } else if response.drag_stopped() {
+                            ui.data_mut(|d| d.remove::<f32>(drag_id));
+                            actions.push(on_change(val));
+                        } else if response.changed() {
+                            // Keyboard or a single click on the track.
+                            actions.push(on_change(val));
+                        }
                     }
                 }
-                FieldControl::Slider {
-                    value,
-                    range,
-                    step,
-                    suffix,
-                    on_change,
-                } => {
-                    // Mid-drag the value lives in egui memory, not in the
-                    // app: applying Interface Scale while dragging would
-                    // rescale the UI under the cursor. The saved value is
-                    // only read when no drag is in progress.
-                    let drag_id = egui::Id::new(("settings_slider_drag", field.id));
-                    let mut val = ui
-                        .data(|d| d.get_temp::<f32>(drag_id))
-                        .unwrap_or_else(|| value(ctx));
-                    // egui's `Slider` has no `desired_width` of its own --
-                    // its track width comes from `Spacing::slider_width`,
-                    // scoped here (rather than set globally) so it matches
-                    // every other control's `CONTROL_WIDGET_WIDTH` without
-                    // affecting sliders anywhere else in the app. The value
-                    // readout suffix (e.g. "110%") draws past the track, so
-                    // the track itself is narrower than the full width.
-                    ui.spacing_mut().slider_width = CONTROL_WIDGET_WIDTH - 70.0;
-                    let response = ui.add(
-                        egui::Slider::new(&mut val, range.clone())
-                            .step_by(*step as f64)
-                            .suffix(*suffix),
-                    );
-                    if response.dragged() {
-                        ui.data_mut(|d| d.insert_temp(drag_id, val));
-                    } else if response.drag_stopped() {
-                        ui.data_mut(|d| d.remove::<f32>(drag_id));
-                        actions.push(on_change(val));
-                    } else if response.changed() {
-                        // Keyboard or a single click on the track.
-                        actions.push(on_change(val));
-                    }
-                }
-            }
 
-            // Help/disabled-hint text wraps to the narrower of the column's
-            // own width and a comfortable reading measure -- the column can
-            // be much wider than one sentence wants to be (see
-            // `ColumnWidths::help_cap`'s doc comment).
-            let help_width = widths.control.min(widths.help_cap);
-            if let Some(hint) = field.disabled_hint {
-                if !field.enabled {
+                // Help/disabled-hint text wraps to the narrower of the column's
+                // own width and a comfortable reading measure -- the column can
+                // be much wider than one sentence wants to be (see
+                // `ColumnWidths::help_cap`'s doc comment).
+                let help_width = widths.control.min(widths.help_cap);
+                if let Some(hint) = field.disabled_hint {
+                    if !field.enabled {
+                        ui.add_space(row_unit(ui) * 0.15);
+                        ui.scope(|ui| {
+                            ui.set_max_width(help_width);
+                            ui.add(
+                                egui::Label::new(
+                                    egui::RichText::new(hint)
+                                        .size(help_font_size(ui))
+                                        .color(disabled_hint_color(ui)),
+                                )
+                                .wrap(),
+                            );
+                        });
+                    }
+                } else if let Some(text) = field.hover {
                     ui.add_space(row_unit(ui) * 0.15);
                     ui.scope(|ui| {
                         ui.set_max_width(help_width);
                         ui.add(
                             egui::Label::new(
-                                egui::RichText::new(hint)
+                                egui::RichText::new(text)
                                     .size(help_font_size(ui))
-                                    .color(disabled_hint_color(ui)),
+                                    .color(help_text_color(ui)),
                             )
                             .wrap(),
                         );
                     });
                 }
-            } else if let Some(text) = field.hover {
-                ui.add_space(row_unit(ui) * 0.15);
-                ui.scope(|ui| {
-                    ui.set_max_width(help_width);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(text)
-                                .size(help_font_size(ui))
-                                .color(help_text_color(ui)),
-                        )
-                        .wrap(),
-                    );
-                });
-            }
-        });
-    });
+            });
+        })
+        .response
+        .rect;
 
     ui.end_row();
-
-    // Subdued between-row separator -- a guide for the eye to track label ->
-    // control across the row, not a divider meant to stand out (never above
-    // the run's first row or below its last, and never a background stripe
-    // -- see `row_rule_color`'s doc comment). `ui.cursor().top()` right after
-    // `end_row()` is exactly the boundary between the row just closed and
-    // whatever comes next, since `end_row()` has already advanced the Grid's
-    // internal cursor to the next row's top.
-    if !is_last_in_run {
-        let unit = row_unit(ui);
-        let y = ui.cursor().top() - unit * 0.25;
-        let left = ui.min_rect().left();
-        let right = left + widths.label + unit * 1.3 + widths.control;
-        ui.painter()
-            .hline(left..=right, y, egui::Stroke::new(1.0, row_rule_color(ui)));
-    }
+    label_rect.union(control_rect)
 }
