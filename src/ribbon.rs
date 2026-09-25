@@ -1033,20 +1033,20 @@ pub fn flow_out_outline(
 }
 
 /// Paints the pod *and* its open flyout column as one silhouette -- the
-/// 2026-09-24 rethink: the pod is redrawn here (in the flyout's own
-/// Foreground `Area`, which always paints after the module frame's
+/// 2026-09-24 rethink: the column/wedge fill below is drawn in the flyout's
+/// own Foreground `Area` (which always paints after the module frame's
 /// Middle-order pass -- see [`draw_flyout_column`]) from the exact same
-/// `pod`/`pod_radius`/`fill`/`stroke` values [`module_frame_at`] used, so
-/// there is no separate "patch over the old corner" step to drift out of
-/// sync with it; the whole capsule is simply repainted with the correct
-/// corner shape for however it currently joins the column.
+/// `pod`/`pod_radius`/`fill`/`stroke` values [`module_frame_at`] used, so it
+/// lines up with the pod pixel for pixel instead of drifting.
 ///
 /// Fill (as convex pieces -- the combined outline is non-convex, so
 /// `egui`'s fan-triangulated `convex_polygon` can't take the whole shape at
 /// once):
-/// - the pod itself, all four corners `pod_radius`-rounded except a
-///   `Join::Flush` side's bottom corner, drawn square so it continues
-///   straight into the column with no corner to erase;
+/// - [`flow_out_pod_patches`]'s small patches, updating only the sliver of
+///   the pod's *own* silhouette a held-open flyout actually changes (see
+///   that function's doc comment for what and why -- notably, **not** the
+///   whole pod, which is what this function used to fill and which is what
+///   erased the pod's own buttons and label; see the 2026-09-25 note below);
 /// - the column body, bottom corners rounded (radius `r`) on both sides --
 ///   flush or flare, the *column's* own bottom corner is always rounded,
 ///   only the *pod's* corner above it is conditionally squared off;
@@ -1054,12 +1054,158 @@ pub fn flow_out_outline(
 ///   point, same as before.
 ///
 /// Then the combined outline (pod + column, [`flow_out_outline`]) is
-/// stroked once on top -- the only visible line, since the fill above
-/// already covers everything it crosses.
+/// stroked once on top -- for the column/wedge region this is the only
+/// visible line, since the fill there already covers everything it crosses;
+/// for the pod's own unpatched edges it retraces a line [`module_frame_at`]
+/// already stroked underneath, which is a harmless no-op overlay (same
+/// position, same color).
 ///
 /// `painter`'s clip rect must already include the flare (on whichever sides
 /// have one) and the full `pod` rect -- callers should expand their clip by
 /// `r + stroke.width` past `column` on a `Flare` side.
+///
+/// `label_background` is the pod's own label-pill color (`ModuleFrameStyle::
+/// label_background`) -- needed only for [`flow_out_pod_patches`]'s
+/// `Join::Flush`-left corner patch, which can land under the label strip;
+/// see that function's doc comment for why.
+///
+/// **2026-09-25 fix** (Chris's screenshot, `docs/design/
+/// 2026-09-25_flyout-hides-pod-icons.png`): this used to `rect_filled` the
+/// *whole* `pod` rect here before anything else, on the theory that "just
+/// repaint the capsule correctly, corner shape and all" was simpler than
+/// patching a seam. It was simpler, but wrong: the pod's own buttons (drawn
+/// by `draw_button_row`) and its label pill (`vertical_label_pill`) are
+/// painted once, in the Middle order layer, by `module_frame_at` -- *before*
+/// this function's caller (`draw_flyout_column`) runs its Foreground-order
+/// `Area` this same frame. Re-filling the entire pod here therefore painted
+/// an opaque rect straight over already-painted buttons and label, which is
+/// exactly "the pod area above the column is an empty filled shape" from
+/// Chris's report. [`flow_out_pod_patches`] replaces that with only the two
+/// regions a held-open flyout actually changes.
+///
+/// One small opaque patch [`flow_out_pod_patches`] wants painted, tagged
+/// with which color it needs -- factored out of [`paint_flow_out`] as data
+/// (rather than inlined `painter.rect_filled` calls) so a test can assert
+/// on the patch rects themselves, with no `egui::Painter`/`Context` needed,
+/// and without duplicating the geometry a real paint pass uses.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum PodPatch {
+    /// Erases the pod's old straight bottom border across the column's
+    /// current span -- painted in the pod's own `fill`.
+    Neck(egui::Rect),
+    /// A `Join::Flush` side's old rounded corner, squared off -- painted in
+    /// the pod's own `fill`. On the left side this sits *under* a
+    /// [`LabelCorner`](PodPatch::LabelCorner) patch painted on top of it.
+    Corner(egui::Rect),
+    /// The part of a left [`Corner`](PodPatch::Corner) patch that falls
+    /// under the label strip -- painted in `label_background` instead, on
+    /// top of that `Corner` patch.
+    LabelCorner(egui::Rect),
+}
+
+impl PodPatch {
+    #[cfg(test)]
+    fn rect(self) -> egui::Rect {
+        match self {
+            PodPatch::Neck(r) | PodPatch::Corner(r) | PodPatch::LabelCorner(r) => r,
+        }
+    }
+}
+
+/// The small patches that update the pod's *own* silhouette for a held-open
+/// flyout -- everything [`paint_flow_out`] fills that is not the column body
+/// or a fillet wedge (both of those are entirely below/beside the pod, never
+/// overlapping its interior, so they need no such care). See
+/// [`paint_flow_out`]'s doc comment (2026-09-25 fix) for why this exists at
+/// all: a held-open flyout only actually changes two things about the pod's
+/// own silhouette, and patching just those, instead of re-filling the whole
+/// pod, is what keeps the pod's own buttons and label visible.
+///
+/// - **Neck**: the pod's bottom border needs to read as *open* into the
+///   column, across whatever the column's current horizontal span is this
+///   frame (the animating reveal rect while opening/closing, or the settled
+///   full column once open) -- so this patch tracks it precisely with no
+///   extra state of its own. Height is `stroke_width` (how far
+///   `StrokeKind::Inside` draws the old border in from the edge), clamped to
+///   `GAP` for the same reason as the corner patches below.
+/// - **Corner** (`Join::Flush` sides only): the pod's own bottom corner
+///   there needs to go from rounded to square, matching the new combined
+///   outline -- a `Join::Flare` corner is unchanged (still the same rounded
+///   shape), so nothing is patched there at all. Sized to the old rounded
+///   corner's own bounding square, so the new stroked square corner has a
+///   clean background instead of the old arc peeking out from underneath.
+/// - **LabelCorner** (left `Join::Flush` only): that corner sits under the
+///   pod's own label strip -- `Join::Flush` on the left is always the label
+///   side (`draw_button_row`'s doc comment: the pod's first button gets
+///   `Flush` on its *outer* side, and the label strip is always that
+///   outer-left edge), not bare pod fill. `vertical_label_pill` painted its
+///   own rounded corner there in `label_background`, on top of the plain pod
+///   fill, so it needs re-squaring in that same color -- clipped to
+///   `LABEL_STRIP_W`, since the corner patch's height (from `pod_radius`)
+///   can exceed the label's fixed width at a large Interface Scale, and only
+///   the label's own width is actually painted in its color.
+///
+/// Every patch height is clamped to `GAP` -- not just `pod_radius` -- for a
+/// reason worth spelling out once here rather than at each call site:
+/// `pod_radius` is `0.138 * row_h` ([`pod_corner_radius`]) and, at the
+/// shipped default sizing, happens to land just under `GAP` (the button
+/// row's own top/bottom inset, fixed regardless of Interface Scale) -- but
+/// nothing *enforces* that relationship, and a host with a larger button-to-
+/// row-height ratio could grow it past `GAP`. Clamping means a patch can
+/// never reach as far as the button icons even then; in that (untested/
+/// unusual) configuration the old corner arc's outermost sliver may not
+/// fully erase, which is a far smaller visual glitch than eating a button.
+fn flow_out_pod_patches(
+    pod: egui::Rect,
+    pod_radius: f32,
+    column: egui::Rect,
+    left: Join,
+    right: Join,
+    stroke_width: f32,
+) -> Vec<PodPatch> {
+    let y0 = pod.bottom();
+    let l = column.left();
+    let right_x = column.right();
+    let pr = pod_radius
+        .max(0.0)
+        .min(pod.width() / 2.0)
+        .min(pod.height() / 2.0);
+    let corner_h = pr.min(GAP);
+
+    let mut patches = Vec::with_capacity(4);
+
+    if column.width() > 0.0 {
+        let neck_h = stroke_width.max(1.0).min(GAP);
+        patches.push(PodPatch::Neck(egui::Rect::from_min_max(
+            egui::pos2(l, y0 - neck_h),
+            egui::pos2(right_x, y0),
+        )));
+    }
+
+    if left == Join::Flush && corner_h > 0.0 {
+        let corner = egui::Rect::from_min_max(
+            egui::pos2(pod.left(), y0 - corner_h),
+            egui::pos2(pod.left() + corner_h, y0),
+        );
+        patches.push(PodPatch::Corner(corner));
+        let label_patch_w = corner_h.min(LABEL_STRIP_W);
+        if label_patch_w > 0.0 {
+            patches.push(PodPatch::LabelCorner(egui::Rect::from_min_max(
+                egui::pos2(pod.left(), y0 - corner_h),
+                egui::pos2(pod.left() + label_patch_w, y0),
+            )));
+        }
+    }
+    if right == Join::Flush && corner_h > 0.0 {
+        patches.push(PodPatch::Corner(egui::Rect::from_min_max(
+            egui::pos2(pod.right() - corner_h, y0 - corner_h),
+            egui::pos2(pod.right(), y0),
+        )));
+    }
+
+    patches
+}
+
 pub fn paint_flow_out(
     painter: &egui::Painter,
     pod: egui::Rect,
@@ -1070,31 +1216,28 @@ pub fn paint_flow_out(
     right: Join,
     fill: egui::Color32,
     stroke: egui::Stroke,
+    label_background: egui::Color32,
 ) {
     let y0 = pod.bottom();
     let l = column.left();
     let right_x = column.right();
     let b = column.bottom();
     let r = flow_out_radius(y0, column, r);
-    let pr = pod_radius
-        .max(0.0)
-        .min(pod.width() / 2.0)
-        .min(pod.height() / 2.0);
 
     let outline = flow_out_outline(pod, pod_radius, column, r, left, right);
 
-    // (a) the pod itself -- square only the corner a `Flush` join replaces.
-    let pod_r = pr.round().clamp(0.0, u8::MAX as f32) as u8;
-    painter.rect_filled(
-        pod,
-        egui::CornerRadius {
-            nw: pod_r,
-            ne: pod_r,
-            sw: if left == Join::Flush { 0 } else { pod_r },
-            se: if right == Join::Flush { 0 } else { pod_r },
-        },
-        fill,
-    );
+    // (a) Patch only what a held-open flyout actually changes about the
+    // pod's own silhouette -- see this function's doc comment for why this
+    // replaced a full-pod `rect_filled`, and `flow_out_pod_patches`' own doc
+    // comment for the patches themselves and why each is safely clear of the
+    // button icons and the bulk of the label pill.
+    for patch in flow_out_pod_patches(pod, pod_radius, column, left, right, stroke.width) {
+        match patch {
+            PodPatch::Neck(rect) => painter.rect_filled(rect, 0.0, fill),
+            PodPatch::Corner(rect) => painter.rect_filled(rect, 0.0, fill),
+            PodPatch::LabelCorner(rect) => painter.rect_filled(rect, 0.0, label_background),
+        };
+    }
 
     // (b) the column body -- bottom corners always rounded (radius `r`),
     // regardless of join: the *pod's* corner above is what a `Flush` side
@@ -1340,6 +1483,7 @@ fn draw_flyout_column<A>(
                 right,
                 fill_color,
                 stroke,
+                style.label_background,
             );
 
             let mut child = ui.new_child(
@@ -1980,6 +2124,55 @@ mod tests {
             closed_h, open_h,
             "opening the flyout must not change row height"
         );
+    }
+
+    /// 2026-09-25 regression (Chris's screenshot, `docs/design/
+    /// 2026-09-25_flyout-hides-pod-icons.png`): a held-open flyout used to
+    /// `rect_filled` the *entire* pod rect before painting the column, which
+    /// covered the pod's own already-painted buttons (and label) with an
+    /// opaque fill -- "the pod area above the column is an empty filled
+    /// shape". `flow_out_pod_patches` is the fix: only the pod's bottom
+    /// border/corner sliver is patched, never the button icons.
+    ///
+    /// This fails before the fix (when `paint_flow_out` filled `pod` in
+    /// full) because that patch is exactly the button rects' own bounds.
+    /// Button icons sit inset from the pod's edges by `GAP` on every side
+    /// (`row_h = button_size.y + GAP * 2.0`) -- this test builds that same
+    /// inset rect and asserts none of the patches reach it, for every join
+    /// combination a real pod can have (T-join, and both `Flush` end-pod
+    /// cases -- FILE/CREATE-style).
+    #[test]
+    fn flow_out_pod_patches_never_cover_the_button_icons() {
+        let row_h = 56.0;
+        let pod = egui::Rect::from_min_size(egui::pos2(50.0, 50.0), egui::vec2(200.0, row_h));
+        let pod_radius = pod_corner_radius(row_h);
+        // The button row's own content area: inset by `GAP` on every side,
+        // same as `module_frame_at`'s `content_rect`/`child` layout.
+        let button_area = pod.shrink(GAP);
+
+        let column =
+            egui::Rect::from_min_size(egui::pos2(100.0, pod.bottom()), egui::vec2(80.0, 120.0));
+
+        for (left, right) in [
+            (Join::Flare, Join::Flare), // middle button, T-join
+            (Join::Flush, Join::Flare), // first button, pod's own left end
+            (Join::Flare, Join::Flush), // last button, pod's own right end
+            (Join::Flush, Join::Flush), // lone button, both ends flush
+        ] {
+            let patches = flow_out_pod_patches(pod, pod_radius, column, left, right, 1.0);
+            assert!(
+                !patches.is_empty() || (left == Join::Flare && right == Join::Flare),
+                "a Flush side should always produce at least the neck patch"
+            );
+            for patch in patches {
+                let rect = patch.rect();
+                assert!(
+                    !rect.intersects(button_area),
+                    "patch {patch:?} (join {left:?}/{right:?}) must not cover \
+                     the button icon area {button_area:?}, got {rect:?}"
+                );
+            }
+        }
     }
 
     /// A middle-button (T-join, both sides `Flare`) pod, with the flyout
