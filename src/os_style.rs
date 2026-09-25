@@ -73,6 +73,31 @@ pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
     visuals
 }
 
+/// Platform-gated entry point: applies [`windows11_visuals`] on Windows,
+/// otherwise returns `base`'s plain `egui::Visuals` untouched.
+///
+/// `windows11_visuals` itself stays unconditional and untouched (its own
+/// tests assert WinUI3-specific radii/strokes regardless of the host OS this
+/// crate happens to build on) -- the platform decision belongs at the call
+/// site, which is what this wrapper is for. Added 2026-09-25: the two SDB
+/// call sites (`sdb_app::frame`, `sdb_app::settings_actions`) were calling
+/// `windows11_visuals` unconditionally, so a WinUI3 4px/8px corner-radius and
+/// flat-button-border reskin was landing on macOS too, with no AppKit
+/// equivalent -- see `docs/design/2026-09-11_visual-consistency-audit.md`
+/// §5. Callers should switch to this function; `windows11_visuals` itself is
+/// left public for direct/tested use.
+pub fn platform_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
+    #[cfg(target_os = "windows")]
+    {
+        windows11_visuals(base, accent)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = accent;
+        base.visuals()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
