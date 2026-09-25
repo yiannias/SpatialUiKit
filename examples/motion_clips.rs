@@ -10,19 +10,18 @@
 //! rasterized by a small software triangle rasterizer below (texture-
 //! mapped, vertex-color-modulated, matching what a GPU backend does closely
 //! enough for a design review) rather than opening any GPU surface or OS
-//! window. `cargo run --example motion_clips -- <variant> <out_dir>`.
+//! window. `cargo run --example motion_clips -- <out_dir>`.
 //!
-//! **Variant knob**: the kit only exposes one global motion tunable today,
-//! [`spatial_ui_kit::motion::set_bounce_amount`] (already wired through
-//! every `Spring::BOUNCY` open-spring via `Spring::scaled_by_bounce`, and
-//! deliberately a no-op on `Spring::SMOOTH` closes -- see that function's
-//! doc comment). "subtle" and "expressive" are two `bounce_amount` values;
-//! this recorder does not invent a second, parallel set of hardcoded
-//! per-variant constants inside `ribbon.rs`/`window_chrome.rs`, which would
-//! duplicate tuning knobs the app itself can't reach. Reduce Motion is
-//! exercised the same way, via `set_reduce_motion`.
+//! **Per-family tuning (2026-09-24 evening pass)**: this recorder no longer
+//! takes a "subtle"/"expressive" variant argument. The kit now tunes
+//! Flyout/Pods/Modal independently (`spatial_ui_kit::motion::MotionFamily`,
+//! `FamilyTuning`) with per-family shipped defaults (`MotionFamily::
+//! shipped_default`) instead of one global bounce amount -- this clip set
+//! records exactly those shipped defaults (no `set_family_tuning`/`set_
+//! bounce_amount` override at all), which is what everyone actually ships
+//! with. Reduce Motion is still exercised the same way, via `set_reduce_
+//! motion`, in variant recordings a caller adds by hand if needed.
 
-use spatial_ui_kit::motion;
 use spatial_ui_kit::ribbon::{
     ribbon_panel_modules, FlyoutItem, FlyoutKind, RibbonButton, RibbonFlyout, RibbonGroup,
     RibbonHost, RibbonModule,
@@ -520,30 +519,24 @@ fn timeline(duration: f64, fps: u32) -> Vec<f64> {
 
 fn main() {
     let args: Vec<String> = std::env::args().collect();
-    let variant = args.get(1).cloned().unwrap_or_else(|| "subtle".to_string());
     let out_dir = args
-        .get(2)
+        .get(1)
         .cloned()
-        .unwrap_or_else(|| format!("motion-clips/{variant}"));
+        .unwrap_or_else(|| "motion-clips".to_string());
     std::fs::create_dir_all(&out_dir).expect("create output dir");
 
-    let bounce = match variant.as_str() {
-        "subtle" => 0.55,
-        "expressive" => 1.65,
-        other => {
-            eprintln!("unknown variant '{other}', use 'subtle' or 'expressive'");
-            std::process::exit(1);
-        }
-    };
-    println!("variant = {variant}, bounce_amount = {bounce}, out_dir = {out_dir}");
+    println!("recording shipped per-family defaults, out_dir = {out_dir}");
 
     const FPS: u32 = 60;
     const W: usize = 900;
     const H: usize = 260;
 
     let host = ClipHost;
+    // No `set_bounce_amount`/`set_family_tuning` call -- `motion::
+    // family_tuning` falls back to `MotionFamily::shipped_default` for a
+    // `ctx` nothing has tuned, which is exactly the point: this records
+    // what every user gets out of the box.
     let mut recorder = Recorder::new(W, H);
-    motion::set_bounce_amount(&recorder.ctx, bounce);
 
     // -------------------------------------------------------------
     // (a) flyout open -> hold -> close.
@@ -712,7 +705,21 @@ fn main() {
                     .modal(true)
                     .fixed_size([360.0, 180.0])
                     .show(ctx, &mut open_flag, |ui| {
-                        ui.label("Export settings go here.");
+                        // Placeholder content with real layout (heading,
+                        // rows, a button) rather than a single label -- so
+                        // the recorded clip actually shows content sliding/
+                        // fading in step with the sheet (`docs/design/
+                        // 2026-09-19_animated-reveals-transforms.md`'s
+                        // "Chris's verdict": "content is part of the
+                        // unveiling", not a blank sheet that fills in after
+                        // the fact) instead of one line too small to judge
+                        // motion from.
+                        ui.heading("Export Drawing");
+                        ui.separator();
+                        ui.label("Format: PDF");
+                        ui.label("Scale: 1:100");
+                        ui.add_space(8.0);
+                        let _ = ui.button("Export");
                     });
             });
             rgba_frames.push(out);

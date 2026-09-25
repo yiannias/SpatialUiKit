@@ -365,6 +365,32 @@ impl Spring {
         }
     }
 
+    /// Flyout family's open baseline, before per-family bounce/speed tuning
+    /// (see [`MotionFamily::Flyout`]) -- same damping ratio as `BOUNCY`
+    /// (SwiftUI's own `.bouncy`) but a shorter natural period, so that even
+    /// the shipped default's exaggerated damping (`FamilyTuning` default
+    /// `bounce: 1.65`, "about the old 1.65 level" Chris approved in the
+    /// motion-clip review) still settles well under the ~0.5s ceiling
+    /// (`docs/design/2026-09-19_animated-reveals-transforms.md`, "Chris's
+    /// verdict... shipped defaults must stay short").
+    pub const FLYOUT_OPEN: Spring = Spring {
+        response: 0.28,
+        damping_fraction: 0.7,
+    };
+
+    /// Pods family's rebalance baseline. Unlike `SNAPPY` (only 0.15 of
+    /// "inherent bounce" above critical), this is deliberately more
+    /// underdamped so the per-family bounce knob has real range to scale --
+    /// fixes "pods use a [near-]critically damped spring so bounce has no
+    /// effect" (Chris, 2026-09-24 verdict). At the default `FamilyTuning`
+    /// (`bounce: 1.0`, unscaled) this still reads subtle -- damping `0.8` is
+    /// between `SNAPPY` and `BOUNCY` -- matching "about half a second is
+    /// enough for a flourish".
+    pub const PODS_REBALANCE: Spring = Spring {
+        response: 0.3,
+        damping_fraction: 0.8,
+    };
+
     fn omega(&self) -> f32 {
         (2.0 * std::f32::consts::PI) / self.response.max(1e-4)
     }
@@ -384,6 +410,25 @@ impl Spring {
         Spring {
             response: self.response,
             damping_fraction: (1.0 - inherent_bounce * amount).max(0.05),
+        }
+    }
+
+    /// Applies both a per-family bounce amount (see [`scaled_by_bounce`])
+    /// and a speed multiplier -- `speed > 1.0` settles faster (shorter
+    /// period), `speed < 1.0` slower, by dividing `response` directly.
+    /// `speed` is floored well above zero so a pathological setting (a
+    /// stuck slider, a bad settings file) can't produce an infinite-period
+    /// or `NaN` spring. This is what [`FamilyTuning`]'s `speed` field drives
+    /// -- Chris's ask to "dial flourish in and out... including exaggerated
+    /// settings" without touching bounce alone, since a longer/shorter
+    /// animation is a different knob than how much it overshoots.
+    ///
+    /// [`scaled_by_bounce`]: Spring::scaled_by_bounce
+    pub fn tuned(&self, bounce: f32, speed: f32) -> Spring {
+        let scaled = self.scaled_by_bounce(bounce);
+        Spring {
+            response: scaled.response / speed.max(0.05),
+            damping_fraction: scaled.damping_fraction,
         }
     }
 
@@ -612,31 +657,144 @@ fn bounce_amount_key() -> egui::Id {
 }
 
 /// Global bounce-amount multiplier for every `spring_presence`/
-/// `spring_presence_with` call against this `ctx` from now on -- SDB's
-/// Settings > Appearance > "Animation Bounce" slider (0%..150%) calls this
-/// each frame/on change. `0.0` removes all overshoot; `1.0` (default) is
-/// each spring's own preset; above `1.0` exaggerates it. See `Spring::
-/// scaled_by_bounce` for the exact mapping and why a non-bouncy spring
-/// (`SMOOTH`) is unaffected at any value.
+/// `spring_presence_with` call against this `ctx` from now on -- the
+/// pre-2026-09-24-evening single global knob. **Kept working** (Chris asked
+/// per-family tuning not break existing callers/SSP): sets the legacy
+/// global key `spring_presence_with` still reads, *and* every
+/// [`MotionFamily`]'s own bounce (leaving each family's own `speed`
+/// untouched), so a caller that still only knows about one global slider
+/// (an unmigrated SSP call site, an old test) gets the same effect as
+/// before across every family this crate now tunes independently. See
+/// `Spring::scaled_by_bounce` for the exact mapping and why a non-bouncy
+/// spring (`SMOOTH`) is unaffected at any value.
 pub fn set_bounce_amount(ctx: &egui::Context, amount: f32) {
     ctx.data_mut(|d| d.insert_temp(bounce_amount_key(), amount));
+    for family in MotionFamily::ALL {
+        set_family_bounce(ctx, family, amount);
+    }
 }
 
 pub fn bounce_amount(ctx: &egui::Context) -> f32 {
     ctx.data(|d| d.get_temp(bounce_amount_key())).unwrap_or(1.0)
 }
 
+/// Which family of spring-driven reveal a [`FamilyTuning`] applies to --
+/// Chris's 2026-09-24-evening ask to "dial flourish in and out" per
+/// animation family instead of one global knob, since a global bounce
+/// barely moved pods (see [`Spring::PODS_REBALANCE`]'s doc comment) and the
+/// families don't share a "shipped default" feel: flyouts expressive, pods
+/// and the modal sheet subtle.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MotionFamily {
+    /// Ribbon click-and-hold flyouts (`button_with_flyout_joined`).
+    Flyout,
+    /// Ribbon pod layout morph (`ribbon_panel_modules`'s rebalance/exit).
+    Pods,
+    /// `ThemedWindow::modal`'s sheet open/close.
+    Modal,
+}
+
+impl MotionFamily {
+    pub const ALL: [MotionFamily; 3] = [
+        MotionFamily::Flyout,
+        MotionFamily::Pods,
+        MotionFamily::Modal,
+    ];
+
+    /// This family's shipped-default tuning -- the numbers Chris signed off
+    /// on in the 2026-09-24-evening motion-clip review: flyout expressive
+    /// (bounce ~= the old 1.65 "expressive" clip value), pods and modal
+    /// subtle (bounce left at each family's own baseline damping, see
+    /// `Spring::PODS_REBALANCE`/`Spring::SNAPPY`'s doc comments). `speed`
+    /// defaults to `1.0` (unscaled) for every family -- the shipped
+    /// durations are already tuned to settle well under ~0.5s at these
+    /// bounce levels (see each preset's own doc comment), so there's no
+    /// need for a non-1.0 default speed to hit that ceiling.
+    fn shipped_default(self) -> FamilyTuning {
+        match self {
+            MotionFamily::Flyout => FamilyTuning {
+                bounce: 1.65,
+                speed: 1.0,
+            },
+            MotionFamily::Pods => FamilyTuning {
+                bounce: 1.0,
+                speed: 1.0,
+            },
+            MotionFamily::Modal => FamilyTuning {
+                bounce: 1.0,
+                speed: 1.0,
+            },
+        }
+    }
+}
+
+/// One family's bounce + speed knobs -- see [`MotionFamily`]. `bounce` feeds
+/// [`Spring::scaled_by_bounce`] (0 = no overshoot, 1 = this family's own
+/// preset, above 1 exaggerates); `speed` feeds the duration half of
+/// [`Spring::tuned`] (1 = this family's own preset duration, below 1
+/// slower, above 1 faster). Both default to values that, combined with
+/// [`MotionFamily::shipped_default`], reproduce the shipped look when a
+/// caller has never set anything for this family.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FamilyTuning {
+    pub bounce: f32,
+    pub speed: f32,
+}
+
+fn family_tuning_key(family: MotionFamily) -> egui::Id {
+    egui::Id::new(("spatial_ui_kit::motion::family_tuning", family))
+}
+
+/// Sets `family`'s bounce amount for every `spring_presence_family` call
+/// against this `ctx` from now on. Leaves `family`'s speed untouched (reads
+/// back as whatever it already was, or the shipped default if never set).
+pub fn set_family_bounce(ctx: &egui::Context, family: MotionFamily, bounce: f32) {
+    let mut tuning = family_tuning(ctx, family);
+    tuning.bounce = bounce;
+    ctx.data_mut(|d| d.insert_temp(family_tuning_key(family), tuning));
+}
+
+/// Sets `family`'s speed multiplier. Leaves `family`'s bounce untouched.
+pub fn set_family_speed(ctx: &egui::Context, family: MotionFamily, speed: f32) {
+    let mut tuning = family_tuning(ctx, family);
+    tuning.speed = speed;
+    ctx.data_mut(|d| d.insert_temp(family_tuning_key(family), tuning));
+}
+
+/// Sets both of `family`'s knobs in one write -- what SDB's Settings panel
+/// calls each frame for each of the three families (mirrors the shape of
+/// the old single `set_bounce_amount`, but per family and with a speed
+/// term).
+pub fn set_family_tuning(ctx: &egui::Context, family: MotionFamily, bounce: f32, speed: f32) {
+    ctx.data_mut(|d| d.insert_temp(family_tuning_key(family), FamilyTuning { bounce, speed }));
+}
+
+/// `family`'s current tuning, or its shipped default if nothing has set one
+/// for this `ctx` yet -- so an app that never calls `set_family_tuning` (a
+/// headless test, an example, SSP before it migrates) gets the shipped
+/// look, not an unscaled `bounce: 1.0, speed: 1.0` that would silently
+/// undo `FamilyTuning::Flyout`'s expressive default.
+pub fn family_tuning(ctx: &egui::Context, family: MotionFamily) -> FamilyTuning {
+    ctx.data(|d| d.get_temp(family_tuning_key(family)))
+        .unwrap_or_else(|| family.shipped_default())
+}
+
 /// Drives a [`SpringPresence`] stored in `ctx` memory for `id` from `open`,
 /// using `Spring::BOUNCY` to open and `Spring::SMOOTH` to close (both
 /// scaled by the global bounce amount, see `set_bounce_amount`) -- the
 /// "expand springs, collapse doesn't" rule, spring-physics version of
-/// [`presence`]. See `spring_presence_with` for custom springs.
+/// [`presence`]. See `spring_presence_with` for custom springs, or
+/// `spring_presence_family` for the per-family-tuned version this crate's
+/// own ribbon/modal call sites use now.
 pub fn spring_presence(ctx: &egui::Context, id: egui::Id, open: bool) -> PresenceFrame {
     spring_presence_with(ctx, id, open, Spring::BOUNCY, Spring::SMOOTH)
 }
 
-/// As [`spring_presence`], with caller-chosen expand/collapse springs.
-pub fn spring_presence_with(
+/// Shared implementation: drives a [`SpringPresence`] with already-scaled
+/// `expand`/`collapse` springs. `spring_presence_with` (legacy global
+/// bounce) and `spring_presence_family` (per-family bounce/speed) both
+/// scale their springs their own way and then call this.
+fn spring_presence_raw(
     ctx: &egui::Context,
     id: egui::Id,
     open: bool,
@@ -644,9 +802,6 @@ pub fn spring_presence_with(
     collapse: Spring,
 ) -> PresenceFrame {
     let now = ctx.input(|i| i.time);
-    let bounce = bounce_amount(ctx);
-    let expand = expand.scaled_by_bounce(bounce);
-    let collapse = collapse.scaled_by_bounce(bounce);
     let key = spring_presence_key(id);
     let mut presence: SpringPresence = ctx
         .data(|d| d.get_temp(key))
@@ -670,6 +825,51 @@ pub fn spring_presence_with(
 
     ctx.data_mut(|d| d.insert_temp(key, presence));
     frame
+}
+
+/// As [`spring_presence`], with caller-chosen expand/collapse springs,
+/// scaled by the legacy global bounce amount (`set_bounce_amount`/
+/// `bounce_amount`) -- not per-family. Kept for callers that haven't
+/// migrated to `spring_presence_family`.
+pub fn spring_presence_with(
+    ctx: &egui::Context,
+    id: egui::Id,
+    open: bool,
+    expand: Spring,
+    collapse: Spring,
+) -> PresenceFrame {
+    let bounce = bounce_amount(ctx);
+    spring_presence_raw(
+        ctx,
+        id,
+        open,
+        expand.scaled_by_bounce(bounce),
+        collapse.scaled_by_bounce(bounce),
+    )
+}
+
+/// As [`spring_presence_with`], scaled by `family`'s own bounce *and* speed
+/// (see [`FamilyTuning`]) instead of the legacy global bounce amount. This
+/// is what `button_with_flyout_joined` (Flyout) and `ThemedWindow::
+/// show_modal` (Modal) call now; `ribbon_panel_modules` (Pods) tunes its
+/// own `SpringTween`s the same way via `Spring::tuned` directly, since its
+/// pods aren't a single `SpringPresence`.
+pub fn spring_presence_family(
+    ctx: &egui::Context,
+    id: egui::Id,
+    open: bool,
+    family: MotionFamily,
+    expand: Spring,
+    collapse: Spring,
+) -> PresenceFrame {
+    let tuning = family_tuning(ctx, family);
+    spring_presence_raw(
+        ctx,
+        id,
+        open,
+        expand.tuned(tuning.bounce, tuning.speed),
+        collapse.tuned(tuning.bounce, tuning.speed),
+    )
 }
 
 /// Drives a [`Presence`] stored in `ctx` memory for `id` from `open`, using
@@ -1140,5 +1340,196 @@ mod tests {
         let (frame, _) = step(&ctx, 0.0, |ctx| presence(ctx, id, true));
         assert_eq!(frame.reveal, 1.0);
         assert!(!frame.animating);
+    }
+
+    // -- Per-family tuning (`MotionFamily`/`FamilyTuning`) ---------------
+
+    #[test]
+    fn family_tuning_defaults_to_shipped_look_when_unset() {
+        let ctx = egui::Context::default();
+        // Flyout ships expressive (~1.65 bounce); Pods/Modal ship subtle
+        // (unscaled, 1.0) -- see `MotionFamily::shipped_default`'s doc
+        // comment for why these specific numbers.
+        let flyout = family_tuning(&ctx, MotionFamily::Flyout);
+        assert_eq!(flyout.bounce, 1.65);
+        assert_eq!(flyout.speed, 1.0);
+        let pods = family_tuning(&ctx, MotionFamily::Pods);
+        assert_eq!(pods.bounce, 1.0);
+        assert_eq!(pods.speed, 1.0);
+        let modal = family_tuning(&ctx, MotionFamily::Modal);
+        assert_eq!(modal.bounce, 1.0);
+        assert_eq!(modal.speed, 1.0);
+    }
+
+    #[test]
+    fn set_family_bounce_leaves_speed_untouched() {
+        let ctx = egui::Context::default();
+        set_family_speed(&ctx, MotionFamily::Pods, 1.5);
+        set_family_bounce(&ctx, MotionFamily::Pods, 2.0);
+        let tuning = family_tuning(&ctx, MotionFamily::Pods);
+        assert_eq!(tuning.bounce, 2.0);
+        assert_eq!(tuning.speed, 1.5);
+    }
+
+    #[test]
+    fn set_family_speed_leaves_bounce_untouched() {
+        let ctx = egui::Context::default();
+        set_family_bounce(&ctx, MotionFamily::Modal, 0.3);
+        set_family_speed(&ctx, MotionFamily::Modal, 0.5);
+        let tuning = family_tuning(&ctx, MotionFamily::Modal);
+        assert_eq!(tuning.bounce, 0.3);
+        assert_eq!(tuning.speed, 0.5);
+    }
+
+    #[test]
+    fn set_family_tuning_sets_both_in_one_call() {
+        let ctx = egui::Context::default();
+        set_family_tuning(&ctx, MotionFamily::Flyout, 0.0, 2.0);
+        let tuning = family_tuning(&ctx, MotionFamily::Flyout);
+        assert_eq!(tuning.bounce, 0.0);
+        assert_eq!(tuning.speed, 2.0);
+    }
+
+    #[test]
+    fn other_families_are_independent() {
+        let ctx = egui::Context::default();
+        set_family_tuning(&ctx, MotionFamily::Flyout, 3.0, 0.25);
+        // Pods/Modal must still read their own (shipped-default) tuning --
+        // a per-family key must never leak into another family's.
+        let pods = family_tuning(&ctx, MotionFamily::Pods);
+        assert_eq!(pods.bounce, 1.0);
+        assert_eq!(pods.speed, 1.0);
+        let modal = family_tuning(&ctx, MotionFamily::Modal);
+        assert_eq!(modal.bounce, 1.0);
+        assert_eq!(modal.speed, 1.0);
+    }
+
+    #[test]
+    fn set_bounce_amount_sets_every_family_and_stays_backward_compatible() {
+        let ctx = egui::Context::default();
+        // A family's speed, set beforehand, must survive -- `set_bounce_
+        // amount` only ever touches bounce (see its own doc comment).
+        set_family_speed(&ctx, MotionFamily::Pods, 1.75);
+        set_bounce_amount(&ctx, 0.4);
+        assert_eq!(
+            bounce_amount(&ctx),
+            0.4,
+            "legacy global getter must still work"
+        );
+        for family in MotionFamily::ALL {
+            assert_eq!(
+                family_tuning(&ctx, family).bounce,
+                0.4,
+                "{family:?} bounce must follow the legacy global setter"
+            );
+        }
+        assert_eq!(
+            family_tuning(&ctx, MotionFamily::Pods).speed,
+            1.75,
+            "speed must be untouched by the legacy global setter"
+        );
+    }
+
+    #[test]
+    fn spring_presence_family_reduce_motion_overrides_tuning() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("spring_motion_test_family_reduce");
+        // An exaggerated bounce that would very much animate if honored.
+        set_family_tuning(&ctx, MotionFamily::Modal, 3.0, 0.25);
+        set_reduce_motion(&ctx, true);
+        let frame = spring_presence_family(
+            &ctx,
+            id,
+            true,
+            MotionFamily::Modal,
+            Spring::SNAPPY,
+            Spring::SMOOTH,
+        );
+        assert_eq!(frame.reveal, 1.0);
+        assert!(!frame.animating);
+        set_reduce_motion(&ctx, false);
+    }
+
+    #[test]
+    fn spring_presence_family_zero_bounce_removes_overshoot() {
+        let ctx = egui::Context::default();
+        let id = egui::Id::new("spring_motion_test_family_zero_bounce");
+        set_family_tuning(&ctx, MotionFamily::Flyout, 0.0, 1.0);
+        spring_presence_family(
+            &ctx,
+            id,
+            true,
+            MotionFamily::Flyout,
+            Spring::FLYOUT_OPEN,
+            Spring::SMOOTH,
+        );
+        let mut peak = 0.0f32;
+        let mut t = 0.0f32;
+        while t <= 2.0 {
+            let frame = spring_presence_family(
+                &ctx,
+                id,
+                true,
+                MotionFamily::Flyout,
+                Spring::FLYOUT_OPEN,
+                Spring::SMOOTH,
+            );
+            peak = peak.max(frame.reveal);
+            let _ = t;
+            t += 0.05;
+        }
+        assert!(
+            peak <= 1.0 + 1e-3,
+            "zero bounce must not overshoot, peak was {peak}"
+        );
+    }
+
+    #[test]
+    fn spring_tuned_speed_scales_response_inversely() {
+        let base = Spring::SNAPPY;
+        let faster = base.tuned(1.0, 2.0);
+        let slower = base.tuned(1.0, 0.5);
+        assert!((faster.response - base.response / 2.0).abs() < 1e-6);
+        assert!((slower.response - base.response * 2.0).abs() < 1e-6);
+        // Bounce untouched by speed.
+        assert_eq!(faster.damping_fraction, base.damping_fraction);
+        assert_eq!(slower.damping_fraction, base.damping_fraction);
+    }
+
+    #[test]
+    fn shipped_defaults_settle_within_half_a_second() {
+        // Chris, 2026-09-24 evening: "the shipped defaults must stay
+        // short... never multi-second." Each family's own open spring, at
+        // its shipped-default tuning, must be visually settled (within 3%
+        // of the target displacement) by t = 0.5s from a cold retarget.
+        //
+        // Deliberately a *displacement* check, not `SpringTween::
+        // is_animating` -- that flag stays true until both `SPRING_EPS_X`
+        // (0.0015) *and* `SPRING_EPS_V` (0.002/s) clear, and the velocity
+        // epsilon is dominated by `omega` (`2*pi/response`): a short-
+        // response, moderately-bouncy spring can have its velocity ring
+        // just above that floor for another second-plus after it has
+        // already become visually imperceptible (this held for the
+        // pre-existing shipped `BOUNCY`-based flyout spring too, well
+        // before this per-family tuning pass -- `is_animating` exists to
+        // stop repaint loops promptly, not to mark perceptual settling).
+        // 3% displacement at half a second is the bar a person would
+        // actually call "done".
+        let cases = [
+            (MotionFamily::Flyout, Spring::FLYOUT_OPEN),
+            (MotionFamily::Pods, Spring::PODS_REBALANCE),
+            (MotionFamily::Modal, Spring::SNAPPY),
+        ];
+        for (family, base) in cases {
+            let tuning = family.shipped_default();
+            let spring = base.tuned(tuning.bounce, tuning.speed);
+            // Unit step: starts fully displaced (-1) from the target (0).
+            let (x, _v) = spring.sample(0.5, -1.0, 0.0);
+            assert!(
+                x.abs() < 0.03,
+                "{family:?} shipped default ({spring:?}) still {:.1}% displaced at 0.5s",
+                x.abs() * 100.0
+            );
+        }
     }
 }

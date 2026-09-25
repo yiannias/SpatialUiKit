@@ -13,6 +13,13 @@ use crate::motion::{self, MotionSpec};
 use crate::theme::ThemePalette;
 use crate::tokens::{ColorToken, DimensionToken};
 
+/// How far (points) a modal sheet's content starts below its settled
+/// position at `content_opacity == 0.0`, sliding up to `0` as it reveals --
+/// see `paint_sheet_content`'s use of this. Small and deliberately
+/// unobtrusive; the fade + the sheet's own height growth already carry most
+/// of the "unveiling" read, this is a secondary cue, not the main motion.
+const CONTENT_SLIDE_PX: f32 = 10.0;
+
 fn resolved_color(token: &ColorToken, fallback: egui::Color32) -> egui::Color32 {
     token.color32().unwrap_or(fallback)
 }
@@ -315,12 +322,17 @@ impl<'a> ThemedWindow<'a> {
         // feel): `SNAPPY` opening carries a small bounce -- interruptible
         // and velocity-preserving, so a rapid re-open/close doesn't kink --
         // `SMOOTH` closing stays critically damped, no bounce on the way
-        // out. Both scaled by the global bounce-amount setting (`SMOOTH`'s
-        // is a no-op there, see `Spring::scaled_by_bounce`).
-        let presence_frame = motion::spring_presence_with(
+        // out. Tuned per the Modal family (`motion::MotionFamily::Modal`,
+        // `docs/design/2026-09-19_animated-reveals-transforms.md`'s
+        // "Per-family tuning") rather than the legacy global bounce amount,
+        // so SDB's Settings > Motion > Modal Windows sliders reach this and
+        // only this family (`SMOOTH`'s close stays a no-op under bounce,
+        // see `Spring::scaled_by_bounce`).
+        let presence_frame = motion::spring_presence_family(
             ctx,
             self.id.with("sheet_presence"),
             *open,
+            motion::MotionFamily::Modal,
             motion::Spring::SNAPPY,
             motion::Spring::SMOOTH,
         );
@@ -479,6 +491,19 @@ impl<'a> ThemedWindow<'a> {
             ));
         }
         ui.multiply_opacity(content_opacity);
+        // Content slides down into place alongside the fade, instead of
+        // sitting laid out at full size behind a fading curtain -- Chris,
+        // 2026-09-24 evening verdict: "the sheet's content must animate
+        // with the sheet -- a blank sheet that morphs in and is filled
+        // afterward is wrong; content is part of the unveiling." The frame
+        // itself (`sheet_frame`, painted below from `natural_rect`, whose
+        // `min` is `top_left`, unaffected by this) still hangs flush from
+        // the fixed top edge -- only the header/content inside slides,
+        // shrinking to no offset once `content_opacity` reaches `1.0`, so
+        // it costs nothing at rest and doesn't disturb the sheet's own
+        // "no gap under the flush top edge" invariant (`sheet_anchor_top`'s
+        // doc comment).
+        ui.add_space((1.0 - content_opacity).clamp(0.0, 1.0) * CONTENT_SLIDE_PX);
 
         self.paint_chrome(ui, ctx, open, state, colors, add_contents);
 

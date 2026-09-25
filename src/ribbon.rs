@@ -733,17 +733,22 @@ pub fn button_with_flyout_joined<A: Clone>(
     );
 
     // Spring physics (2026-09-24, Chris: "gently bouncy, Apple spring"
-    // feel) rather than the fixed-duration `MotionSpec` tween: `BOUNCY`
-    // opening is interruptible and velocity-preserving, so five rapid
-    // hold/release cycles reverse smoothly instead of restarting from a
-    // standstill each time. `SMOOTH` closing stays critically damped (no
-    // bounce on the way out) regardless of the global bounce-amount
-    // setting -- see `Spring::scaled_by_bounce`.
-    let presence = crate::motion::spring_presence_with(
+    // feel) rather than the fixed-duration `MotionSpec` tween:
+    // `FLYOUT_OPEN` opening is interruptible and velocity-preserving, so
+    // five rapid hold/release cycles reverse smoothly instead of restarting
+    // from a standstill each time. `SMOOTH` closing stays critically
+    // damped (no bounce on the way out) regardless of the Flyout family's
+    // own bounce/speed tuning -- see `Spring::scaled_by_bounce`. Tuned per
+    // the Flyout family (`MotionFamily::Flyout`, `docs/design/
+    // 2026-09-19_animated-reveals-transforms.md`'s "Per-family tuning")
+    // rather than the legacy single global bounce amount, so SDB's Settings
+    // > Motion > Flyout sliders reach this and only this family.
+    let presence = crate::motion::spring_presence_family(
         &ctx,
         presence_id,
         held_open,
-        crate::motion::Spring::BOUNCY,
+        crate::motion::MotionFamily::Flyout,
+        crate::motion::Spring::FLYOUT_OPEN,
         crate::motion::Spring::SMOOTH,
     );
 
@@ -1501,12 +1506,19 @@ pub fn ribbon_panel_modules<A: Clone>(
     let ctx = ui.ctx().clone();
     let now = ctx.input(|i| i.time);
     let reduce = crate::motion::reduce_motion(&ctx);
-    let bounce = crate::motion::bounce_amount(&ctx);
-    // "Not too much" (Chris, 2026-09-24): `SNAPPY`'s small bounce for the
-    // rebalance, not the flyout's full `BOUNCY` -- a pod-sized capsule
-    // sliding across the row reads as busy with a bigger overshoot.
-    let rebalance_spring = crate::motion::Spring::SNAPPY.scaled_by_bounce(bounce);
-    let exit_spring = crate::motion::Spring::SMOOTH.scaled_by_bounce(bounce);
+    // Pods family tuning (`MotionFamily::Pods`, `docs/design/
+    // 2026-09-19_animated-reveals-transforms.md`'s "Per-family tuning") --
+    // `PODS_REBALANCE`'s own baseline is already "not too much" (Chris,
+    // 2026-09-24) at the shipped default, but unlike the old `SNAPPY`-based
+    // global-bounce path, it's deliberately underdamped enough that turning
+    // the Pods bounce slider up actually does something (see that const's
+    // doc comment). `exit_spring` stays `SMOOTH` (no bounce leaving), still
+    // tuned by the Pods family's speed so Reduce Motion/exaggeration reach
+    // it too.
+    let pods_tuning = crate::motion::family_tuning(&ctx, crate::motion::MotionFamily::Pods);
+    let rebalance_spring =
+        crate::motion::Spring::PODS_REBALANCE.tuned(pods_tuning.bounce, pods_tuning.speed);
+    let exit_spring = crate::motion::Spring::SMOOTH.tuned(pods_tuning.bounce, pods_tuning.speed);
     let item_spacing = ui.spacing().item_spacing.x;
 
     struct Placed<'a, A> {
