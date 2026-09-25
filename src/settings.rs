@@ -471,15 +471,36 @@ fn render_nav_filtered<A, Ctx>(
     clicked
 }
 
-/// Fixed width of the control column -- every control (and the help/hint
-/// text under it) renders at this width, rather than shrink-wrapping to
-/// whatever the widest one happens to be. Matches the ribbon pods' control
-/// sizing language (docs/design/2026-09-24_ribbon-pods-spec.md): a
-/// consistent control width reads as one system rather than a pile of
-/// independently-sized widgets. Also what stops help text from ever running
-/// the full width of the window: everything in the control column, wrapped
-/// text included, is laid out inside a `Ui` this wide.
-const CONTROL_COL_WIDTH: f32 = 240.0;
+/// Fixed width of an actual control widget (dropdown/text field/slider) --
+/// Chris, round 2 of the restyle: the *column* should take the content
+/// pane's remaining width (see [`ColumnWidths::control`]), but a control
+/// widget stretched to that width would look like a pile of full-bleed bars
+/// rather than the ribbon pods' consistent control sizing language
+/// (docs/design/2026-09-24_ribbon-pods-spec.md). So the column is wide but
+/// each widget inside it stays this width, left-aligned in the space.
+const CONTROL_WIDGET_WIDTH: f32 = 280.0;
+
+/// The three widths [`render_field_row`] needs, computed once per tier by
+/// [`measure_column_widths`] and threaded down through
+/// [`render_section_body`]/[`render_content`] rather than recomputed (or
+/// hardcoded) per row:
+/// - `label`: the widest label in the tier, so every row's label column
+///   lines up (see that function's doc comment on why this isn't done via
+///   `Grid::min_col_width`).
+/// - `control`: the *column's* width -- the content pane's remaining width
+///   after the label column, minus a right margin -- which is what the
+///   help text wraps to. Individual control widgets stay at
+///   [`CONTROL_WIDGET_WIDTH`] regardless; only help text (and the
+///   `Static`/read-only value) actually uses the full column.
+/// - `help_cap`: a comfortable reading measure (~70 characters) that further
+///   caps help text's wrap width -- a very wide content pane would otherwise
+///   stretch a one-line hint into a hard-to-track full-bleed sentence.
+#[derive(Clone, Copy)]
+struct ColumnWidths {
+    label: f32,
+    control: f32,
+    help_cap: f32,
+}
 
 /// One "row unit" derived from the current body text size rather than a bare
 /// pixel constant, so every space/gap in the panel keeps its proportions as
@@ -488,6 +509,22 @@ const CONTROL_COL_WIDTH: f32 = 240.0;
 /// track it has to be computed from a text height, not hardcoded).
 fn row_unit(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body)
+}
+
+/// The label's actual font size (as opposed to [`row_unit`], a *line
+/// height*, always somewhat taller than the font itself) -- the base every
+/// other text size in a row is stated as a fraction of, per Chris's round-2
+/// note that help text should be "one step smaller than the labels."
+fn label_font_size(ui: &egui::Ui) -> f32 {
+    egui::TextStyle::Body.resolve(ui.style()).size
+}
+
+/// Help/hint text size: 0.85x the label's own font size (egui's built-in
+/// `TextStyle::Small` is a fixed 10.0 regardless of body size, which
+/// wouldn't track Text Size scaling the way every other size in this module
+/// does).
+fn help_font_size(ui: &egui::Ui) -> f32 {
+    label_font_size(ui) * 0.85
 }
 
 /// Secondary/help text color with enough contrast against the panel
@@ -528,6 +565,20 @@ fn label_color(ui: &egui::Ui) -> egui::Color32 {
         egui::Color32::WHITE
     } else {
         egui::Color32::from_rgb(0x10, 0x10, 0x14)
+    }
+}
+
+/// Between-row separator color: deliberately very low contrast against the
+/// panel surface -- a guide the eye can use to track label -> control across
+/// a row, not a divider meant to be noticed on its own (that's what the
+/// tier rule and section/group headers are for). Dark is `#26272C` on the
+/// ribbon pods' `#1E1E23`-ish surface; light is the equivalent few-percent
+/// step off that theme's surface tone.
+fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
+    if ui.visuals().dark_mode {
+        egui::Color32::from_rgb(0x26, 0x27, 0x2C)
+    } else {
+        egui::Color32::from_rgb(0xE3, 0xE4, 0xE8)
     }
 }
 
@@ -586,19 +637,50 @@ fn group_header(ui: &mut egui::Ui, label: &str) {
     ui.add_space(unit * 0.3);
 }
 
+/// A comfortable reading measure, in points, approximating ~70 characters
+/// of body text -- measured against a real mixed-case pangram fragment
+/// rather than guessed from a per-character average, so it tracks the
+/// actual font/Text Size rather than an assumed average glyph width.
+/// Chris, round 2: help text should wrap to this even when the control
+/// column itself is much wider (a very wide content pane would otherwise
+/// stretch a one-line hint into a hard-to-track full-bleed sentence).
+fn comfortable_reading_width(ui: &egui::Ui) -> f32 {
+    // ~70 characters, mixed-case with a realistic mix of narrow/wide glyphs
+    // -- close enough to a body sentence's actual character mix that
+    // measuring it beats guessing a single "average character width".
+    const SAMPLE_70_CHARS: &str =
+        "Sphinx of black quartz, judge my vows: pack my boxes with five dozen";
+    let font_id = egui::TextStyle::Body.resolve(ui.style());
+    ui.painter()
+        .layout_no_wrap(SAMPLE_70_CHARS.to_string(), font_id, egui::Color32::WHITE)
+        .size()
+        .x
+}
+
 /// The widest a tier's `Field` labels get, in points, measured with the
 /// current body font -- nested fields (whose label renders indented) count
-/// their indent as part of their width. Every `egui::Grid` under this tier
-/// is given this as its `min_col_width`, which is what actually lines up
-/// the label/control columns across separate `Section`/`Group` boundaries:
-/// a `Grid`'s own column-width memory is keyed by its id, and each run of
-/// consecutive `Field`s gets its own id (see [`render_section_body`]) rather
-/// than sharing one id across the whole tier -- reusing one `Grid` id for
-/// several `Grid::show` calls at different rects in the same frame is
-/// exactly egui's own "ID clash" antipattern (`Context::warn_on_id_clash`),
-/// and did in fact paint its red "First use of Grid ID" debug overlay all
-/// over this panel before this measurement approach replaced it.
-fn measure_label_col_width<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>]) -> f32 {
+/// their indent as part of their width. [`render_field_row`] pins the label
+/// cell to exactly this width (`ui.set_width`, not a `Grid`-level
+/// `min_col_width`) -- a `Grid`'s own column-width memory is keyed by its
+/// id, and each run of consecutive `Field`s gets its own id (see
+/// [`render_section_body`]) rather than sharing one id across the whole
+/// tier, since reusing one `Grid` id for several `Grid::show` calls at
+/// different rects in the same frame is exactly egui's own "ID clash"
+/// antipattern (`Context::warn_on_id_clash`) and did in fact paint its red
+/// "First use of Grid ID" debug overlay all over this panel before this
+/// measurement approach replaced it. Per-cell fixed widths sidestep that
+/// entirely: the `Grid` just measures whatever width each cell's content
+/// claims, which is this value every time.
+///
+/// `control`, the column's width, is the content pane's remaining width
+/// after the label column and inter-column spacing, minus a right margin of
+/// one more such gap (so the column doesn't run flush to the scrollbar) --
+/// Chris, round 2: "the control/help column should take the remaining width
+/// of the content pane," not the previous fixed 240pt. Individual control
+/// widgets stay narrow inside it (see [`CONTROL_WIDGET_WIDTH`]); only help
+/// text and a `Static` read-only value actually use the full column, and
+/// even help text further caps at [`comfortable_reading_width`].
+fn measure_column_widths<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>]) -> ColumnWidths {
     fn walk<A, Ctx>(
         ui: &egui::Ui,
         font_id: &egui::FontId,
@@ -626,7 +708,19 @@ fn measure_label_col_width<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>])
     let font_id = egui::TextStyle::Body.resolve(ui.style());
     let mut max_w: f32 = 0.0;
     walk(ui, &font_id, tree, &mut max_w);
-    max_w + 4.0
+    let label = max_w + 4.0;
+
+    let unit = row_unit(ui);
+    let col_spacing = unit * 1.3;
+    let right_margin = col_spacing;
+    let control =
+        (ui.available_width() - label - col_spacing - right_margin).max(CONTROL_WIDGET_WIDTH);
+
+    ColumnWidths {
+        label,
+        control,
+        help_cap: comfortable_reading_width(ui),
+    }
 }
 
 /// Render the single continuously-scrolling content pane: every `Section`
@@ -641,7 +735,7 @@ fn measure_label_col_width<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>])
 /// [`section_header`]; a `Group` (Selection Highlight, Spacing, ...) gets
 /// [`group_header`]. Every `Field` row anywhere under one tier -- across
 /// every nested `Section` and `Group` -- lines up its label/control columns
-/// with every other one in that tier, via [`measure_label_col_width`] rather
+/// with every other one in that tier, via [`measure_column_widths`] rather
 /// than a shared `Grid` id (see that function's doc comment for why).
 pub fn render_content<A: Clone, Ctx>(
     ui: &mut egui::Ui,
@@ -662,16 +756,16 @@ pub fn render_content<A: Clone, Ctx>(
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                let label_col_width = measure_label_col_width(ui, children);
-                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
+                let widths = measure_column_widths(ui, children);
+                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
             }
             // Each app's tree root is a flat list of tier `Section`s, so
             // `Group`/`Field`/`Custom` shouldn't appear here in practice --
             // handled via the same body renderer for robustness.
             _ => {
                 let single = std::slice::from_ref(node);
-                let label_col_width = measure_label_col_width(ui, single);
-                render_section_body(ui, ctx, host, label_col_width, single, scroll_to, actions);
+                let widths = measure_column_widths(ui, single);
+                render_section_body(ui, ctx, host, widths, single, scroll_to, actions);
             }
         }
     }
@@ -679,14 +773,14 @@ pub fn render_content<A: Clone, Ctx>(
 
 /// Walks one tier's subtree, rendering nested `Section`/`Group` headings
 /// inline and feeding every `Field` run into its own `egui::Grid` (a unique
-/// id per run, per egui's own id-clash rule -- see [`measure_label_col_width`]),
-/// each pinned to `label_col_width` so every run's label column lines up
-/// regardless of which run it's in.
+/// id per run, per egui's own id-clash rule -- see [`measure_column_widths`]),
+/// each cell pinned to `widths` so every run's columns line up regardless of
+/// which run it's in.
 fn render_section_body<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
     host: &impl SettingsHost,
-    label_col_width: f32,
+    widths: ColumnWidths,
     tree: &[SettingsNode<A, Ctx>],
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
@@ -703,12 +797,12 @@ fn render_section_body<A: Clone, Ctx>(
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
+                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Group { label, children } => {
                 group_header(ui, label);
-                render_section_body(ui, ctx, host, label_col_width, children, scroll_to, actions);
+                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
                 i += 1;
             }
             SettingsNode::Custom { render, .. } => {
@@ -722,21 +816,24 @@ fn render_section_body<A: Clone, Ctx>(
                 }
                 let unit = row_unit(ui);
                 // Unique id per run (the first field's own stable id) --
-                // never a shared per-tier id; see `measure_label_col_width`'s
+                // never a shared per-tier id; see `measure_column_widths`'s
                 // doc comment for why that's an egui id-clash bug, not
-                // harmless reuse.
+                // harmless reuse. No `min_col_width` here either: each cell
+                // claims its exact width itself (`render_field_row`), which
+                // is what the `Grid` actually measures.
                 let run_id = match &tree[start] {
                     SettingsNode::Field(f) => f.id,
                     _ => unreachable!(),
                 };
+                let run_len = i - start;
                 egui::Grid::new(run_id)
                     .num_columns(2)
-                    .min_col_width(label_col_width)
                     .spacing([unit * 1.3, unit * 0.5])
                     .show(ui, |ui| {
-                        for node in &tree[start..i] {
+                        for (row_idx, node) in tree[start..i].iter().enumerate() {
                             if let SettingsNode::Field(field) = node {
-                                render_field_row(ui, ctx, host, field, actions);
+                                let is_last = row_idx + 1 == run_len;
+                                render_field_row(ui, ctx, host, field, widths, is_last, actions);
                             }
                         }
                     });
@@ -750,14 +847,16 @@ fn render_field_row<A: Clone, Ctx>(
     ctx: &Ctx,
     host: &impl SettingsHost,
     field: &Field<A, Ctx>,
+    widths: ColumnWidths,
+    is_last_in_run: bool,
     actions: &mut Vec<A>,
 ) {
     let label_col = label_color(ui);
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.scope(|ui| {
-            // Column width itself comes from the enclosing `Grid`'s
-            // `min_col_width` (set from `measure_label_col_width`), not a
-            // literal here.
+            // Exact width, not just a minimum -- this is what the `Grid`
+            // actually measures for the column (see `measure_column_widths`).
+            ui.set_width(widths.label);
             let text = egui::RichText::new(field.label).color(label_col);
             if field.nested {
                 ui.horizontal(|ui| {
@@ -772,7 +871,11 @@ fn render_field_row<A: Clone, Ctx>(
 
     ui.add_enabled_ui(field.enabled, |ui| {
         ui.vertical(|ui| {
-            ui.set_width(CONTROL_COL_WIDTH);
+            // The *column* takes the remaining content-pane width; each
+            // widget below stays at `CONTROL_WIDGET_WIDTH` regardless (see
+            // `ColumnWidths::control`'s doc comment) -- only help text and a
+            // `Static` value actually use the full column.
+            ui.set_width(widths.control);
             match &field.control {
                 FieldControl::Toggle { value, on_change } => {
                     let mut val = value(ctx);
@@ -783,7 +886,10 @@ fn render_field_row<A: Clone, Ctx>(
                 FieldControl::Text { value, on_change } => {
                     let mut val = value(ctx);
                     if ui
-                        .add(egui::TextEdit::singleline(&mut val).desired_width(CONTROL_COL_WIDTH))
+                        .add(
+                            egui::TextEdit::singleline(&mut val)
+                                .desired_width(CONTROL_WIDGET_WIDTH),
+                        )
                         .changed()
                     {
                         actions.push(on_change(val));
@@ -797,7 +903,7 @@ fn render_field_row<A: Clone, Ctx>(
                     let current = value(ctx);
                     egui::ComboBox::from_id_salt(field.id)
                         .selected_text(current)
-                        .width(CONTROL_COL_WIDTH)
+                        .width(CONTROL_WIDGET_WIDTH)
                         .show_ui(ui, |ui| {
                             for opt in *options {
                                 if ui.selectable_label(current == *opt, *opt).clicked() {
@@ -815,7 +921,7 @@ fn render_field_row<A: Clone, Ctx>(
                     let opts = options(ctx);
                     egui::ComboBox::from_id_salt(field.id)
                         .selected_text(current.clone())
-                        .width(CONTROL_COL_WIDTH)
+                        .width(CONTROL_WIDGET_WIDTH)
                         .show_ui(ui, |ui| {
                             for opt in &opts {
                                 if ui.selectable_label(&current == opt, opt).clicked() {
@@ -825,6 +931,10 @@ fn render_field_row<A: Clone, Ctx>(
                         });
                 }
                 FieldControl::Static { value } => {
+                    // Unlike an editable control, a read-only value is
+                    // allowed to actually use the full (wide) column -- it's
+                    // exactly the kind of content [`ColumnWidths::control`]
+                    // exists for.
                     ui.add(
                         egui::Label::new(egui::RichText::new(value(ctx)).color(label_col)).wrap(),
                     );
@@ -839,7 +949,7 @@ fn render_field_row<A: Clone, Ctx>(
                         if ui
                             .add(
                                 egui::TextEdit::singleline(&mut val)
-                                    .desired_width(CONTROL_COL_WIDTH - 28.0),
+                                    .desired_width(CONTROL_WIDGET_WIDTH - 28.0),
                             )
                             .changed()
                         {
@@ -881,6 +991,14 @@ fn render_field_row<A: Clone, Ctx>(
                     let mut val = ui
                         .data(|d| d.get_temp::<f32>(drag_id))
                         .unwrap_or_else(|| value(ctx));
+                    // egui's `Slider` has no `desired_width` of its own --
+                    // its track width comes from `Spacing::slider_width`,
+                    // scoped here (rather than set globally) so it matches
+                    // every other control's `CONTROL_WIDGET_WIDTH` without
+                    // affecting sliders anywhere else in the app. The value
+                    // readout suffix (e.g. "110%") draws past the track, so
+                    // the track itself is narrower than the full width.
+                    ui.spacing_mut().slider_width = CONTROL_WIDGET_WIDTH - 70.0;
                     let response = ui.add(
                         egui::Slider::new(&mut val, range.clone())
                             .step_by(*step as f64)
@@ -898,31 +1016,58 @@ fn render_field_row<A: Clone, Ctx>(
                 }
             }
 
+            // Help/disabled-hint text wraps to the narrower of the column's
+            // own width and a comfortable reading measure -- the column can
+            // be much wider than one sentence wants to be (see
+            // `ColumnWidths::help_cap`'s doc comment).
+            let help_width = widths.control.min(widths.help_cap);
             if let Some(hint) = field.disabled_hint {
                 if !field.enabled {
                     ui.add_space(row_unit(ui) * 0.15);
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(hint)
-                                .size(row_unit(ui) * 0.85)
-                                .color(disabled_hint_color(ui)),
-                        )
-                        .wrap(),
-                    );
+                    ui.scope(|ui| {
+                        ui.set_max_width(help_width);
+                        ui.add(
+                            egui::Label::new(
+                                egui::RichText::new(hint)
+                                    .size(help_font_size(ui))
+                                    .color(disabled_hint_color(ui)),
+                            )
+                            .wrap(),
+                        );
+                    });
                 }
             } else if let Some(text) = field.hover {
                 ui.add_space(row_unit(ui) * 0.15);
-                ui.add(
-                    egui::Label::new(
-                        egui::RichText::new(text)
-                            .size(row_unit(ui) * 0.85)
-                            .color(help_text_color(ui)),
-                    )
-                    .wrap(),
-                );
+                ui.scope(|ui| {
+                    ui.set_max_width(help_width);
+                    ui.add(
+                        egui::Label::new(
+                            egui::RichText::new(text)
+                                .size(help_font_size(ui))
+                                .color(help_text_color(ui)),
+                        )
+                        .wrap(),
+                    );
+                });
             }
         });
     });
 
     ui.end_row();
+
+    // Subdued between-row separator -- a guide for the eye to track label ->
+    // control across the row, not a divider meant to stand out (never above
+    // the run's first row or below its last, and never a background stripe
+    // -- see `row_rule_color`'s doc comment). `ui.cursor().top()` right after
+    // `end_row()` is exactly the boundary between the row just closed and
+    // whatever comes next, since `end_row()` has already advanced the Grid's
+    // internal cursor to the next row's top.
+    if !is_last_in_run {
+        let unit = row_unit(ui);
+        let y = ui.cursor().top() - unit * 0.25;
+        let left = ui.min_rect().left();
+        let right = left + widths.label + unit * 1.3 + widths.control;
+        ui.painter()
+            .hline(left..=right, y, egui::Stroke::new(1.0, row_rule_color(ui)));
+    }
 }
