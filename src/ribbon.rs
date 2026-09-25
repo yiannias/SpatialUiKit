@@ -1561,9 +1561,19 @@ pub fn ribbon_panel_modules<A: Clone>(
     let present: std::collections::HashSet<&'static str> = placed.iter().map(|p| p.label).collect();
 
     for (p, (tx, tw)) in placed.iter().zip(targets.iter()) {
+        // Only steal a morph source that is *not* also present this frame --
+        // 2026-09-25 crash (Chris): when SDB's FILL tool pod appeared while
+        // its morph source (CREATE) was *also* still in this frame's module
+        // list (a one-frame overlap from `ribbon_morphs`' mapping), removing
+        // `old_label` here could delete the very entry the still-present
+        // "CREATE" placement had already retargeted earlier in this same
+        // loop -- orphaning it before the draw loop below looked it up,
+        // which is what turned a bookkeeping slip into a panic. `present` is
+        // computed once, above, before this loop, precisely so this check
+        // doesn't care about iteration order between the two.
         let morph_source = morphs
             .iter()
-            .find(|(new_label, _)| *new_label == p.label)
+            .find(|(new_label, old_label)| *new_label == p.label && !present.contains(old_label))
             .and_then(|(_, old_label)| anim.pods.remove(old_label));
         anim.pods.entry(p.label).or_insert_with(|| {
             if let Some(seed) = morph_source {
@@ -1622,10 +1632,14 @@ pub fn ribbon_panel_modules<A: Clone>(
     // Leaving pods first, so present pods (drawn after) paint on top as
     // they slide across a shrinking neighbour's space.
     for label in leaving_labels {
-        let pod = *anim
-            .pods
-            .get(label)
-            .expect("label came from anim.pods.keys() above");
+        // A graceful skip, not an `.expect` -- this bookkeeping is meant to
+        // be infallible (`label` came from `anim.pods.keys()` moments ago),
+        // but the 2026-09-25 morph-overlap crash showed a hidden path can
+        // desync it. Missing this frame's animation for one pod reads as a
+        // dropped frame, not an app crash.
+        let Some(pod) = anim.pods.get(label).copied() else {
+            continue;
+        };
         animating_any |= pod.w.is_animating(now) || pod.x.is_animating(now);
         let w = pod.w.value(now).max(0.0);
         if w < 0.5 {
@@ -1639,10 +1653,14 @@ pub fn ribbon_panel_modules<A: Clone>(
     }
 
     for (p, (tx, tw)) in placed.into_iter().zip(targets.iter()) {
-        let pod = *anim
-            .pods
-            .get(p.label)
-            .expect("retargeted into anim.pods above");
+        // As above -- graceful skip rather than an `.expect` that turns a
+        // bookkeeping miss into a panic. A pod that lost its anim state this
+        // frame just doesn't draw (and re-enters growing from 0 next frame,
+        // via the retarget loop's `or_insert_with` above) instead of taking
+        // the whole app down.
+        let Some(pod) = anim.pods.get(p.label).copied() else {
+            continue;
+        };
         animating_any |= pod.w.is_animating(now) || pod.x.is_animating(now);
         let x = pod.x.value(now);
         let w = pod.w.value(now).max(0.0);
@@ -2290,5 +2308,58 @@ mod tests {
             !anim.pods.contains_key("CREATE"),
             "old pod's anim state should be consumed by the morph, not left behind separately"
         );
+    }
+
+    /// 2026-09-25 crash regression: a morph's `old_label` can be present in
+    /// the *same* frame as its `new_label` (SDB's FILL tool pod appearing
+    /// while `ribbon_morphs` still lists CREATE, its morph source, for one
+    /// frame). Before the fix, `remove(old_label)` deleted CREATE's freshly-
+    /// retargeted entry out from under its own still-present placement,
+    /// which the draw loop's `.expect` then panicked on. Runs both module-
+    /// list orders, since the original bug only reproduced in one of them
+    /// (whichever put the morph consumer after its source in `placed`).
+    fn morph_source_present_same_frame_does_not_panic(order: &[&'static str]) {
+        let ctx = egui::Context::default();
+        let row_id = egui::Id::new(("test_row_morph_overlap", order));
+        run_row(&ctx, 0.0, row_id, &["CREATE"]);
+        run_row(&ctx, 2.0, row_id, &["CREATE"]);
+
+        ctx.begin_pass(egui::RawInput {
+            time: Some(2.01),
+            ..Default::default()
+        });
+        egui::Area::new(egui::Id::new("pod_test_area"))
+            .fixed_pos(egui::pos2(0.0, 0.0))
+            .show(&ctx, |ui| {
+                let host = TestHost;
+                let modules = order
+                    .iter()
+                    .map(|&label| {
+                        RibbonModule::Buttons(RibbonGroup {
+                            label,
+                            buttons: vec![test_button()],
+                        })
+                    })
+                    .collect();
+                // Does not panic -- that's the regression this test guards.
+                ribbon_panel_modules(ui, row_id, modules, &[("FILL_TOOL", "CREATE")], &host);
+            });
+        let _ = ctx.end_pass();
+
+        let anim = anim_snapshot(&ctx, row_id);
+        assert!(
+            anim.pods.contains_key("CREATE"),
+            "CREATE is still present this frame and must still draw/animate, not vanish"
+        );
+    }
+
+    #[test]
+    fn morph_overlap_does_not_panic_new_label_first() {
+        morph_source_present_same_frame_does_not_panic(&["FILL_TOOL", "CREATE"]);
+    }
+
+    #[test]
+    fn morph_overlap_does_not_panic_old_label_first() {
+        morph_source_present_same_frame_does_not_panic(&["CREATE", "FILL_TOOL"]);
     }
 }
