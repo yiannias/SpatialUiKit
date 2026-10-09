@@ -1,8 +1,8 @@
 //! Throwaway visual check for `window_chrome::ThemedWindow` against the
 //! Dark and Light `ThemePalette` built-ins -- not part of the crate's
 //! public surface, just a one-off `cargo run --example theme_preview` used
-//! while implementing docs/design/2026-08-30_theme-system-spec.md (SDB
-//! repo). Safe to delete once the real Themes Panel exists in SDB.
+//! while implementing docs/design/2026-08-30_theme-system-spec.md (the host app
+//! repo). Safe to delete once the real Themes Panel exists in the host app.
 
 use spatial_ui_kit::theme::ThemePalette;
 use spatial_ui_kit::window_chrome::ThemedWindow;

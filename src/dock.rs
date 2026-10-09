@@ -1,8 +1,8 @@
 //! Docking/tabbing/floating-panel mechanics, generic over an app-supplied
-//! tab identity type `T`, shared between SpatialSketchPad and
-//! SpatialDrawingBoard.
+//! tab identity type `T`, shared between the host application and
+//! the host application.
 //!
-//! Ported from SpatialSketchPad's `ssp-app::window` + the drag-to-detach/
+//! Ported from the host application's `ssp-app::window` + the drag-to-detach/
 //! redock mechanism documented in its
 //! `docs/design/2026-07-20-panel-drag-dock-redock-design-brief.md`. Two
 //! prior attempts to build this gesture failed by mutating dock state
@@ -56,7 +56,7 @@ impl DockSide {
 }
 
 /// Where a panel should be placed. Mirrors each app's own persisted
-/// placement enum (e.g. SSP's `PanelPlacement`), but stays deliberately
+/// placement enum (e.g. the host app's `PanelPlacement`), but stays deliberately
 /// smaller and non-serializable -- it's the vocabulary [`move_panel`]
 /// operates on, not a storage format. Apps keep their own enum for
 /// persistence and convert to/from this at the call site.
@@ -67,7 +67,7 @@ impl DockSide {
 /// A central pane tree is a third `DockState` this crate has no handle to
 /// and no opinion about (mirroring the module doc's point that detached-
 /// window lifecycle stays app-side) -- so a drag that resolves to the
-/// central region is something the caller (SDB) places into its own
+/// central region is something the caller (the host app) places into its own
 /// `DockState` itself, the same way it already owns floating/hidden
 /// bookkeeping this enum's other variants don't touch either.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,14 +79,14 @@ pub enum DockTarget {
 
 /// A drop region's role within whichever window it lives in. `Left`/`Right`
 /// mirror [`DockSide`]; `Central` is the pane tree over the drawing canvas
-/// that only some apps (currently SDB) have.
+/// that only some apps (currently the host app) have.
 ///
 /// Kept separate from `DockSide` rather than adding a third variant there:
 /// `DockSide` is still exactly what [`move_panel`], [`DockMenuAction`], and
 /// `TabViewerAdapter`'s side-relative menu logic want for the two
 /// *persistent* docks, and every one of those call sites is unconditional
 /// two-arm logic (`opposite()`, "move to the other side") that a `Central`
-/// arm would either have to panic on or silently mishandle. Forcing SSP --
+/// arm would either have to panic on or silently mishandle. Forcing the host app --
 /// which has no central tree at all -- to reckon with that arm for code it
 /// never touches would be exactly the wart the task brief warned against.
 /// `DockRegion` exists only in the drag-classification vocabulary below,
@@ -470,7 +470,7 @@ pub fn poll_redock<T: TabId>(
 pub trait DockHost<T: TabId> {
     /// Human-readable title for a tab. Centralizing this in one `DockHost`
     /// impl (rather than re-matching the tab type at every call site) is
-    /// itself a correctness win: SSP's pre-extraction code had this same
+    /// itself a correctness win: the host app's pre-extraction code had this same
     /// match duplicated 4 times, and a fifth call site was easy to forget.
     fn title(&self, tab: T) -> String;
 

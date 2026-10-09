@@ -1,15 +1,15 @@
-//! Command & Status Panel mechanics shared between SpatialSketchPad and
-//! SpatialDrawingBoard: the floating translucent "squircle" that anchors to
+//! Command & Status Panel mechanics shared between the host application and
+//! the host application: the floating translucent "squircle" that anchors to
 //! the drawing viewport's edges, its auto-fading notification feed, cockpit-
 //! style annunciator push-buttons, and its resize/context-menu chrome.
 //!
-//! **Named the Passive Panel until 2026-08-10 (SDB) / 2026-08-21 (SSP).**
+//! **Named the Passive Panel until 2026-08-10 (the host app) / 2026-08-21 (the host app).**
 //! Both apps retired "passive": the panel takes command input, toggles
-//! drafting aids, and (in SDB) sets a stored drafting-scale document
+//! drafting aids, and (in the host app) sets a stored drafting-scale document
 //! property, so the word was wrong as well as vague. This module -- and
 //! `theme::COMMAND_STATUS_PANEL_TEXT_SIZE` -- carried the old name for a
-//! stretch after SDB's rename since it's public API shared with SSP and a
-//! module rename needed SSP's agreement first (ADR 0010); both apps now use
+//! stretch after the host app's rename since it's public API shared with the host app and a
+//! module rename needed the host app's agreement first (ADR 0010); both apps now use
 //! the new name throughout.
 //!
 //! Investigating both apps' current `chrome::passive_panel.rs` (2026-07-20,
@@ -17,8 +17,8 @@
 //! mechanics -- `fit_to_viewport`, the annunciator painting, the feed
 //! fade-out math, the resize grip, and the right-click menu were essentially
 //! copy-identical between the two, differing only in which annunciators each
-//! app wires up and small policy choices (SDB gates margin recapture on an
-//! actual drag and edge-snaps; SSP recaptures every valid frame). This module
+//! app wires up and small policy choices (the host app gates margin recapture on an
+//! actual drag and edge-snaps; the host app recaptures every valid frame). This module
 //! is a **utils-style extraction**, not a generic-trait one like `menu`: none
 //! of these functions touch either app's `Action`/`UiContext` type at all --
 //! they operate on plain geometry, `FeedEntry`/`FeedKind`, and closures for
@@ -78,7 +78,7 @@ pub const FRAME_PAD: egui::Vec2 = egui::vec2(30.0, 22.0);
 /// the other floats) -- an explicit, stable choice rather than a per-call
 /// "nearer edge" guess, which visibly jumps when floating-point-close
 /// top/bottom margins flip which one counts as nearer across a resize.
-/// `min_outer` is the app's own minimum outer size (SSP and SDB use
+/// `min_outer` is the app's own minimum outer size (the host app use
 /// different values).
 pub fn fit_to_viewport(
     margins: (f32, f32, f32, f32),
@@ -130,7 +130,7 @@ pub fn capture_anchor_bottom(rect: egui::Rect, vp: egui::Rect) -> bool {
 /// Rounds `raw` to `edge_margin` if it's within `threshold` of the edge, so a
 /// drag that ends up "roughly" near an edge consistently lands at exactly the
 /// same gap instead of whatever pixel the user happened to release on.
-/// Optional -- SDB uses this on its drag-captured margins, SSP doesn't call
+/// Optional -- the host app uses this on its drag-captured margins, the host app doesn't call
 /// it at all.
 pub fn snap_edge(raw: f32, edge_margin: f32, threshold: f32) -> f32 {
     if raw <= threshold {
@@ -228,7 +228,7 @@ pub fn annunciator_response(
 /// fairly dark grey text overlay", and "No glow either."
 ///
 /// [`AnnunciatorStyle::cockpit`] is the pre-2026-09-13 look exactly, and is
-/// what every un-styled entry point still uses, so SSP -- which has no theme
+/// what every un-styled entry point still uses, so the host app -- which has no theme
 /// tokens -- is unaffected.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct AnnunciatorStyle {
@@ -282,7 +282,7 @@ impl Default for AnnunciatorStyle {
 }
 
 /// The historical (and still default) annunciator cap size -- what
-/// [`annunciator_response`] uses, and what SSP's panel is laid out around.
+/// [`annunciator_response`] uses, and what the host app's panel is laid out around.
 pub const ANNUNCIATOR_SIZE: egui::Vec2 = egui::vec2(58.0, 40.0);
 
 /// Below this cap height there is no room for both the icon and its caption,
@@ -295,11 +295,11 @@ const CAPTION_MIN_HEIGHT: f32 = 26.0;
 /// letting them overflow or clip. Every internal metric (corner radius, icon
 /// box, caption baseline, stroke widths) is derived from `size` rather than
 /// hardcoded, and the caption is dropped entirely below
-/// `CAPTION_MIN_HEIGHT`. Added for SDB's flowing passive bar (Chris,
+/// `CAPTION_MIN_HEIGHT`. Added for the host app's flowing passive bar (Chris,
 /// 2026-08-01: "the Ortho/Snap etc. buttons are too big... should flow in
 /// order to allow the user to adjust the height of the passive bar");
 /// `annunciator_response`/[`annunciator`] keep their exact previous look, so
-/// SSP is unaffected.
+/// the host app is unaffected.
 pub fn annunciator_response_sized(
     ui: &mut egui::Ui,
     label: &str,
@@ -458,7 +458,7 @@ pub fn annunciator_response_styled(
 /// A text "capsule": a pill-shaped, clickable readout sized to its own text,
 /// styled to sit alongside the [`annunciator_response`] caps. Used for values
 /// that are *read* far more often than toggled and don't reduce to an on/off
-/// lamp -- SDB's drafting-scale readout ("1:40", `1/4" = 1'-0"`) is the first.
+/// lamp -- the host app's drafting-scale readout ("1:40", `1/4" = 1'-0"`) is the first.
 /// Returns the raw `Response` so the caller can hang a click handler or a
 /// `context_menu` / popup off it.
 pub fn capsule(
@@ -543,8 +543,8 @@ pub fn annunciator(
 /// Renders the panel's translucent rounded-rect frame at the given opacity
 /// (0.25-1.0, clamped), with the historical hardcoded near-black base color.
 /// Identical styling in both apps. Kept as-is (rather than repointing at
-/// [`panel_frame_with_background`]'s new default) so SSP, which has no
-/// surface-color theming yet, is unaffected by SDB's own theming work.
+/// [`panel_frame_with_background`]'s new default) so the host app, which has no
+/// surface-color theming yet, is unaffected by the host app's own theming work.
 pub fn panel_frame(opacity: f32) -> egui::Frame {
     panel_frame_themed(opacity, egui::Color32::from_rgb(30, 30, 35), 14)
 }
@@ -552,18 +552,18 @@ pub fn panel_frame(opacity: f32) -> egui::Frame {
 /// Same as [`panel_frame`], but with a caller-supplied base fill color
 /// instead of the hardcoded near-black -- lets a themeable app match this
 /// panel's background to its own "surface" token (`theme::SurfaceTokens`)
-/// rather than the two drifting independently. Added 2026-09-05 for SDB's
+/// rather than the two drifting independently. Added 2026-09-05 for the host app's
 /// ribbon/dock/CSP surface-color unification; `alpha` (opacity) still comes
 /// from `opacity`, not from `background`'s own alpha channel. Kept as a
 /// thin wrapper over [`panel_frame_themed`] (this panel's historical corner
-/// radius, 14) for existing callers -- SDB itself has since moved to that
+/// radius, 14) for existing callers -- the host app itself has since moved to that
 /// function directly, to also share the ribbon/dock's own radius.
 pub fn panel_frame_with_background(opacity: f32, background: egui::Color32) -> egui::Frame {
     panel_frame_themed(opacity, background, 14)
 }
 
 /// Same as [`panel_frame_with_background`], with the corner radius also
-/// caller-supplied -- added 2026-09-05, same session, so SDB could match
+/// caller-supplied -- added 2026-09-05, same session, so the host app could match
 /// this panel's corners to `spatial_ui_kit::ribbon::FRAME_RADIUS` (8) rather
 /// than this panel's own historical 14, per Chris: the docked panels, the
 /// ribbon, and the CSP should all round the same amount.
@@ -585,7 +585,7 @@ pub fn panel_frame_themed(
 }
 
 /// Same as [`panel_frame_themed`], with the border stroke also caller-
-/// supplied -- added 2026-09-13 so SDB's Command & Status Panel can draw the
+/// supplied -- added 2026-09-13 so the host app's Command & Status Panel can draw the
 /// *same* border as the ribbon's module capsules
 /// (`theme::SurfaceTokens::border_color`/`border_width`) instead of this
 /// module's own lighter, panel-opacity-modulated `rgba(90, 90, 100,
@@ -595,7 +595,7 @@ pub fn panel_frame_themed(
 /// The stroke is used verbatim, **not** faded with `opacity` the way the
 /// fill is -- the ribbon's border has never varied with anything, and
 /// "same color" only holds if this one doesn't either. `panel_frame_themed`
-/// above keeps the old opacity-tied stroke, so SSP is unaffected.
+/// above keeps the old opacity-tied stroke, so the host app is unaffected.
 pub fn panel_frame_bordered(
     opacity: f32,
     background: egui::Color32,
@@ -638,8 +638,8 @@ pub fn panel_window(
 }
 
 /// Draws the feed: either the full scrollback (`show_history`) or the
-/// last-few entries fading out with age. `monospace` matches SDB's styling
-/// choice (SSP renders proportional).
+/// last-few entries fading out with age. `monospace` matches the host app's styling
+/// choice (the host app renders proportional).
 /// Requests a repaint while anything is still fading or visible, so the fade
 /// animation actually advances frame to frame.
 pub fn render_feed(
@@ -724,7 +724,7 @@ pub fn render_feed(
 /// resizes it.
 ///
 /// Returns the grip's own drag `Response` -- a caller whose window also
-/// re-derives its size/position from fixed margins every frame (as SDB's
+/// re-derives its size/position from fixed margins every frame (as the host app's
 /// Command & Status Panel does, see its own doc comments) needs to know a
 /// resize-only drag is in progress, not just a whole-window move-drag, or
 /// that per-frame re-derivation overwrites the grip's own change the very
@@ -854,8 +854,8 @@ mod tests {
 
     /// `AnnunciatorStyle::cockpit` must keep reproducing the exact literals
     /// that were inlined in `annunciator_response_sized` before the
-    /// 2026-09-13 style pass -- SSP still renders through it unchanged, and
-    /// SDB's dark mode does too (Chris: "Dark mode is good as it is").
+    /// 2026-09-13 style pass -- the host app still renders through it unchanged, and
+    /// the host app's dark mode does too (Chris: "Dark mode is good as it is").
     #[test]
     fn the_cockpit_style_reproduces_the_literals_it_replaced() {
         let s = AnnunciatorStyle::cockpit();

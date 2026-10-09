@@ -1,5 +1,5 @@
 //! Idle-timeout command-alias buffer, generic over an app-supplied action
-//! type `A` -- ported from SpatialDrawingBoard's `chrome::alias_buffer`
+//! type `A` -- ported from the host application's `chrome::alias_buffer`
 //! (`crates/sdb_ui/src/chrome/alias_buffer.rs`), ADR 0010's alias-resolving
 //! command line had kept this app-specific; this module is the reversal for
 //! that one piece, following the same generic-over-`A` shape as
@@ -10,7 +10,7 @@
 //! clicking into a command-line text field; after a short pause with no new
 //! keystrokes, the accumulated buffer is resolved against the app's alias
 //! table and dispatched. It's the idle-timeout complement to an
-//! always-available, Enter-driven command line -- both can coexist (SDB's
+//! always-available, Enter-driven command line -- both can coexist (the host app's
 //! passive panel command line keeps its own unconditional Enter-driven
 //! resolution regardless of this module's timeout mode).
 //!
@@ -30,11 +30,11 @@
 use std::time::{Duration, Instant};
 
 /// How long a resolved alias's flash confirmation stays visible in
-/// [`capsule`]. Matches SDB's original constant.
+/// [`capsule`]. Matches the host app's original constant.
 pub const DEFAULT_FLASH_DURATION: Duration = Duration::from_millis(450);
 
 /// Per-frame accumulator state, owned by the caller (one instance per app,
-/// analogous to SDB's `App::alias_buffer` field).
+/// analogous to the host app's `App::alias_buffer` field).
 #[derive(Default)]
 pub struct IdleInputState {
     buffer: String,
@@ -65,7 +65,7 @@ pub struct AliasMatch {
     pub display_name: &'static str,
 }
 
-/// The app's own alias table lookup -- mirrors SDB's
+/// The app's own alias table lookup -- mirrors the host app's
 /// `keybindings::AliasOverrides::resolve` + `keybindings::find` pair. Kept
 /// as a trait rather than a closure since a real implementation typically
 /// needs two related lookups (resolve the alias, then look up the resolved
@@ -80,11 +80,11 @@ pub trait AliasResolver {
 /// timeout elapses, resolve and return an action if the buffer matched.
 ///
 /// - `enter_only`: the app's "Enter Required" preference is on -- when
-///   true, this function does nothing (mirrors SDB's
+///   true, this function does nothing (mirrors the host app's
 ///   `command_entry_enter_only`).
 /// - `tool_active`: an interactive tool/command is currently running and
 ///   owns typed keys instead (e.g. dynamic input shorthand like `10<45`) --
-///   when true, this function does nothing (mirrors SDB's
+///   when true, this function does nothing (mirrors the host app's
 ///   `!active_tool_is_none`).
 /// - `timeout_ms`: idle duration after the last keystroke before the buffer
 ///   is resolved and dispatched.

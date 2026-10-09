@@ -1,7 +1,7 @@
 //! Time-driven, spring-like motion for reveals (open/close, expand/collapse)
 //! -- the "blobby"/overshoot easing HyprQuickShell's Dynamic Island uses on
 //! its width/height property animations, ported for egui. See
-//! `docs/design/2026-09-19_animated-reveals-transforms.md` (SDB repo) for
+//! `docs/design/2026-09-19_animated-reveals-transforms.md` (the host app repo) for
 //! the research and the review that shaped this module's API.
 //!
 //! Everything below `presence`/`presence_with` is pure: time is passed in
@@ -659,11 +659,11 @@ fn bounce_amount_key() -> egui::Id {
 /// Global bounce-amount multiplier for every `spring_presence`/
 /// `spring_presence_with` call against this `ctx` from now on -- the
 /// pre-2026-09-24-evening single global knob. **Kept working** (Chris asked
-/// per-family tuning not break existing callers/SSP): sets the legacy
+/// per-family tuning not break existing callers/the host app): sets the legacy
 /// global key `spring_presence_with` still reads, *and* every
 /// [`MotionFamily`]'s own bounce (leaving each family's own `speed`
 /// untouched), so a caller that still only knows about one global slider
-/// (an unmigrated SSP call site, an old test) gets the same effect as
+/// (an unmigrated the host app call site, an old test) gets the same effect as
 /// before across every family this crate now tunes independently. See
 /// `Spring::scaled_by_bounce` for the exact mapping and why a non-bouncy
 /// spring (`SMOOTH`) is unaffected at any value.
@@ -761,7 +761,7 @@ pub fn set_family_speed(ctx: &egui::Context, family: MotionFamily, speed: f32) {
     ctx.data_mut(|d| d.insert_temp(family_tuning_key(family), tuning));
 }
 
-/// Sets both of `family`'s knobs in one write -- what SDB's Settings panel
+/// Sets both of `family`'s knobs in one write -- what the host app's Settings panel
 /// calls each frame for each of the three families (mirrors the shape of
 /// the old single `set_bounce_amount`, but per family and with a speed
 /// term).
@@ -771,7 +771,7 @@ pub fn set_family_tuning(ctx: &egui::Context, family: MotionFamily, bounce: f32,
 
 /// `family`'s current tuning, or its shipped default if nothing has set one
 /// for this `ctx` yet -- so an app that never calls `set_family_tuning` (a
-/// headless test, an example, SSP before it migrates) gets the shipped
+/// headless test, an example, the host app before it migrates) gets the shipped
 /// look, not an unscaled `bounce: 1.0, speed: 1.0` that would silently
 /// undo `FamilyTuning::Flyout`'s expressive default.
 pub fn family_tuning(ctx: &egui::Context, family: MotionFamily) -> FamilyTuning {

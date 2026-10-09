@@ -1,8 +1,8 @@
 //! Minimal W3C DTCG-shaped (`$type`/`$value`) leaf token types shared by
 //! [`crate::theme`]'s `ThemePalette` and, per
-//! `docs/design/2026-08-30_theme-system-spec.md` (SDB) "Future direction",
+//! `docs/design/2026-08-30_theme-system-spec.md` (the host app) "Future direction",
 //! any later token domain (text styles, spacing) that wants the same JSON
-//! shape. Deliberately just the two leaf kinds SDB's window-chrome tokens
+//! shape. Deliberately just the two leaf kinds the host app's window-chrome tokens
 //! need today -- not a general DTCG type system (no `$description`,
 //! `$extensions`, composite/alias tokens, dimension units besides `px`).
 
@@ -105,7 +105,7 @@ enum DimensionTokenType {
     Dimension,
 }
 
-/// A DTCG `{"$type": "dimension", "$value": "12px"}` leaf token. SDB only
+/// A DTCG `{"$type": "dimension", "$value": "12px"}` leaf token. the host app only
 /// ever needs pixel dimensions (corner radii, blur radii, heights) so `px`
 /// is the sole supported unit -- not a general CSS-dimension parser.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]

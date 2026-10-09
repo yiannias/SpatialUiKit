@@ -1,7 +1,7 @@
 //! Declarative menu tree, generic over an app-supplied action type `A` and
 //! context type `Ctx`.
 //!
-//! Ported from SpatialSketchPad's `ssp-ui::menu_tree` + `chrome::menu_bar`
+//! Ported from the host application's `ssp-ui::menu_tree` + `chrome::menu_bar`
 //! (the two apps' menu trees were already structurally identical — same
 //! `Heading`/`Separator`/`Row`/`Item`/`Submenu` shape, same builder-style
 //! construction — just independently typed to each app's own `Action`/

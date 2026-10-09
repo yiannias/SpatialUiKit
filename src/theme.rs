@@ -1,7 +1,7 @@
 //! Minimal shared light/dark theme concept (Tier-1 "Application-Wide"
-//! setting in both SDB and SSP's three-tier settings model). Wraps egui's
+//! setting in both the host app's three-tier settings model). Wraps egui's
 //! own built-in `Visuals::dark()`/`light()` -- this is deliberately not a
-//! design-token system (see SDB's `docs/ui-refinements-todo.md` "Tier 2"
+//! design-token system (see the host app's `docs/ui-refinements-todo.md` "Tier 2"
 //! note: a full color/token system is a separate, larger discussion). Each
 //! app owns persistence (its own `ApplicationSettings`-equivalent) and
 //! applies `visuals()` to its `egui::Context` on change.
@@ -243,9 +243,9 @@ pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
 /// the passive window... make them all the same." Multiply by
 /// [`current_text_scale`] at each call site.
 ///
-/// Renamed from `PASSIVE_PANEL_TEXT_SIZE` on 2026-08-10, when SDB retired
+/// Renamed from `PASSIVE_PANEL_TEXT_SIZE` on 2026-08-10, when the host app retired
 /// "passive" as product vocabulary (the panel takes command input and sets
-/// the drafting scale, so the word was wrong as well as vague). SSP agreed
+/// the drafting scale, so the word was wrong as well as vague). the host app agreed
 /// to the same rename on 2026-08-21, so the `passive_panel` module in this
 /// crate followed too, becoming [`crate::command_status_panel`], and the interim
 /// `PASSIVE_PANEL_TEXT_SIZE` alias this const briefly kept is gone.
@@ -253,7 +253,7 @@ pub const COMMAND_STATUS_PANEL_TEXT_SIZE: f32 = 10.0;
 
 /// Header bar tokens for a themed in-app `egui::Window` (see
 /// `crate::window_chrome`). Docs/design/2026-08-30_theme-system-spec.md
-/// (SDB repo) is the source spec; values below come from the Lunacy mockup
+/// (the host app repo) is the source spec; values below come from the Lunacy mockup
 /// that spec was extracted from.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct HeaderTokens {

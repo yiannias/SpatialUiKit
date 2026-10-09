@@ -1,6 +1,6 @@
 //! Custom-drawn chrome for in-app `egui::Window` panels/dialogs, styled
 //! from a [`crate::theme::ThemePalette`]'s window-chrome tokens. See
-//! `docs/design/2026-08-30_theme-system-spec.md` (SDB repo) -- this covers
+//! `docs/design/2026-08-30_theme-system-spec.md` (the host app repo) -- this covers
 //! only canvas-drawn panels, never real OS-level secondary viewports,
 //! which keep native OS titlebar/min/max/close untouched.
 //!
@@ -70,7 +70,7 @@ pub struct ThemedWindow<'a> {
     /// Y (in screen/viewport space) the sheet hangs flush against when
     /// `modal` -- the bottom edge of whatever's above the content area
     /// (menu bar, ribbon), passed in by the caller since this crate has no
-    /// idea what SDB/SSP stack on top of their own central content.
+    /// idea what the host app/the host app stack on top of their own central content.
     /// Defaults to `0.0` (flush against the very top of the viewport) when
     /// never set.
     sheet_anchor_top: f32,
@@ -143,7 +143,7 @@ impl<'a> ThemedWindow<'a> {
     /// with a fixed/anchored/centered position where that's correct
     /// anyway -- e.g. a confirmation modal whose only actions are its own
     /// buttons, where the caller decided (product call, 2026-09-11, on
-    /// SDB's delete-sheet confirm) that the close button is redundant with
+    /// the host app's delete-sheet confirm) that the close button is redundant with
     /// Cancel and the title bar earns nothing.
     pub fn headerless(mut self, headerless: bool) -> Self {
         self.headerless = headerless;
@@ -168,7 +168,7 @@ impl<'a> ThemedWindow<'a> {
     /// menu bar/ribbon panels are laid out, before this is shown). True
     /// macOS sheets attach with no visible seam to what's above them,
     /// rather than floating with a gap underneath -- Chris's sketch,
-    /// `docs/design/2026-08-30_chrome-ideas-sketch.md` (SDB repo), idea 3.
+    /// `docs/design/2026-08-30_chrome-ideas-sketch.md` (the host app repo), idea 3.
     /// No-op on a non-`modal` window.
     pub fn sheet_anchor_top(mut self, y: f32) -> Self {
         self.sheet_anchor_top = y;
@@ -306,7 +306,7 @@ impl<'a> ThemedWindow<'a> {
     /// used to call (which only ever ran while `open`, and initialized
     /// unseen ids at their end value -- so the slide-in never actually
     /// played; see the design doc's 2026-09-24 review). Per Chris's sketch
-    /// (`docs/design/2026-08-30_chrome-ideas-sketch.md` idea 3, SDB repo):
+    /// (`docs/design/2026-08-30_chrome-ideas-sketch.md` idea 3, the host app repo):
     /// true macOS sheets attach with no visible seam to what's above them,
     /// so the top edge stays flush at all times -- the reveal animates the
     /// *height* downward from that fixed top edge, like a window shade,
@@ -325,7 +325,7 @@ impl<'a> ThemedWindow<'a> {
         // out. Tuned per the Modal family (`motion::MotionFamily::Modal`,
         // `docs/design/2026-09-19_animated-reveals-transforms.md`'s
         // "Per-family tuning") rather than the legacy global bounce amount,
-        // so SDB's Settings > Motion > Modal Windows sliders reach this and
+        // so the host app's Settings > Motion > Modal Windows sliders reach this and
         // only this family (`SMOOTH`'s close stays a no-op under bounce,
         // see `Spring::scaled_by_bounce`).
         let presence_frame = motion::spring_presence_family(

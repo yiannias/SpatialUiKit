@@ -33,7 +33,7 @@ const SURFACE_CORNER_RADIUS: u8 = 8;
 ///
 /// `accent` is a plain parameter, not read here, so this stays platform-
 /// agnostic -- the caller supplies whatever accent color makes sense for
-/// its OS (SDB reads the live Windows accent color; a fallback constant
+/// its OS (the host app reads the live Windows accent color; a fallback constant
 /// when that read fails, or on a future non-Windows target, is the
 /// caller's call, not this function's).
 pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
@@ -79,7 +79,7 @@ pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
 /// `windows11_visuals` itself stays unconditional and untouched (its own
 /// tests assert WinUI3-specific radii/strokes regardless of the host OS this
 /// crate happens to build on) -- the platform decision belongs at the call
-/// site, which is what this wrapper is for. Added 2026-09-25: the two SDB
+/// site, which is what this wrapper is for. Added 2026-09-25: the two the host app
 /// call sites (`sdb_app::frame`, `sdb_app::settings_actions`) were calling
 /// `windows11_visuals` unconditionally, so a WinUI3 4px/8px corner-radius and
 /// flat-button-border reskin was landing on macOS too, with no AppKit

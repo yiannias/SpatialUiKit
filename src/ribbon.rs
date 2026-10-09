@@ -1,7 +1,7 @@
-//! Ribbon rendering shell, shared between SpatialSketchPad and
-//! SpatialDrawingBoard (SDB's first ribbon -- it had none before this).
+//! Ribbon rendering shell, shared between the host application and
+//! the host application (the host app's first ribbon -- it had none before this).
 //!
-//! Split the same way SSP's original `panels/ribbon/` was: this module is
+//! Split the same way the host app's original `panels/ribbon/` was: this module is
 //! purely *how to draw* a mode tag + button groups. *What* buttons/groups
 //! are visible for a given app state is app-specific business logic and
 //! stays in each app's own `panels/ribbon/context.rs`-equivalent, generic
@@ -12,7 +12,7 @@
 //! [`RibbonHost`] trait implementation, the same pattern `menu::MenuHost`
 //! uses.
 //!
-//! **2026-08-14, module-frame visual pass (SDB ribbon study, `docs/design/
+//! **2026-08-14, module-frame visual pass (the host app ribbon study, `docs/design/
 //! ribbon-conditional-layout.md`):** the original "quiet workshop" treatment
 //! (flat borderless buttons, a group's name in small type *below* its button
 //! row, a hairline `ui.separator()` between groups) is gone, replaced by
@@ -22,7 +22,7 @@
 //! under the ribbon's own menu-bar row -- a "wedding cake" of stacked text --
 //! and cost vertical space that bigger icons could use instead once
 //! `RibbonHost::button_size` (new, defaulted) lets a host grow its buttons to
-//! fill the row when it hides per-button captions (SDB's `ribbon_show_labels`
+//! fill the row when it hides per-button captions (the host app's `ribbon_show_labels`
 //! toggle). A same-day follow-up (still 2026-08-14) dropped the separate
 //! DRAFT/EDIT/tool-armed mode tag that used to sit to the left of the first
 //! module -- Chris: it "has no use" -- and moved its filled-pill visual
@@ -31,27 +31,27 @@
 //! not just unused -- there was nothing else reading tool-armed state through
 //! this module, so nothing else needed to change.
 //!
-//! **This is a breaking visual change for SpatialSketchPad**, whose own
+//! **This is a breaking visual change for the host application**, whose own
 //! ribbon is a second, unmodified caller of [`ribbon_panel`] through this
-//! same path-dependency source. Chris, 2026-08-14: SSP's ribbon work is
+//! same path-dependency source. Chris, 2026-08-14: the host app's ribbon work is
 //! paused, and it's fine for this to land as either a silent visual change
 //! there or a documented stop-gap -- **it lands as the former**. Nothing
 //! about the compile surface changed (`RibbonButton`/`RibbonGroup`/
 //! `RibbonHost::icon_button` are untouched, and the new `button_size` trait
-//! method is defaulted), so SSP keeps building with zero code changes, but
+//! method is defaulted), so the host app keeps building with zero code changes, but
 //! the next time anyone builds it, its ribbon will render group frames +
 //! vertical labels instead of captions-below at the same fixed 40x40 button
 //! size (the default `button_size()`) -- no icon growth, since that only
-//! happens for a host that overrides `button_size()`, which SSP's doesn't.
-//! **What a future SSP session should know:** if SSP wants the icon-growth
+//! happens for a host that overrides `button_size()`, which the host app's doesn't.
+//! **What a future the host app session should know:** if the host app wants the icon-growth
 //! half of this pass too (buttons filling the row when captions are hidden),
 //! it needs its own `ribbon_show_labels`-equivalent setting and a
 //! `RibbonHost::button_size` override on its own host type, mirroring
 //! `SdbRibbonHost`'s in `sdb_ui::panels::ribbon::render`. If the frame/label
-//! look itself needs tuning for SSP's UI (colors, `LABEL_STRIP_W`,
+//! look itself needs tuning for the host app's UI (colors, `LABEL_STRIP_W`,
 //! `FRAME_RADIUS` below), those are file-local constants here, not
-//! per-host-configurable -- widen them to parameters if SSP's needs
-//! diverge from SDB's rather than forking the file.
+//! per-host-configurable -- widen them to parameters if the host app's needs
+//! diverge from the host app's rather than forking the file.
 
 use crate::motion::MotionSpec;
 
@@ -75,7 +75,7 @@ pub struct RibbonButton<A> {
     /// case of a plain single-action button.
     ///
     /// **Breaking, 2026-09-24:** this field is new on `RibbonButton`, so
-    /// every existing struct literal (SDB's and SSP's) needs a value now.
+    /// every existing struct literal (the host app's and the host app's) needs a value now.
     /// Logged in `spatialuikit/docs/ssp-migration-notes.md`.
     pub flyout: Option<RibbonFlyout<A>>,
 }
@@ -84,7 +84,7 @@ pub struct RibbonButton<A> {
 /// an item is remembered and replaces the pod button (per
 /// `docs/design/2026-09-24_ribbon-pods-spec.md`'s "Click-and-hold flyouts").
 /// The kit itself does not implement the remembering (that's a per-app user
-/// setting, e.g. SDB's `ribbon_flyout_picks`); this only tags which kind of
+/// setting, e.g. the host app's `ribbon_flyout_picks`); this only tags which kind of
 /// flyout the button carries so an app's dispatch code can tell them apart.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FlyoutKind {
@@ -126,11 +126,11 @@ pub struct RibbonGroup<A> {
 }
 
 /// One module in a ribbon row -- generalizes `RibbonGroup` so a row can also
-/// carry a caller-rendered group (e.g. SDB's tool option fields: text edits,
+/// carry a caller-rendered group (e.g. the host app's tool option fields: text edits,
 /// checkboxes, choice combos) that still gets the same group-box treatment
 /// -- separator before it, label below it -- as an icon-button group, so it
 /// reads as one more group in the row rather than a differently-styled
-/// insert. See SDB's `docs/design/ribbon-conditional-layout.md`, "Options
+/// insert. See the host app's `docs/design/ribbon-conditional-layout.md`, "Options
 /// field group".
 pub enum RibbonModule<'a, A> {
     Buttons(RibbonGroup<A>),
@@ -166,7 +166,7 @@ pub trait RibbonHost {
     /// Per-button footprint, used to size each module's frame and the
     /// overall ribbon row height (`row_h = button_size().y + GAP*2`).
     /// Defaults to the original fixed 40x40 button, so a host that doesn't
-    /// override this (SSP's, as of the 2026-08-14 module-frame pass above)
+    /// override this (the host app's, as of the 2026-08-14 module-frame pass above)
     /// keeps its existing button size. A host that grows its icons to fill
     /// the row when it hides per-button captions overrides this instead.
     fn button_size(&self) -> egui::Vec2 {
@@ -175,14 +175,14 @@ pub trait RibbonHost {
 
     /// The module capsule's border and label-pill colors. Defaults to the
     /// file-local constants this module has always used, so a host that
-    /// doesn't override it (SSP's) renders exactly as before -- see
+    /// doesn't override it (the host app's) renders exactly as before -- see
     /// [`ModuleFrameStyle::default`].
     ///
     /// Added 2026-09-13, when Chris asked for the light-mode capsule titles
     /// (a near-black pill with mid-grey text, fine in dark mode, a jarring
     /// dark block in light) to come from the theme instead. The module doc
     /// comment above anticipated this exact case -- "widen them to
-    /// parameters if SSP's needs diverge from SDB's rather than forking the
+    /// parameters if the host app's needs diverge from the host app's rather than forking the
     /// file" -- and a defaulted `RibbonHost` method is the widening, since
     /// `RibbonHost` is already how every other app-specific decision
     /// (icons, button size) reaches this file.
@@ -195,7 +195,7 @@ pub trait RibbonHost {
     /// ([`button_with_flyout`]) at its lower-right corner, above any
     /// caption. Defaults to the whole button rect, which is correct for a
     /// host with no separate icon/caption split. A host that draws a
-    /// caption below a smaller icon box (SDB's `SdbRibbonHost`) overrides
+    /// caption below a smaller icon box (the host app's `SdbRibbonHost`) overrides
     /// this to match, so the hint lands on the icon, not straddling the
     /// caption.
     fn icon_rect(&self, button_rect: egui::Rect) -> egui::Rect {
@@ -207,15 +207,15 @@ pub trait RibbonHost {
     /// what `icon_button` actually draws) and, per-button, by
     /// [`draw_button_row`]/[`button_with_flyout`] to allocate that width.
     /// Defaults to `button_size().x`, i.e. every button the same fixed
-    /// width, which is what every host did before this method existed (SSP
+    /// width, which is what every host did before this method existed (the host app
     /// still does).
     ///
     /// **Added 2026-09-24** (`docs/design/2026-09-24_ribbon-pods-spec.md`,
     /// "Button width: max(glyph, caption text) -- variable, not a fixed
-    /// slot"): SDB's `SdbRibbonHost` overrides this to measure `label`
+    /// slot"): the host app's `SdbRibbonHost` overrides this to measure `label`
     /// against the glyph box so each button is only as wide as its own
     /// content needs, per the sketch. A defaulted method, not a breaking
-    /// signature change, so SSP's fixed-width layout is untouched.
+    /// signature change, so the host app's fixed-width layout is untouched.
     fn button_width(&self, ui: &egui::Ui, key: &str, label: &str) -> f32 {
         let _ = (ui, key, label);
         self.button_size().x
@@ -225,7 +225,7 @@ pub trait RibbonHost {
 /// Per-theme colors for [`module_frame`]'s capsule border and label pill.
 /// Plain resolved `Color32`s, not `ColorToken`s: this crate's drawing code
 /// should never be parsing token strings mid-frame, and a host that has no
-/// token system at all (SSP) must still be able to hand over four colors.
+/// token system at all (the host app) must still be able to hand over four colors.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ModuleFrameStyle {
     pub border: egui::Color32,
@@ -236,9 +236,9 @@ pub struct ModuleFrameStyle {
 
 impl Default for ModuleFrameStyle {
     /// The dark-only look this module shipped with from 2026-08-14 to
-    /// 2026-09-13. Kept as the default so SSP -- an unmodified second caller
+    /// 2026-09-13. Kept as the default so the host app -- an unmodified second caller
     /// of [`ribbon_panel`] through the same path dependency -- is untouched
-    /// by SDB's theming work, exactly as [`panel_frame`] was kept for it.
+    /// by the host app's theming work, exactly as [`panel_frame`] was kept for it.
     ///
     /// [`panel_frame`]: crate::command_status_panel::panel_frame
     fn default() -> Self {
@@ -661,7 +661,7 @@ fn resolve_release(
 /// [`RibbonButton::flyout`] and `docs/design/2026-09-24_ribbon-pods-spec.md`'s
 /// "Click-and-hold flyouts". Shared by [`draw_button_row`] (the kit's own
 /// button-row drawing) and app `RibbonModule::Custom` renders that build a
-/// button row by hand (SDB's EDIT/CREATE pods).
+/// button row by hand (the host app's EDIT/CREATE pods).
 ///
 /// Behavior: a short click fires `button.action`. Holding past
 /// [`FLYOUT_HOLD_SECS`] opens the flyout (grown out of the pod as one
@@ -741,7 +741,7 @@ pub fn button_with_flyout_joined<A: Clone>(
     // own bounce/speed tuning -- see `Spring::scaled_by_bounce`. Tuned per
     // the Flyout family (`MotionFamily::Flyout`, `docs/design/
     // 2026-09-19_animated-reveals-transforms.md`'s "Per-family tuning")
-    // rather than the legacy single global bounce amount, so SDB's Settings
+    // rather than the legacy single global bounce amount, so the host app's Settings
     // > Motion > Flyout sliders reach this and only this family.
     let presence = crate::motion::spring_presence_family(
         &ctx,
@@ -1527,15 +1527,15 @@ pub fn ribbon_panel<A: Clone>(
     let row_h = button_size.y + GAP * 2.0;
     // Resolved once per row, not per module: it cannot vary between modules
     // (it's a theme lookup, not a per-group decision) and a host is free to
-    // do real work in `module_frame_style` -- SDB's parses color tokens.
+    // do real work in `module_frame_style` -- the host app's parses color tokens.
     let frame_style = host.module_frame_style();
 
-    // Note, 2026-08-30: SDB (the only current caller of this crate that's
+    // Note, 2026-08-30: the host app (the only current caller of this crate that's
     // actively iterating on ribbon visuals) uses `ribbon_panel_modules`
-    // below, not this function -- this one is SSP's entry point. Chris
-    // asked for `ScrollArea` to come out of SDB's ribbon specifically
+    // below, not this function -- this one is the host app's entry point. Chris
+    // asked for `ScrollArea` to come out of the host app's ribbon specifically
     // ("does NOT need any scrolling capability"); left untouched here
-    // rather than silently changing SSP's own ribbon behavior too.
+    // rather than silently changing the host app's own ribbon behavior too.
     egui::ScrollArea::horizontal().show(ui, |ui| {
         ui.horizontal(|ui| {
             for (i, group) in groups.iter().enumerate() {
@@ -1634,7 +1634,7 @@ const POD_CONTENT_CROSSFADE_SECS: f64 = 0.22;
 /// as sliding into its space rather than jumping, but "the departing pod's
 /// own icons visibly shrinking away" would need the host to keep
 /// supplying a leaving pod's module for its collapse duration, which no
-/// SDB caller does yet -- call this out to Chris rather than fake it.
+/// the host app caller does yet -- call this out to Chris rather than fake it.
 pub fn ribbon_panel_modules<A: Clone>(
     ui: &mut egui::Ui,
     row_id: egui::Id,
@@ -1706,7 +1706,7 @@ pub fn ribbon_panel_modules<A: Clone>(
 
     for (p, (tx, tw)) in placed.iter().zip(targets.iter()) {
         // Only steal a morph source that is *not* also present this frame --
-        // 2026-09-25 crash (Chris): when SDB's FILL tool pod appeared while
+        // 2026-09-25 crash (Chris): when the host app's FILL tool pod appeared while
         // its morph source (CREATE) was *also* still in this frame's module
         // list (a one-frame overlap from `ribbon_morphs`' mapping), removing
         // `old_label` here could delete the very entry the still-present
@@ -2504,7 +2504,7 @@ mod tests {
     }
 
     /// 2026-09-25 crash regression: a morph's `old_label` can be present in
-    /// the *same* frame as its `new_label` (SDB's FILL tool pod appearing
+    /// the *same* frame as its `new_label` (the host app's FILL tool pod appearing
     /// while `ribbon_morphs` still lists CREATE, its morph source, for one
     /// frame). Before the fix, `remove(old_label)` deleted CREATE's freshly-
     /// retargeted entry out from under its own still-present placement,

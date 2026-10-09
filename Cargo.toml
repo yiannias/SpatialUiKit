@@ -2,7 +2,9 @@
 name = "spatial-ui-kit"
 version = "0.1.0"
 edition = "2021"
-description = "Shared egui UI chrome mechanics for SpatialSketchPad and SpatialDrawingBoard — generic over each app's own action/context types. Never depends on either app's domain crates."
+description = "Shared egui UI chrome mechanics — generic over each app's own action/context types. Never depends on any app's domain crates."
+license = "MIT"
+repository = "https://github.com/yiannias/SpatialUiKit"
 
 [dependencies]
 egui = "0.35"

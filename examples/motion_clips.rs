@@ -31,7 +31,7 @@ use std::collections::HashMap;
 
 // ---------------------------------------------------------------------
 // A minimal `RibbonHost`: flat rounded-rect buttons with a small filled
-// glyph dot standing in for a real icon (SDB's own icon atlas isn't
+// glyph dot standing in for a real icon (the host app's own icon atlas isn't
 // available to this crate -- it lives in the app). No caption text on the
 // button itself, so the only glyphs this recorder has to rasterize are the
 // module label pills' uppercase text, which `ribbon.rs` draws regardless of

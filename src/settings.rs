@@ -51,7 +51,7 @@ pub enum SettingsNode<A, Ctx> {
     Field(Field<A, Ctx>),
     /// Escape hatch for a control shape the declarative `Field` kinds don't
     /// cover -- a variable-length list with per-row remove + an "add" capture
-    /// flow (e.g. SDB's pan/zoom trigger chip-lists). Renders as a raw
+    /// flow (e.g. the host app's pan/zoom trigger chip-lists). Renders as a raw
     /// closure over the same `ui`/`ctx`/`actions` every `Field` gets; owns no
     /// state itself (apps needing capture/edit state across frames should use
     /// `ui.memory_mut` the way `Field`-based rows never need to).
@@ -368,7 +368,7 @@ pub trait SettingsHost {
 pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
     // Deliberately no `set_min_height`/`horizontal_centered` -- either
     // stretches to whatever height the surrounding container currently
-    // offers, and since that container (a `Panel::top` in SDB's settings
+    // offers, and since that container (a `Panel::top` in the host app's settings
     // panel) remembers *this* frame's content height for the *next*
     // frame's available space, the two compound into runaway growth every
     // frame (caught live, 2026-08-30: the field grew to fill the entire

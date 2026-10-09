@@ -1,39 +1,9 @@
-# SpatialUiKit
+# spatial-ui-kit
 
-Shared `egui` UI chrome mechanics for [SpatialSketchPad](https://github.com/yiannias/SpatialSketchPad)
-(SSP) and its sibling app SpatialDrawingBoard (SDB). Consumed as a path/git dependency by
-`ssp-ui` and `sdb_ui`.
+A small, themeable UI toolkit for building spatial, canvas-style desktop applications in Rust on top of egui: node graphs, docks, ribbons, menus and status panels, with a shared theme system.
 
-## Scope
+Used by [Layer Herder](https://github.com/yiannias/LayerHerder).
 
-This crate holds only generic UI *mechanics* — declarative menu trees, panel docking/tabbing/
-floating shells, the Command & Status Panel's ambient-chrome primitives, the Ribbon's rendering shell,
-and (eventually) a schema-driven Preferences renderer. It never holds panel *content* (Layers,
-Properties, Planes, entity data, etc.) and never depends on either app's domain crates
-(`ssp-core`, `ssp-2d`, `sdb_core`, ...).
+## License
 
-Every module is generic over an app-supplied action type and context type — see
-[`docs/decisions/0001-generic-over-action-type.md`](docs/decisions/0001-generic-over-action-type.md)
-for the founding design principle.
-
-## Status
-
-Under active extraction from SSP, one subsystem at a time. See each consuming app's own docs
-(SSP: `docs/decisions/0010-shared-ui-kit-crate.md`; SDB: `docs/decisions/00XX-shared-ui-kit-crate.md`)
-for the roadmap and what's landed so far.
-
-### Coordination briefs
-
-The two apps drift when one has UI attention and the other doesn't. When that happens, the app
-that moved writes the other a dated brief here — what needs a decision, what must be pulled, and
-which bugs it found that the sibling probably shares.
-
-- [`docs/2026-08-10-sdb-ui-changes-for-ssp.md`](docs/2026-08-10-sdb-ui-changes-for-ssp.md) —
-  SDB → SSP, covering ~2026-07-20 to 2026-08-10. All three items resolved 2026-08-21: SSP agreed
-  to the "Passive Panel" → "Command & Status Panel" rename (this crate's `passive_panel` module
-  followed, now `command_status_panel`); window draw-order was never an issue for SSP
-  (`with_always_on_top()` unused there); `DockHost` now wraps content in a `ScrollArea`.
-
-## Modules
-
-- `menu` — declarative `MenuNode<A, Ctx>` tree + generic egui menu-bar renderer.
+MIT. Bundled Inter font: SIL Open Font License 1.1 (assets/Inter-OFL.txt).
