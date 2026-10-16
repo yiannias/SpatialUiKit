@@ -13,6 +13,7 @@ pub mod motion;
 pub mod os_style;
 pub mod ribbon;
 pub mod settings;
+pub mod sketch;
 pub mod theme;
 pub mod tokens;
 pub mod window_chrome;
