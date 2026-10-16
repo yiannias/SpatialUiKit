@@ -272,6 +272,11 @@ pub fn view_mode_dropdown(
     });
 }
 
+/// The closure that paints a [`StyleListRow`]'s thumbnail into the given rect.
+/// Named so the row's field type stays readable; the lifetime ties the closure
+/// to whatever the host borrows while painting.
+pub type ThumbnailPaint<'a> = Box<dyn Fn(&egui::Ui, Rect) + 'a>;
+
 /// One entry in a [`style_list`].
 pub struct StyleListRow<'a> {
     pub name: &'a str,
@@ -287,7 +292,7 @@ pub struct StyleListRow<'a> {
     /// `None` leaves the empty outlined square, which is what the sketch uses for
     /// the `none` and `...new` rows -- they name an absence, so there is nothing
     /// to draw.
-    pub thumbnail: Option<Box<dyn Fn(&egui::Ui, Rect) + 'a>>,
+    pub thumbnail: Option<ThumbnailPaint<'a>>,
     /// Draw the name in italics -- for an entry the user cannot change (a
     /// built-in).
     pub italic: bool,

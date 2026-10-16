@@ -155,6 +155,7 @@ pub struct MiniRibbonOutput<A> {
 /// Widgets drawn later win hover and click over earlier ones in egui, so
 /// drawing this *after* a canvas makes the buttons take the pointer and the
 /// canvas see nothing beneath them.
+#[allow(clippy::too_many_arguments)]
 pub fn show_floating<A: Clone>(
     ui: &mut egui::Ui,
     id_salt: impl std::hash::Hash + std::fmt::Debug,
