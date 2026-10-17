@@ -29,6 +29,7 @@ pub mod palette {
     pub const PRIMARY: Color32 = Color32::from_rgb(0x55, 0x7E, 0xAF);
     /// The hover pill on a preview tile (sketch `6B6B6B`, near-black edge).
     pub const PILL: Color32 = Color32::from_rgb(0x6B, 0x6B, 0x6B);
+    /// Outline of the hover pill, near-black so it reads on the tile.
     pub const PILL_EDGE: Color32 = Color32::from_rgb(0x05, 0x05, 0x05);
     /// Tile and field backgrounds.
     pub const TILE_BG: Color32 = Color32::from_rgb(0x16, 0x16, 0x1A);
@@ -63,12 +64,15 @@ impl SketchFrame {
             scale,
         }
     }
+    /// Maps a sketch-space point to screen space.
     pub fn pos(&self, x: f32, y: f32) -> Pos2 {
         self.origin + Vec2::new(x, y) * self.scale
     }
+    /// Maps a sketch-space rectangle (x, y, width, height) to screen space.
     pub fn rect(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
         Rect::from_min_size(self.pos(x, y), Vec2::new(w, h) * self.scale)
     }
+    /// Scales a sketch-space length to screen points.
     pub fn len(&self, v: f32) -> f32 {
         v * self.scale
     }
@@ -76,6 +80,7 @@ impl SketchFrame {
     pub fn font(&self, sketch_size: f32) -> FontId {
         FontId::proportional(sketch_size * FONT_RATIO * self.scale)
     }
+    /// Scales a sketch-space corner radius to a whole-pixel `CornerRadius`.
     pub fn radius(&self, r: f32) -> CornerRadius {
         CornerRadius::same(self.len(r).round().clamp(0.0, 255.0) as u8)
     }
@@ -222,7 +227,9 @@ pub fn paint_truncated_middle(
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum StyleListMode {
     #[default]
+    /// Plain text rows, one name per line.
     List,
+    /// Thumbnail previews instead of text rows.
     Thumbnails,
 }
 
@@ -550,6 +557,7 @@ pub fn style_list(
 /// Visual weight of a [`button_row`] button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonKind {
+    /// The ordinary grey button.
     Normal,
     /// The blue default action (Apply).
     Primary,
