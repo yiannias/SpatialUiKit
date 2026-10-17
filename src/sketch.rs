@@ -1,4 +1,5 @@
-//! Sketch-style widgets shared by the hatch and style managers.
+//! Sketch-style widgets: a selectable list with thumbnails, framed regions,
+//! pill buttons and the hover actions on a preview tile.
 //!
 //! Generic over the host: nothing here names a document, a style or an ECS
 //! type, so any app can draw the same list, tile and button chrome. Callers
@@ -45,7 +46,9 @@ const FONT_RATIO: f32 = 0.95;
 /// proportions at any window size.
 #[derive(Clone, Copy, Debug)]
 pub struct SketchFrame {
+    /// Top-left corner of the sketch, in screen points.
     pub origin: Pos2,
+    /// Uniform factor from sketch units to screen points.
     pub scale: f32,
 }
 
@@ -79,7 +82,7 @@ impl SketchFrame {
 }
 
 /// A rounded frame with an optional heading sitting just above its top edge,
-/// as the sketch draws "Filled Region Styles" and "Filled Region Composition".
+/// as the sketch draws its titled panels.
 pub fn framed_region(ui: &egui::Ui, sk: &SketchFrame, frame: Rect, heading: Option<&str>) {
     let painter = ui.painter();
     painter.rect_stroke(
@@ -279,15 +282,15 @@ pub type ThumbnailPaint<'a> = Box<dyn Fn(&egui::Ui, Rect) + 'a>;
 
 /// One entry in a [`style_list`].
 pub struct StyleListRow<'a> {
+    /// The name shown on the row.
     pub name: &'a str,
     /// Paints this row's thumbnail cell in [`StyleListMode::Thumbnails`], and is
     /// ignored in [`StyleListMode::List`].
     ///
-    /// A closure rather than a swatch colour or a `FillStylePreview`, for the
-    /// same reason `preview_tile` (in the SDB style manager) takes one: a thumbnail is whatever makes a
-    /// style recognisable at 72 pt, and only the panel that owns the style knows
-    /// what that is. Filled Region supplies hatch geometry from its own CPU
-    /// preview path; Text Style supplies a glyph run in the style's own typeface.
+    /// A closure rather than a swatch colour or a fixed preview type: a thumbnail
+    /// is whatever makes a row recognisable at 72 pt, and only the panel that
+    /// owns the row knows what that is. A hatch row paints its own line geometry;
+    /// a text row paints a glyph run in its own typeface.
     ///
     /// `None` leaves the empty outlined square, which is what the sketch uses for
     /// the `none` and `...new` rows -- they name an absence, so there is nothing
@@ -638,7 +641,9 @@ pub fn composition_operator(ui: &egui::Ui, sk: &SketchFrame, rect: Rect, op: &st
 
 /// The hover button a tile offers ("Edit Color", "Edit Hatch", ...).
 pub struct TileAction<'a> {
+    /// The button's text, e.g. "Edit Hatch".
     pub label: &'a str,
+    /// Whether the action can be taken right now.
     pub enabled: bool,
     /// Shown on hover when the action is disabled (e.g. "coming soon").
     pub disabled_hint: Option<&'a str>,
@@ -801,12 +806,10 @@ mod tests {
     /// A list row's thumbnail is whatever the owning panel says it is, and this
     /// stops compiling the moment that stops being true.
     ///
-    /// The same argument as `preview_tile_accepts_a_non_fill_paint_closure`, and
-    /// for the same reason: `StyleListRow` used to carry a `swatch: Color32` *and*
-    /// a `fill_preview: &FillStylePreview`, so a text style passed `None` for both
-    /// and rendered as an empty square -- a grid of holes that looked like a
-    /// finished feature. A test that only ever paints a fill could not tell that
-    /// seam from a coincidence.
+    /// The row used to carry a swatch colour and a fill-only preview type, so a
+    /// text row passed neither and rendered as an empty square -- a grid of holes
+    /// that looked like a finished feature. A test that only ever paints a fill
+    /// could not tell that seam from a coincidence.
     #[test]
     fn style_list_row_accepts_a_non_fill_thumbnail_paint() {
         // `Fn`, not `FnMut`: the row's paint is stored and may be called any
