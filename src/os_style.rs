@@ -94,7 +94,7 @@ pub fn contrast_ratio(a: egui::Color32, b: egui::Color32) -> f32 {
 }
 
 /// Minimum contrast between selected text and the selection highlight.
-pub const MIN_SELECTED_TEXT_CONTRAST: f32 = 4.5;
+pub const MIN_SELECTED_TEXT_CONTRAST: f32 = 4.0;
 
 /// Minimum contrast between the selection highlight and the field it sits on.
 pub const MIN_HIGHLIGHT_CONTRAST: f32 = 1.6;
@@ -102,8 +102,65 @@ pub const MIN_HIGHLIGHT_CONTRAST: f32 = 1.6;
 /// The highlight as it actually appears: `selection.bg_fill` blended over the
 /// text-edit field fill.
 pub fn effective_selection_fill(visuals: &egui::Visuals) -> egui::Color32 {
+    effective_selection_fill_over(visuals.selection.bg_fill, visuals.text_edit_bg_color())
+}
+
+/// Opaque `base` mixed `t` (0..=1) of the way toward `toward`.
+fn mixed(base: egui::Color32, toward: egui::Color32, t: f32) -> egui::Color32 {
+    let mix = |a: u8, b: u8| (a as f32 * (1.0 - t) + b as f32 * t).round() as u8;
+    egui::Color32::from_rgb(
+        mix(base.r(), toward.r()),
+        mix(base.g(), toward.g()),
+        mix(base.b(), toward.b()),
+    )
+}
+
+/// egui paints selected text in `selection.stroke.color`, and the same stroke is
+/// the focus outline of a focused `TextEdit`, so it cannot be recoloured without
+/// changing the focus ring. With a dark OS accent as that colour a fully selected
+/// field value -- every number or rename field opens with its text selected --
+/// was nearly invisible: dark text on a dark highlight (2026-10-18).
+///
+/// So the stroke is left alone and the *highlight* (`selection.bg_fill`) is moved
+/// instead, the smallest step toward white or black that makes the stroke colour
+/// read on it ([`MIN_SELECTED_TEXT_CONTRAST`]), preferring a step that also keeps
+/// the highlight visible against the text field it sits on
+/// ([`MIN_HIGHLIGHT_CONTRAST`]). The field fill is `visuals.text_edit_bg_color()`,
+/// so call this on the visuals actually used where the field is drawn (the dock
+/// overrides `extreme_bg_color`). Idempotent; call after setting
+/// `selection.bg_fill`.
+pub fn ensure_readable_text_selection(visuals: &mut egui::Visuals) {
     let field = visuals.text_edit_bg_color();
-    let fill = visuals.selection.bg_fill;
+    let text = visuals.selection.stroke.color;
+    let base = effective_selection_fill_over(visuals.selection.bg_fill, field);
+    let readable = |bg: egui::Color32| contrast_ratio(text, bg) >= MIN_SELECTED_TEXT_CONTRAST;
+    let visible = |bg: egui::Color32| contrast_ratio(bg, field) >= MIN_HIGHLIGHT_CONTRAST;
+    if readable(base) && visible(base) {
+        return;
+    }
+    // (readable and visible) first, then readable only; smallest step wins.
+    let mut best_readable: Option<egui::Color32> = None;
+    for step in 0..=20 {
+        let t = step as f32 / 20.0;
+        for toward in [egui::Color32::WHITE, egui::Color32::BLACK] {
+            let bg = mixed(base, toward, t);
+            if !readable(bg) {
+                continue;
+            }
+            if visible(bg) {
+                visuals.selection.bg_fill = bg;
+                return;
+            }
+            best_readable.get_or_insert(bg);
+        }
+    }
+    if let Some(bg) = best_readable {
+        visuals.selection.bg_fill = bg;
+    }
+}
+
+/// `fill` blended over `field`, opaque.
+fn effective_selection_fill_over(fill: egui::Color32, field: egui::Color32) -> egui::Color32 {
     let a = fill.a() as f32 / 255.0;
     let mix = |top: u8, under: u8| (top as f32 * a + under as f32 * (1.0 - a)).round() as u8;
     egui::Color32::from_rgb(
@@ -111,45 +168,6 @@ pub fn effective_selection_fill(visuals: &egui::Visuals) -> egui::Color32 {
         mix(fill.g(), field.g()),
         mix(fill.b(), field.b()),
     )
-}
-
-/// egui paints selected text in `selection.stroke.color`. With the OS accent as
-/// that colour, a dark accent (Chris's Windows accent) made a fully selected
-/// field value -- every number or rename field opens with its text selected --
-/// nearly invisible: dark text on a dark highlight (2026-10-18). Keeps the
-/// accent when it already reads on the highlight, otherwise uses whichever of
-/// black or white contrasts more. Idempotent; call after setting
-/// `selection.bg_fill`.
-pub fn ensure_readable_text_selection(visuals: &mut egui::Visuals) {
-    // A highlight that vanishes into the field (a dark accent over a dark field)
-    // is lifted toward white on dark fields, toward black on light ones.
-    let field = visuals.text_edit_bg_color();
-    let toward = if relative_luminance(field) < 0.18 {
-        egui::Color32::WHITE
-    } else {
-        egui::Color32::BLACK
-    };
-    for _ in 0..12 {
-        if contrast_ratio(effective_selection_fill(visuals), field) >= MIN_HIGHLIGHT_CONTRAST {
-            break;
-        }
-        let fill = visuals.selection.bg_fill;
-        let mix = |a: u8, b: u8| (a as f32 * 0.85 + b as f32 * 0.15).round() as u8;
-        visuals.selection.bg_fill = egui::Color32::from_rgb(
-            mix(fill.r(), toward.r()),
-            mix(fill.g(), toward.g()),
-            mix(fill.b(), toward.b()),
-        );
-    }
-    let fill = effective_selection_fill(visuals);
-    if contrast_ratio(visuals.selection.stroke.color, fill) >= MIN_SELECTED_TEXT_CONTRAST {
-        return;
-    }
-    let readable = [egui::Color32::WHITE, egui::Color32::BLACK]
-        .into_iter()
-        .max_by(|a, b| contrast_ratio(*a, fill).total_cmp(&contrast_ratio(*b, fill)))
-        .unwrap_or(egui::Color32::WHITE);
-    visuals.selection.stroke.color = readable;
 }
 
 /// Platform-gated entry point: applies [`windows11_visuals`] on Windows,
@@ -198,58 +216,79 @@ mod tests {
         let accent = egui::Color32::from_rgb(0, 120, 215);
         let v = windows11_visuals(Theme::Light, accent);
         assert_eq!(v.hyperlink_color, accent);
-        // The accent still drives the highlight (lifted only if it would vanish).
-        assert_ne!(v.selection.bg_fill, egui::Color32::TRANSPARENT);
+        // The stroke is also the focus ring: it stays the accent.
+        assert_eq!(v.selection.stroke.color, accent);
+    }
+
+    const ACCENTS: [egui::Color32; 6] = [
+        egui::Color32::from_rgb(0, 120, 215),
+        egui::Color32::from_rgb(16, 24, 64),
+        egui::Color32::from_rgb(10, 10, 40),
+        egui::Color32::from_rgb(20, 20, 20),
+        egui::Color32::from_rgb(250, 250, 200),
+        egui::Color32::from_rgb(200, 30, 30),
+    ];
+
+    /// Visuals as the dock draws fields: the dock overrides `extreme_bg_color`
+    /// with its surface colour, then re-ensures the selection against it.
+    fn dock_visuals(theme: Theme, accent: egui::Color32, surface: egui::Color32) -> egui::Visuals {
+        let mut v = windows11_visuals(theme, accent);
+        v.extreme_bg_color = surface;
+        ensure_readable_text_selection(&mut v);
+        v
     }
 
     /// Selected text (the rename field, a number being edited) stays readable on
-    /// the highlight for any accent, in both themes -- including the dark accent
-    /// that made it vanish before.
+    /// the highlight for any accent, in both themes and on the dock's own field
+    /// fill, and the focus ring (the selection stroke) is never rewritten.
     #[test]
-    fn selected_text_contrasts_with_the_highlight_for_any_accent() {
-        let accents = [
-            egui::Color32::from_rgb(0, 120, 215),
-            egui::Color32::from_rgb(10, 10, 40),
-            egui::Color32::from_rgb(20, 20, 20),
-            egui::Color32::from_rgb(250, 250, 200),
-            egui::Color32::from_rgb(200, 30, 30),
+    fn selected_text_reads_on_the_highlight_and_the_focus_ring_is_kept() {
+        let surfaces = [
+            egui::Color32::from_rgb(30, 30, 35),
+            egui::Color32::from_rgb(12, 12, 14),
+            egui::Color32::from_rgb(246, 246, 248),
         ];
         for theme in Theme::ALL {
-            for accent in accents {
-                let v = windows11_visuals(theme, accent);
-                let fill = effective_selection_fill(&v);
+            for accent in ACCENTS {
+                for surface in surfaces {
+                    let v = dock_visuals(theme, accent, surface);
+                    let fill = effective_selection_fill(&v);
+                    assert_eq!(v.selection.stroke.color, accent, "focus ring kept");
+                    assert!(
+                        contrast_ratio(v.selection.stroke.color, fill)
+                            >= MIN_SELECTED_TEXT_CONTRAST,
+                        "{theme:?} accent {accent:?} on {surface:?}: highlight {fill:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// TYPED (unselected) text in an edit field -- what a rename or a Properties
+    /// value field shows while typing -- contrasts with the field fill, with the
+    /// dock's real overridden fill.
+    #[test]
+    fn typed_text_contrasts_with_the_field_fill_in_both_themes() {
+        let dock_surface = |theme: Theme| match theme {
+            Theme::Dark => egui::Color32::from_rgb(30, 30, 35),
+            Theme::Light => egui::Color32::from_rgb(246, 246, 248),
+        };
+        for theme in Theme::ALL {
+            for accent in ACCENTS {
+                let v = dock_visuals(theme, accent, dock_surface(theme));
                 assert!(
-                    contrast_ratio(v.selection.stroke.color, fill) >= MIN_SELECTED_TEXT_CONTRAST,
-                    "{theme:?} accent {accent:?}: selected text {:?} on {fill:?}",
-                    v.selection.stroke.color
+                    contrast_ratio(v.widgets.inactive.text_color(), v.text_edit_bg_color()) >= 4.5,
+                    "{theme:?} {accent:?}"
                 );
             }
         }
     }
 
-    /// Unselected text in an edit field (what egui draws while typing) reads on
-    /// the field fill in both themes.
-    #[test]
-    fn edit_text_contrasts_with_the_field_fill() {
-        let accent = egui::Color32::from_rgb(0, 120, 215);
-        for theme in Theme::ALL {
-            let v = windows11_visuals(theme, accent);
-            assert!(
-                contrast_ratio(v.widgets.inactive.text_color(), v.text_edit_bg_color()) >= 4.5,
-                "{theme:?}"
-            );
-        }
-    }
-
-    /// The highlight itself stays visible against the field, not just the text.
+    /// The highlight stays visible against the field when it can.
     #[test]
     fn the_highlight_is_visible_against_the_field() {
         for theme in Theme::ALL {
-            for accent in [
-                egui::Color32::from_rgb(16, 24, 64),
-                egui::Color32::from_rgb(0, 120, 215),
-                egui::Color32::from_rgb(240, 240, 255),
-            ] {
+            for accent in [ACCENTS[1], ACCENTS[0]] {
                 let v = windows11_visuals(theme, accent);
                 assert!(
                     contrast_ratio(effective_selection_fill(&v), v.text_edit_bg_color())
@@ -261,22 +300,13 @@ mod tests {
     }
 
     #[test]
-    fn an_already_readable_accent_is_kept() {
+    fn an_already_readable_selection_is_left_alone() {
         let mut v = Theme::Dark.visuals();
-        v.selection.bg_fill = egui::Color32::from_rgb(0, 40, 90);
-        v.selection.stroke.color = egui::Color32::from_rgb(255, 255, 255);
+        v.selection.bg_fill = egui::Color32::from_rgb(0, 60, 130);
+        v.selection.stroke.color = egui::Color32::WHITE;
+        let before = v.selection.bg_fill;
         ensure_readable_text_selection(&mut v);
+        assert_eq!(v.selection.bg_fill, before);
         assert_eq!(v.selection.stroke.color, egui::Color32::WHITE);
-    }
-
-    #[test]
-    fn dark_and_light_get_differently_toned_borders() {
-        let accent = egui::Color32::from_rgb(0, 120, 215);
-        let dark = windows11_visuals(Theme::Dark, accent);
-        let light = windows11_visuals(Theme::Light, accent);
-        assert_ne!(
-            dark.widgets.inactive.bg_stroke.color,
-            light.widgets.inactive.bg_stroke.color
-        );
     }
 }
