@@ -6,6 +6,7 @@
 
 pub mod command_status_panel;
 pub mod dock;
+pub mod dropdown;
 pub mod fonts;
 pub mod idle_input;
 pub mod menu;
