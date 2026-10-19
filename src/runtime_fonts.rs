@@ -1,7 +1,7 @@
 //! Typefaces loaded into egui at runtime, so a font list or a text-style
 //! preview can draw each name **in its own face** rather than describing it.
 //!
-//! Prior art: egui supports this natively (`FontData::from_owned` for the
+//! Prior art: egui supports this natively (`FontData` for the
 //! bytes, `FontFamily::Name` for the family, `Context::add_font` to insert it
 //! without replacing the app's own fonts); the community crates
 //! `egui_font_loader` and `egui_system_fonts` are built on the same calls. This
@@ -17,7 +17,8 @@
 //!   family egui no longer knows.
 //! - **A per-frame budget.** Every new family rebuilds egui's font atlas, so a
 //!   list scrolled through hundreds of faces registers at most
-//!   [`NEW_FONTS_PER_FRAME`] per frame and fills in the rest on the following
+//!   [`NEW_FONTS_PER_FRAME`] faces (and about [`NEW_BYTES_PER_FRAME`]) per
+//!   frame and fills in the rest on the following
 //!   frames (each registration requests one).
 //! - **Per-context, allocation-free bookkeeping.** The registry lives in the
 //!   context's own memory (a second context -- another window, an offscreen
@@ -33,11 +34,27 @@ use std::sync::Arc;
 
 /// Font file bytes and the face index inside them (a `.ttc` collection holds
 /// several faces; egui's `FontData::index` selects one).
-pub type FontBytes = (Vec<u8>, u32);
+///
+/// `Cow` because egui stores `Cow<'static, [u8]>`: a host that keeps one
+/// `'static` copy of each font file (SDB does, shared by every face of a
+/// collection and every window) hands over `Borrowed` and nothing is copied;
+/// `Owned` bytes become egui's own copy.
+pub type FontBytes = (std::borrow::Cow<'static, [u8]>, u32);
 
 /// Most new typefaces registered with one context in one frame (each one
 /// rebuilds the font atlas once).
 pub const NEW_FONTS_PER_FRAME: usize = 4;
+
+/// Most font-file bytes registered with one context in one frame. The first
+/// face of a frame is always allowed, so one large face (a 20 MB CJK
+/// collection) still loads; it just loads alone.
+pub const NEW_BYTES_PER_FRAME: usize = 8 * 1024 * 1024;
+
+/// Whether a frame that has already registered `fonts` faces totalling
+/// `bytes` must wait for the next frame.
+fn over_budget(fonts: usize, bytes: usize) -> bool {
+    fonts >= NEW_FONTS_PER_FRAME || (fonts > 0 && bytes >= NEW_BYTES_PER_FRAME)
+}
 
 #[derive(Clone)]
 enum Entry {
@@ -51,9 +68,10 @@ enum Entry {
 #[derive(Clone, Default)]
 struct Registry {
     entries: HashMap<String, Entry>,
-    /// The frame `added` counts for.
+    /// The frame `added` and `added_bytes` count for.
     frame: u64,
     added: usize,
+    added_bytes: usize,
 }
 
 fn registry_id() -> egui::Id {
@@ -155,8 +173,9 @@ fn request(
             if r.frame != frame {
                 r.frame = frame;
                 r.added = 0;
+                r.added_bytes = 0;
             }
-            r.added >= NEW_FONTS_PER_FRAME
+            over_budget(r.added, r.added_bytes)
         });
         if over {
             ctx.request_repaint();
@@ -171,8 +190,12 @@ fn request(
         });
         return FaceState::Unavailable;
     };
-    let mut data = egui::FontData::from_owned(bytes);
-    data.index = index;
+    let size = bytes.len();
+    let data = egui::FontData {
+        font: bytes,
+        index,
+        tweak: Default::default(),
+    };
     let family = egui::FontFamily::Name(Arc::<str>::from(name));
     ctx.add_font(egui::epaint::text::FontInsert {
         name: format!("spatial_ui_kit_runtime:{name}"),
@@ -191,8 +214,10 @@ fn request(
         if r.frame != frame {
             r.frame = frame;
             r.added = 0;
+            r.added_bytes = 0;
         }
         r.added += 1;
+        r.added_bytes += size;
         r.entries
             .insert(name.to_owned(), Entry::Requested(family, frame));
     });
@@ -215,11 +240,26 @@ mod tests {
     }
 
     fn inter(_: &str) -> Option<FontBytes> {
-        Some((INTER.to_vec(), 0))
+        Some((std::borrow::Cow::Borrowed(INTER), 0))
     }
 
     fn pass(ctx: &egui::Context, f: &mut dyn FnMut(&egui::Context)) {
         let _ = ctx.run_ui(egui::RawInput::default(), |ui| f(ui.ctx()));
+    }
+
+    #[test]
+    fn the_budget_counts_faces_and_bytes_but_always_lets_one_face_through() {
+        assert!(!over_budget(0, 0));
+        assert!(
+            !over_budget(0, 50 * 1024 * 1024),
+            "the first face always loads"
+        );
+        assert!(
+            over_budget(1, NEW_BYTES_PER_FRAME),
+            "a big face loads alone"
+        );
+        assert!(!over_budget(3, 1024));
+        assert!(over_budget(NEW_FONTS_PER_FRAME, 0));
     }
 
     #[test]

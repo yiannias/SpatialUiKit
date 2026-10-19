@@ -258,6 +258,7 @@ pub struct FontPicker<'a> {
     row_height: Option<f32>,
     sample: String,
     visible_rows: f32,
+    label: String,
 }
 
 impl<'a> FontPicker<'a> {
@@ -280,6 +281,7 @@ impl<'a> FontPicker<'a> {
             row_height: None,
             sample: "Ag".to_owned(),
             visible_rows: 12.0,
+            label: "Typeface".to_owned(),
         }
     }
 
@@ -319,6 +321,13 @@ impl<'a> FontPicker<'a> {
     /// Height of one list row.
     pub fn row_height(mut self, h: f32) -> Self {
         self.row_height = Some(h);
+        self
+    }
+
+    /// What a screen reader calls the control (default "Typeface"); it also
+    /// announces the current choice.
+    pub fn label(mut self, label: impl Into<String>) -> Self {
+        self.label = label.into();
         self
     }
 
@@ -365,7 +374,9 @@ impl<'a> FontPicker<'a> {
             },
         );
         response.widget_info(|| {
-            WidgetInfo::labeled(WidgetType::ComboBox, enabled, &self.selected_label)
+            let mut info = WidgetInfo::labeled(WidgetType::ComboBox, enabled, &self.label);
+            info.current_text_value = Some(self.selected_label.clone());
+            info
         });
 
         let mut just_opened = false;
@@ -496,13 +507,17 @@ impl<'a> FontPicker<'a> {
             let mut close = false;
             if !just_opened {
                 let page = (body_rect.height() / row_h).floor().max(1.0) as isize;
-                let (down, upk, pgdn, pgup, enter, esc) = ui.input_mut(|i| {
+                // Home and End move through the list, as in the dropdown; the
+                // search text is a few characters, edited with the arrow keys.
+                let (down, upk, pgdn, pgup, home, end, enter, esc) = ui.input_mut(|i| {
                     let m = Modifiers::NONE;
                     (
                         i.consume_key(m, Key::ArrowDown),
                         i.consume_key(m, Key::ArrowUp),
                         i.consume_key(m, Key::PageDown),
                         i.consume_key(m, Key::PageUp),
+                        i.consume_key(m, Key::Home),
+                        i.consume_key(m, Key::End),
                         i.consume_key(m, Key::Enter),
                         i.consume_key(m, Key::Escape),
                     )
@@ -519,6 +534,12 @@ impl<'a> FontPicker<'a> {
                 }
                 if pgup {
                     st.cursor = step(&st.rows, st.cursor, -page);
+                }
+                if home {
+                    st.cursor = step(&st.rows, None, 1);
+                }
+                if end {
+                    st.cursor = step(&st.rows, None, -1);
                 }
                 if st.cursor != before {
                     st.scroll_to_cursor = true;
@@ -573,11 +594,15 @@ impl<'a> FontPicker<'a> {
                     );
                     let edit = egui::TextEdit::singleline(&mut query)
                         .id(search_id)
+                        .char_limit(64)
                         .font(font.clone())
                         .hint_text("Search fonts")
                         .frame(egui::Frame::NONE)
                         .desired_width(field.width())
                         .show(&mut search_ui);
+                    edit.response.response.widget_info(|| {
+                        WidgetInfo::labeled(WidgetType::TextEdit, true, "Search fonts")
+                    });
                     if just_opened || !edit.response.response.has_focus() {
                         edit.response.response.request_focus();
                     }

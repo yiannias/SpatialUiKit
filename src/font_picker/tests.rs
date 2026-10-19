@@ -128,7 +128,7 @@ impl Fx {
         let loads = &self.loads;
         let load = |name: &str| -> Option<FontBytes> {
             loads.borrow_mut().push(name.to_owned());
-            Some((INTER.to_vec(), 0))
+            Some((std::borrow::Cow::Borrowed(INTER), 0))
         };
         let built = &self.built;
         let n = self.n;
@@ -334,4 +334,44 @@ fn fitted_size_shrinks_a_wide_sample_to_its_area() {
         12.0,
         "a sample that fits keeps its size"
     );
+}
+
+#[test]
+fn home_and_end_jump_to_the_first_and_last_choice() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(5);
+    h.settle(2, &mut |ui| fx.show(ui));
+    h.click(control().center(), &mut |ui| fx.show(ui));
+    h.key(Key::End, &mut |ui| fx.show(ui));
+    h.key(Key::Enter, &mut |ui| fx.show(ui));
+    assert_eq!(fx.picked, vec!["System 004".to_owned()]);
+    h.click(control().center(), &mut |ui| fx.show(ui));
+    h.key(Key::Home, &mut |ui| fx.show(ui));
+    h.key(Key::Enter, &mut |ui| fx.show(ui));
+    assert_eq!(fx.picked.last().map(String::as_str), Some("inherit"));
+}
+
+#[test]
+fn the_control_announces_its_label_and_current_choice() {
+    let mut h = Harness::new();
+    h.ctx.enable_accesskit();
+    let mut fx = Fx::new(3);
+    h.settle(2, &mut |ui| fx.show(ui));
+    let out = h.frame(Vec::new(), &mut |ui| fx.show(ui));
+    let update = out
+        .platform_output
+        .accesskit_update
+        .expect("accesskit is on");
+    let names: Vec<String> = update
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.label().map(str::to_owned))
+        .collect();
+    assert!(names.iter().any(|n| n == "Typeface"), "{names:?}");
+    let values: Vec<String> = update
+        .nodes
+        .iter()
+        .filter_map(|(_, n)| n.value().map(str::to_owned))
+        .collect();
+    assert!(values.iter().any(|v| v == "Built One"), "{values:?}");
 }
