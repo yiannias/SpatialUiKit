@@ -138,36 +138,58 @@ fn open(h: &mut Harness, fx: &mut Fx) {
     h.click(c, &mut |ui| fx.show(ui));
 }
 
+const MIN_BELOW: f32 = 150.0;
+
 #[test]
 fn direction_is_down_when_it_fits_below_even_if_more_room_above() {
     let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 1000.0));
     let control = Rect::from_min_size(Pos2::new(10.0, 600.0), Vec2::new(100.0, 30.0));
-    let p = choose_direction(control, 200.0, bounds);
+    let p = choose_direction(control, 200.0, bounds, MIN_BELOW);
     assert_eq!(p.direction, Direction::Down);
     assert_eq!(p.height, 200.0);
 }
 
 #[test]
-fn direction_flips_up_only_when_it_does_not_fit_below_but_fits_above() {
+fn direction_shrinks_and_scrolls_down_while_about_four_rows_fit_below() {
+    // 180 below the control's top: not the whole 400, but more than four rows.
+    let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 700.0));
+    let control = Rect::from_min_size(Pos2::new(10.0, 520.0), Vec2::new(100.0, 30.0));
+    let p = choose_direction(control, 400.0, bounds, MIN_BELOW);
+    assert_eq!(
+        p.direction,
+        Direction::Down,
+        "not flipped by the window edge"
+    );
+    assert_eq!(p.height, 180.0);
+}
+
+#[test]
+fn direction_flips_up_only_when_fewer_than_four_rows_fit_below_and_above_has_more() {
     let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 700.0));
     let control = Rect::from_min_size(Pos2::new(10.0, 620.0), Vec2::new(100.0, 30.0));
-    let p = choose_direction(control, 200.0, bounds);
+    let p = choose_direction(control, 200.0, bounds, MIN_BELOW);
     assert_eq!(p.direction, Direction::Up);
     assert_eq!(p.height, 200.0);
+    // Less room above than below: stays down however little there is.
+    let control = Rect::from_min_size(Pos2::new(10.0, 20.0), Vec2::new(100.0, 30.0));
+    let tiny = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 120.0));
+    assert_eq!(
+        choose_direction(control, 200.0, tiny, MIN_BELOW).direction,
+        Direction::Down
+    );
 }
 
 #[test]
 fn a_taller_monitor_rect_keeps_the_list_down_where_a_window_rect_flips_it() {
-    // The same control and list: the window is short, the monitor is not.
     let control = Rect::from_min_size(Pos2::new(10.0, 300.0), Vec2::new(100.0, 30.0));
     let window = Rect::from_min_size(Pos2::ZERO, Vec2::new(400.0, 400.0));
     let monitor = Rect::from_min_size(Pos2::new(-100.0, -100.0), Vec2::new(1920.0, 1080.0));
     assert_eq!(
-        choose_direction(control, 250.0, window).direction,
+        choose_direction(control, 250.0, window, MIN_BELOW).direction,
         Direction::Up
     );
     assert_eq!(
-        choose_direction(control, 250.0, monitor).direction,
+        choose_direction(control, 250.0, monitor, MIN_BELOW).direction,
         Direction::Down
     );
 }
@@ -176,11 +198,11 @@ fn a_taller_monitor_rect_keeps_the_list_down_where_a_window_rect_flips_it() {
 fn direction_scrolls_on_the_roomier_side_when_neither_fits() {
     let bounds = Rect::from_min_size(Pos2::ZERO, Vec2::new(500.0, 300.0));
     let control = Rect::from_min_size(Pos2::new(10.0, 100.0), Vec2::new(100.0, 30.0));
-    let p = choose_direction(control, 900.0, bounds);
+    let p = choose_direction(control, 900.0, bounds, MIN_BELOW);
     assert_eq!(p.direction, Direction::Down);
     assert_eq!(p.height, 200.0, "from the control's top to the bottom edge");
     let control = Rect::from_min_size(Pos2::new(10.0, 200.0), Vec2::new(100.0, 30.0));
-    let p = choose_direction(control, 900.0, bounds);
+    let p = choose_direction(control, 900.0, bounds, MIN_BELOW);
     assert_eq!(p.direction, Direction::Up);
     assert_eq!(p.height, 230.0, "from the top edge to the control's bottom");
 }
@@ -630,4 +652,167 @@ fn heading_rows_are_shown_but_never_selected() {
     h.key(Key::ArrowDown, &mut show);
     h.key(Key::Enter, &mut show);
     assert_eq!(*picked.borrow(), vec![2], "the keyboard skips the heading");
+}
+
+#[test]
+fn an_open_dropdown_owns_escape_for_handlers_that_run_before_it_draws() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(control_at(40.0));
+    let sibling = std::cell::Cell::new(0);
+    let mut show = |ui: &mut Ui| {
+        // A sibling Escape handler that runs before the dropdown (global
+        // cancel, window close) and respects the stamp.
+        if ui.input(|i| i.key_pressed(Key::Escape)) && !dropdown_owns_escape(ui.ctx()) {
+            sibling.set(sibling.get() + 1);
+        }
+        fx.show(ui);
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    h.settle(1, &mut show);
+    h.key(Key::Escape, &mut show);
+    assert_eq!(sibling.get(), 0, "Esc closed the dropdown, nothing else");
+    // Next Esc (dropdown closed) reaches the sibling.
+    h.key(Key::Escape, &mut show);
+    assert_eq!(sibling.get(), 1);
+}
+
+#[test]
+fn keys_do_nothing_once_focus_has_moved_away_and_the_list_closes() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(control_at(40.0));
+    let mut show = |ui: &mut Ui| {
+        fx.show(ui);
+        ui.put(
+            Rect::from_min_size(Pos2::new(40.0, 400.0), Vec2::new(60.0, 20.0)),
+            egui::Button::new("next"),
+        );
+    };
+    h.settle(3, &mut show);
+    h.key(Key::Tab, &mut show);
+    h.key(Key::Enter, &mut show);
+    h.key(Key::Tab, &mut show); // focus moves to the button
+    drop(show);
+    assert!(
+        fx.last.as_ref().unwrap().popup_rect.is_none(),
+        "closed on focus loss"
+    );
+    assert!(fx.picked.is_empty());
+}
+
+#[test]
+fn a_stale_cursor_after_the_options_shrink_does_not_panic_or_emit() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(control_at(40.0));
+    h.settle(3, &mut |ui| fx.show(ui));
+    h.key(Key::Tab, &mut |ui| fx.show(ui));
+    h.key(Key::Enter, &mut |ui| fx.show(ui));
+    h.key(Key::End, &mut |ui| fx.show(ui)); // cursor on the last option (3)
+    fx.options.truncate(2);
+    fx.value = 0;
+    h.key(Key::Enter, &mut |ui| fx.show(ui));
+    assert!(fx.picked.iter().all(|&i| i < 2), "{:?}", fx.picked);
+}
+
+#[test]
+fn a_stale_cursor_in_a_grid_is_dropped_too() {
+    let mut h = Harness::new();
+    let n = std::cell::Cell::new(4usize);
+    let picked = std::cell::RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        let opts: Vec<String> = (0..n.get()).map(|i| format!("t{i}")).collect();
+        let out = Dropdown::new("g")
+            .options(opts)
+            .at_rect(control_at(40.0))
+            .grid(2, Vec2::new(60.0, 40.0))
+            .show(ui);
+        if let Some(i) = out.chosen {
+            picked.borrow_mut().push(i);
+        }
+    };
+    h.settle(3, &mut show);
+    h.key(Key::Tab, &mut show);
+    h.key(Key::Enter, &mut show);
+    h.key(Key::End, &mut show);
+    n.set(2);
+    h.key(Key::Enter, &mut show);
+    assert!(picked.borrow().iter().all(|&i| i < 2));
+}
+
+#[test]
+fn lazy_options_are_built_only_while_open() {
+    let mut h = Harness::new();
+    let built = std::cell::Cell::new(0);
+    let picked = std::cell::RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        let got = Dropdown::new("lazy")
+            .selected_text("b")
+            .at_rect(control_at(40.0))
+            .show_items_lazy(
+                ui,
+                || {
+                    built.set(built.get() + 1);
+                    vec!["a", "b", "c"]
+                },
+                |s| s.to_string(),
+                |s| *s == "b",
+            );
+        if let Some(v) = got {
+            picked.borrow_mut().push(v);
+        }
+    };
+    h.settle(5, &mut show);
+    assert_eq!(built.get(), 0, "closed: nothing built");
+    h.click(control_at(40.0).center(), &mut show);
+    let out = h.frame(Vec::new(), &mut show);
+    assert!(built.get() > 0);
+    let c = text_pos(&out, "c");
+    h.click(c, &mut show);
+    assert_eq!(*picked.borrow(), vec!["c"]);
+    let after = built.get();
+    h.settle(4, &mut show);
+    assert_eq!(built.get(), after, "closed again: no more building");
+}
+
+#[test]
+fn a_disabled_dropdown_does_not_open() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(control_at(40.0));
+    let mut show = |ui: &mut Ui| {
+        ui.add_enabled_ui(false, |ui| fx.show(ui));
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    drop(show);
+    assert!(fx.last.as_ref().unwrap().popup_rect.is_none());
+}
+
+#[test]
+fn the_list_grows_to_the_longest_option_and_the_control_stays_narrow() {
+    let mut h = Harness::new();
+    let mut rect = None;
+    let mut show = |ui: &mut Ui| {
+        let out = Dropdown::new("wide")
+            .options(["Short", "Concrete (stipple, large aggregate pattern)"])
+            .selected(Some(0))
+            .at_rect(control_at(40.0))
+            .show(ui);
+        rect = out.popup_rect;
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    h.settle(1, &mut show);
+    assert!(rect.unwrap().width() > 250.0, "{rect:?}");
+    assert_eq!(rect.unwrap().left(), control_at(40.0).left());
+}
+
+#[test]
+fn an_open_list_closes_when_its_control_stops_being_drawn() {
+    let mut h = Harness::new();
+    let mut fx = Fx::new(control_at(40.0));
+    open(&mut h, &mut fx);
+    assert!(fx.last.as_ref().unwrap().popup_rect.is_some());
+    h.settle(4, &mut |_ui| {}); // the panel is closed
+    h.settle(2, &mut |ui| fx.show(ui));
+    assert!(fx.last.as_ref().unwrap().popup_rect.is_none());
 }

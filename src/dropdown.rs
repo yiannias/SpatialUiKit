@@ -171,7 +171,7 @@ impl DropdownStyle {
             border: v.widgets.inactive.bg_stroke.color,
             border_strong: v.widgets.hovered.bg_stroke.color,
             text,
-            selected_fill: box_fill.lerp_to_gamma(text, 0.27),
+            selected_fill: box_fill.lerp_to_gamma(text, 0.36),
             hover_fill: box_fill.lerp_to_gamma(text, 0.11),
             focus: v.selection.stroke,
             corner_radius: r,
@@ -194,7 +194,7 @@ impl DropdownStyle {
             s.box_fill = surface;
             s.border = cap_border;
             s.border_strong = cap_hot;
-            s.selected_fill = surface.lerp_to_gamma(s.text, 0.27);
+            s.selected_fill = surface.lerp_to_gamma(s.text, 0.36);
             s.hover_fill = surface.lerp_to_gamma(s.text, 0.11);
         }
         s
@@ -204,6 +204,10 @@ impl DropdownStyle {
 /// Rows a list shows before it scrolls, unless [`Dropdown::max_popup_height`]
 /// says otherwise.
 pub const DEFAULT_VISIBLE_ROWS: f32 = 10.0;
+
+/// Widest a list grows to fit its longest option (points); longer names are
+/// shortened in the middle.
+pub const LONGEST_OPTION_CAP: f32 = 380.0;
 
 /// Which way the open box extends from the control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -226,26 +230,29 @@ pub struct Placement {
 
 /// Decides which way the open box extends. `control` is the closed control's
 /// rectangle, `wanted_height` the full height of the box (control row plus
-/// all options) and `bounds` the region the box may use: the monitor's work
-/// area where a popup can leave its window, otherwise the window's content
-/// rectangle.
+/// all options), `bounds` the region the box may use (the monitor's work area
+/// where a popup can leave its window, otherwise the window's content
+/// rectangle) and `min_below` the least height (control row plus about four
+/// rows) worth opening downward at.
 ///
-/// Down unless the box does not fit below; up only when it fits above; when
-/// it fits neither way, the roomier side with a reduced height (scrolling).
-pub fn choose_direction(control: Rect, wanted_height: f32, bounds: Rect) -> Placement {
+/// Always down while at least `min_below` fits below the control's top edge,
+/// shrinking the box (it scrolls) when the whole list does not fit. Only when
+/// less than that fits below, and above has more room, does it flip up.
+pub fn choose_direction(
+    control: Rect,
+    wanted_height: f32,
+    bounds: Rect,
+    min_below: f32,
+) -> Placement {
     let below = (bounds.bottom() - control.top()).max(0.0);
     let above = (control.bottom() - bounds.top()).max(0.0);
+    let min_below = min_below.max(control.height());
     if wanted_height <= below {
         Placement {
             direction: Direction::Down,
             height: wanted_height,
         }
-    } else if wanted_height <= above {
-        Placement {
-            direction: Direction::Up,
-            height: wanted_height,
-        }
-    } else if below >= above {
+    } else if below >= min_below || below >= above {
         Placement {
             direction: Direction::Down,
             height: below.max(control.height()),
@@ -253,9 +260,23 @@ pub fn choose_direction(control: Rect, wanted_height: f32, bounds: Rect) -> Plac
     } else {
         Placement {
             direction: Direction::Up,
-            height: above.max(control.height()),
+            height: wanted_height.min(above).max(control.height()),
         }
     }
+}
+
+/// True while a dropdown of this window is open (or was last frame). Escape
+/// handlers that run before the dropdown draws (global cancel, window close)
+/// must skip their action while this is true: the dropdown closes itself on
+/// that Escape. A stale stamp expires after one frame.
+pub fn dropdown_owns_escape(ctx: &egui::Context) -> bool {
+    let now = ctx.cumulative_frame_nr();
+    ctx.memory(|m| m.data.get_temp::<u64>(open_stamp_id(ctx)))
+        .is_some_and(|stamp| stamp.saturating_add(1) >= now)
+}
+
+fn open_stamp_id(ctx: &egui::Context) -> Id {
+    Id::new(("spatial_ui_kit_dropdown_open", ctx.viewport_id()))
 }
 
 /// Corner radii for a row that may touch the box's top and/or bottom edge.
@@ -304,6 +325,8 @@ struct State {
     /// The cursor is shown only after a key moved it, not while the pointer drives.
     kbd: bool,
     scroll_to_cursor: bool,
+    /// Frame number of the last frame the control was drawn.
+    seen: u64,
 }
 
 /// What [`Dropdown::show`] returns.
@@ -318,6 +341,9 @@ pub struct DropdownResponse {
     pub direction: Option<Direction>,
 }
 
+/// Builds the options (and the selected index) only once the list is open.
+type LazyOptions<'a> = Box<dyn FnOnce() -> (Vec<DropdownOption<'a>>, Option<usize>) + 'a>;
+
 /// The shared dropdown. Build it, add options, call [`Self::show`].
 ///
 /// ```ignore
@@ -331,6 +357,7 @@ pub struct Dropdown<'a> {
     text_color: Option<Color32>,
     control_thumb: Option<ThumbPaint<'a>>,
     options: Vec<DropdownOption<'a>>,
+    lazy: Option<LazyOptions<'a>>,
     selected: Option<usize>,
     width: Option<f32>,
     min_popup_width: f32,
@@ -357,6 +384,7 @@ impl<'a> Dropdown<'a> {
             text_color: None,
             control_thumb: None,
             options: Vec::new(),
+            lazy: None,
             selected: None,
             width: None,
             min_popup_width: 0.0,
@@ -522,9 +550,68 @@ impl<'a> Dropdown<'a> {
         }
     }
 
+    /// Supplies the options only when the list is open, so a closed dropdown
+    /// costs no allocation: `build` returns the options and the index of the
+    /// current one. Give the closed control its text with
+    /// [`Self::selected_text`] (and [`Self::control_thumb`] for a thumbnail).
+    pub fn lazy_options(
+        mut self,
+        build: impl FnOnce() -> (Vec<DropdownOption<'a>>, Option<usize>) + 'a,
+    ) -> Self {
+        self.lazy = Some(Box::new(build));
+        self
+    }
+
+    /// [`Self::show_items`] with the item list built only when open.
+    pub fn show_items_lazy<T: Clone + 'a>(
+        mut self,
+        ui: &mut Ui,
+        items: impl FnOnce() -> Vec<T> + 'a,
+        label: impl Fn(&T) -> String + 'a,
+        is_current: impl Fn(&T) -> bool + 'a,
+    ) -> Option<T> {
+        let store: std::rc::Rc<std::cell::RefCell<Vec<T>>> = Default::default();
+        let sink = store.clone();
+        self.lazy = Some(Box::new(move || {
+            let items = items();
+            let selected = items.iter().position(&is_current);
+            let options = items
+                .iter()
+                .map(|t| DropdownOption::new(label(t)))
+                .collect();
+            *sink.borrow_mut() = items;
+            (options, selected)
+        }));
+        let chosen = self.show(ui).chosen;
+        chosen.and_then(|i| store.borrow().get(i).cloned())
+    }
+
+    fn materialise(&mut self) {
+        if let Some(build) = self.lazy.take() {
+            let (options, selected) = build();
+            self.options.extend(options);
+            if selected.is_some() {
+                self.selected = selected;
+            }
+        }
+    }
+
     /// Draws the control and, while open, the box. Returns the choice made
     /// this frame.
-    pub fn show(self, ui: &mut Ui) -> DropdownResponse {
+    pub fn show(mut self, ui: &mut Ui) -> DropdownResponse {
+        let id = ui.make_persistent_id(self.id_salt);
+        let enabled = ui.is_enabled();
+        let now = ui.ctx().cumulative_frame_nr();
+        let mut st: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+        // Closed when disabled, or when the control was not drawn for a frame
+        // (its panel closed or scrolled away while the list was open).
+        if st.open && (!enabled || now > st.seen.saturating_add(1)) {
+            st.open = false;
+        }
+        st.seen = now;
+        if st.open {
+            self.materialise();
+        }
         let style = self
             .style
             .clone()
@@ -536,7 +623,6 @@ impl<'a> Dropdown<'a> {
         let n = self.options.len();
         let selected = self.selected.filter(|&s| s < n);
         let list_mode = self.layout == DropdownLayout::List;
-        let header_is_option = list_mode && selected.is_some();
         let row_h = self
             .row_height
             .unwrap_or_else(|| ui.spacing().interact_size.y.max(font.size + 8.0));
@@ -553,26 +639,21 @@ impl<'a> Dropdown<'a> {
             .clone()
             .or_else(|| selected.map(|s| self.options[s].text.clone()))
             .unwrap_or_default();
-        let header_thumb = if list_mode {
-            self.control_thumb
-                .as_ref()
-                .or_else(|| selected.and_then(|s| self.options[s].thumb.as_ref()))
-        } else {
-            None
-        };
+        let has_header_thumb = list_mode
+            && (self.control_thumb.is_some()
+                || selected.is_some_and(|s| self.options[s].thumb.is_some()));
         let text_w = ui
             .painter()
             .layout_no_wrap(text.clone(), font.clone(), Color32::WHITE)
             .size()
             .x;
-        let thumb_w = if header_thumb.is_some() {
+        let thumb_w = if has_header_thumb {
             thumb_side + 6.0
         } else {
             0.0
         };
         let natural_w = pad + thumb_w + text_w + arrow_w;
 
-        let id = ui.make_persistent_id(self.id_salt);
         let control = match self.rect {
             Some(r) => r,
             None => {
@@ -585,20 +666,44 @@ impl<'a> Dropdown<'a> {
                 ui.allocate_space(Vec2::new(w, ctrl_h)).1
             }
         };
-        let response = ui.interact(control, id, Sense::click());
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, ui.is_enabled(), &text));
-
-        let mut st: State = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+        let response = ui.interact(
+            control,
+            id,
+            if enabled {
+                Sense::click()
+            } else {
+                Sense::hover()
+            },
+        );
+        response.widget_info(|| WidgetInfo::labeled(WidgetType::ComboBox, enabled, &text));
         let mut chosen = None;
 
         let mut just_opened = false;
-        if response.clicked() && !st.open {
+        if enabled && response.clicked() && !st.open {
             just_opened = true;
             st.open = true;
-            st.cursor = selected;
             st.kbd = false;
             response.request_focus();
+            self.materialise();
         }
+        // Options are known now (built lazily on the frame that opens).
+        let n = self.options.len();
+        let selected = self.selected.filter(|&s| s < n);
+        let header_is_option = list_mode && selected.is_some();
+        if just_opened {
+            st.cursor = selected;
+        }
+        // A cursor left over from a longer list, or on a heading, is dropped.
+        if st.cursor.is_some_and(|c| c >= n || self.options[c].heading) {
+            st.cursor = None;
+        }
+        let header_thumb = if list_mode {
+            self.control_thumb
+                .as_ref()
+                .or_else(|| selected.and_then(|s| self.options[s].thumb.as_ref()))
+        } else {
+            None
+        };
 
         // Geometry of the open box.
         let bounds = self.bounds.unwrap_or_else(|| ui.ctx().content_rect());
@@ -626,7 +731,30 @@ impl<'a> Dropdown<'a> {
         } else {
             2.0 * grid_pad + cols as f32 * tile.x + (cols - 1) as f32 * grid_gap + 2.0
         };
-        let popup_w = control.width().max(self.min_popup_width).max(grid_w);
+        let longest = if st.open && list_mode {
+            let mut w = 0.0f32;
+            for o in &self.options {
+                let tw = ui
+                    .painter()
+                    .layout_no_wrap(o.text.clone(), font.clone(), Color32::WHITE)
+                    .size()
+                    .x;
+                let thumb = if o.thumb.is_some() {
+                    thumb_side + 6.0
+                } else {
+                    0.0
+                };
+                w = w.max(2.0 * pad + o.indent + thumb + tw + 2.0);
+            }
+            w.min(LONGEST_OPTION_CAP)
+        } else {
+            0.0
+        };
+        let popup_w = control
+            .width()
+            .max(self.min_popup_width)
+            .max(grid_w)
+            .max(longest);
         // A list shows at most `DEFAULT_VISIBLE_ROWS` rows and scrolls beyond
         // that, so a long list still opens downward where a short window could
         // not hold it whole; a grid is capped by its caller.
@@ -636,7 +764,14 @@ impl<'a> Dropdown<'a> {
             f32::INFINITY
         });
         let wanted = (ctrl_h + body_h + 1.0).min(cap.max(ctrl_h + row_h));
-        let placement = choose_direction(control, wanted, bounds);
+        let min_below = ctrl_h
+            + if list_mode {
+                4.0 * row_h
+            } else {
+                tile.y + 2.0 * grid_pad
+            }
+            + 1.0;
+        let placement = choose_direction(control, wanted, bounds, min_below);
         let up = placement.direction == Direction::Up;
         let mut x = control.left();
         if x + popup_w > bounds.right() {
@@ -699,6 +834,20 @@ impl<'a> Dropdown<'a> {
 
         // Keyboard. (Not on the frame that opened it: the Enter or Space that
         // opened it is still in this frame's input.)
+        if st.open && !just_opened {
+            // Keys act only while the control has focus. A press or hover in
+            // the box keeps (re-takes) it; focus moved elsewhere closes the list.
+            let pointer_in = ui
+                .input(|i| i.pointer.hover_pos())
+                .is_some_and(|p| box_rect.contains(p));
+            if !response.has_focus() {
+                if pointer_in {
+                    response.request_focus();
+                } else {
+                    st.open = false;
+                }
+            }
+        }
         if st.open && !just_opened {
             ui.memory_mut(|m| {
                 m.set_focus_lock_filter(
@@ -816,7 +965,7 @@ impl<'a> Dropdown<'a> {
         // The closed face is always painted; when open the box covers it.
         let focus = response.has_focus();
         {
-            let fill = if response.hovered() {
+            let fill = if response.hovered() && enabled {
                 style.control_fill_hovered
             } else {
                 style.control_fill
@@ -827,7 +976,11 @@ impl<'a> Dropdown<'a> {
                 text: &text,
                 italic: self.italic_text,
                 font: &font,
-                color: self.text_color.unwrap_or(style.text),
+                color: if enabled {
+                    self.text_color.unwrap_or(style.text)
+                } else {
+                    style.text.gamma_multiply(0.45)
+                },
                 thumb: header_thumb,
                 thumb_side,
                 arrow: Some(false),
@@ -835,7 +988,7 @@ impl<'a> Dropdown<'a> {
                 arrow_w,
             };
             paint_face(ui, control, &face);
-            let stroke = if response.hovered() || st.open {
+            let stroke = if (response.hovered() && enabled) || st.open {
                 style.border_strong
             } else {
                 style.border
@@ -870,10 +1023,10 @@ impl<'a> Dropdown<'a> {
 
                     // Header row: the control itself, at the box's edge.
                     let inner_header = header_rect.shrink(1.0);
-                    let h_resp = pui.interact(header_rect, id.with("header"), Sense::click());
+                    let h_resp = pui.interact(header_rect, id.with("header"), Sense::CLICK);
                     let has_body = n > 0 && (!list_mode || !others.is_empty() || !header_is_option);
                     let head_round = row_rounding(ri, !up || !has_body, up || !has_body);
-                    if header_is_option {
+                    if header_is_option || !list_mode {
                         pui.painter()
                             .rect_filled(inner_header, head_round, style.selected_fill);
                     } else if h_resp.hovered() {
@@ -961,7 +1114,7 @@ impl<'a> Dropdown<'a> {
                                     }
                                     let (rect, row) = sui.allocate_exact_size(
                                         Vec2::new(popup_w - 2.0, row_h),
-                                        Sense::click(),
+                                        Sense::CLICK,
                                     );
                                     let rect = rect.translate(Vec2::new(1.0, 0.0));
                                     let round = row_rounding(ri, up && k == 0, !up && k == m - 1);
@@ -1041,8 +1194,7 @@ impl<'a> Dropdown<'a> {
                                             ),
                                         tile,
                                     );
-                                    let resp =
-                                        sui.interact(tr, id.with(("tile", i)), Sense::click());
+                                    let resp = sui.interact(tr, id.with(("tile", i)), Sense::CLICK);
                                     let is_cur = Some(i) == selected;
                                     let is_cursor = st.kbd && st.cursor == Some(i);
                                     if resp.hovered() {
@@ -1057,7 +1209,7 @@ impl<'a> Dropdown<'a> {
                                         let stroke = if is_cursor && focus {
                                             style.focus
                                         } else {
-                                            Stroke::new(1.0, style.border_strong)
+                                            Stroke::new(1.5, style.text.gamma_multiply(0.85))
                                         };
                                         sui.painter().rect_stroke(
                                             tr,
@@ -1135,6 +1287,10 @@ impl<'a> Dropdown<'a> {
             response.mark_changed();
         }
         let direction = popup_rect.map(|_| placement.direction);
+        if st.open {
+            let stamp_id = open_stamp_id(ui.ctx());
+            ui.ctx().memory_mut(|m| m.data.insert_temp(stamp_id, now));
+        }
         ui.data_mut(|d| d.insert_temp(id, st));
         DropdownResponse {
             response,
