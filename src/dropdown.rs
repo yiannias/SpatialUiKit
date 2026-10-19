@@ -313,6 +313,7 @@ pub struct Dropdown<'a> {
     id_salt: Id,
     text: Option<String>,
     italic_text: bool,
+    text_color: Option<Color32>,
     control_thumb: Option<ThumbPaint<'a>>,
     options: Vec<DropdownOption<'a>>,
     selected: Option<usize>,
@@ -321,6 +322,7 @@ pub struct Dropdown<'a> {
     truncate: bool,
     layout: DropdownLayout,
     font: Option<FontId>,
+    tile_font: Option<FontId>,
     row_height: Option<f32>,
     thumb_side: Option<f32>,
     rect: Option<Rect>,
@@ -337,6 +339,7 @@ impl<'a> Dropdown<'a> {
             id_salt: Id::new(id_salt),
             text: None,
             italic_text: false,
+            text_color: None,
             control_thumb: None,
             options: Vec::new(),
             selected: None,
@@ -345,6 +348,7 @@ impl<'a> Dropdown<'a> {
             truncate: false,
             layout: DropdownLayout::List,
             font: None,
+            tile_font: None,
             row_height: None,
             thumb_side: None,
             rect: None,
@@ -362,6 +366,11 @@ impl<'a> Dropdown<'a> {
     /// Draws the control's text in italics ("Multiple").
     pub fn italic_text(mut self, italic: bool) -> Self {
         self.italic_text = italic;
+        self
+    }
+    /// Colour of the control row's text (state colour, e.g. an active mode).
+    pub fn text_color(mut self, color: Color32) -> Self {
+        self.text_color = Some(color);
         self
     }
     /// Thumbnail for the control row (closed and open) when it should differ
@@ -416,6 +425,11 @@ impl<'a> Dropdown<'a> {
     /// Font for the control and the rows (default: the button font).
     pub fn font(mut self, font: FontId) -> Self {
         self.font = Some(font);
+        self
+    }
+    /// Font for tile names in grid mode (default: the control's font).
+    pub fn tile_font(mut self, font: FontId) -> Self {
+        self.tile_font = Some(font);
         self
     }
     /// Height of one list row (default: from the font).
@@ -782,7 +796,7 @@ impl<'a> Dropdown<'a> {
                 text: &text,
                 italic: self.italic_text,
                 font: &font,
-                color: style.text,
+                color: self.text_color.unwrap_or(style.text),
                 thumb: header_thumb,
                 thumb_side,
                 arrow: Some(false),
@@ -847,7 +861,7 @@ impl<'a> Dropdown<'a> {
                         text: &text,
                         italic: self.italic_text,
                         font: &font,
-                        color: style.text,
+                        color: self.text_color.unwrap_or(style.text),
                         thumb: header_thumb,
                         thumb_side,
                         arrow: Some(true),
@@ -1007,7 +1021,8 @@ impl<'a> Dropdown<'a> {
                                     if is_cursor && st.scroll_to_cursor {
                                         sui.scroll_to_rect(tr, None);
                                     }
-                                    let label_h = font.size + 6.0;
+                                    let tfont = self.tile_font.as_ref().unwrap_or(&font);
+                                    let label_h = tfont.size + 6.0;
                                     if let Some(paint) = &opt.thumb {
                                         let t = Rect::from_min_max(
                                             tr.min + Vec2::splat(3.0),
@@ -1021,7 +1036,7 @@ impl<'a> Dropdown<'a> {
                                                 Pos2::new(tr.right() - 2.0, tr.bottom()),
                                             ),
                                             &opt.text,
-                                            &font,
+                                            tfont,
                                             style.text,
                                         );
                                     } else {
@@ -1029,7 +1044,7 @@ impl<'a> Dropdown<'a> {
                                             sui,
                                             tr.shrink2(Vec2::new(2.0, 0.0)),
                                             &opt.text,
-                                            &font,
+                                            tfont,
                                             style.text,
                                         );
                                     }
