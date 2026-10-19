@@ -391,23 +391,53 @@ fn empty_list_shows_a_message_and_emits_nothing() {
 }
 
 #[test]
-fn long_lists_scroll_instead_of_growing_past_the_bounds() {
+fn long_lists_scroll_after_ten_rows_and_still_open_down_where_ten_rows_fit() {
     let mut h = Harness::new();
     let many: Vec<String> = (0..60).map(|i| format!("Option {i}")).collect();
-    let mut dir_h = None;
+    let seen = std::cell::Cell::new((None, None));
     let mut show = |ui: &mut Ui| {
         let out = Dropdown::new("long")
             .options(many.clone())
             .selected(Some(0))
+            .at_rect(control_at(300.0))
+            .show(ui);
+        seen.set((out.popup_rect.map(|r| r.height()), out.direction));
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(300.0).center(), &mut show);
+    h.settle(1, &mut show);
+    let (height, dir) = seen.get();
+    // Control row + ten rows + the bottom margin, not sixty rows.
+    assert!(height.unwrap() < 28.0 + 11.0 * 30.0, "{height:?}");
+    assert_eq!(
+        dir,
+        Some(Direction::Down),
+        "ten rows fit below, so it stays down"
+    );
+}
+
+#[test]
+fn a_list_that_fits_nowhere_scrolls_within_the_roomier_side() {
+    let mut h = Harness::new();
+    let many: Vec<String> = (0..60).map(|i| format!("Option {i}")).collect();
+    let seen = std::cell::Cell::new(None);
+    let mut show = |ui: &mut Ui| {
+        let out = Dropdown::new("long2")
+            .options(many.clone())
+            .selected(Some(0))
+            .max_popup_height(2000.0)
             .at_rect(control_at(100.0))
             .show(ui);
-        dir_h = out.popup_rect.map(|r| r.height());
+        seen.set(out.popup_rect.map(|r| r.height()));
     };
     h.settle(3, &mut show);
     h.click(control_at(100.0).center(), &mut show);
     h.settle(1, &mut show);
-    let hgt = dir_h.expect("open");
-    assert!(hgt <= 700.0 - 100.0 + 0.5, "{hgt}");
+    assert!(
+        seen.get().unwrap() <= 700.0 - 100.0 + 0.5,
+        "{:?}",
+        seen.get()
+    );
 }
 
 #[test]

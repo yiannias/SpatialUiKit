@@ -201,6 +201,10 @@ impl DropdownStyle {
     }
 }
 
+/// Rows a list shows before it scrolls, unless [`Dropdown::max_popup_height`]
+/// says otherwise.
+pub const DEFAULT_VISIBLE_ROWS: f32 = 10.0;
+
 /// Which way the open box extends from the control.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Direction {
@@ -337,7 +341,7 @@ pub struct Dropdown<'a> {
     row_height: Option<f32>,
     thumb_side: Option<f32>,
     rect: Option<Rect>,
-    max_popup_height: f32,
+    max_popup_height: Option<f32>,
     empty_text: String,
     bounds: Option<Rect>,
     style: Option<DropdownStyle>,
@@ -363,7 +367,7 @@ impl<'a> Dropdown<'a> {
             row_height: None,
             thumb_side: None,
             rect: None,
-            max_popup_height: f32::INFINITY,
+            max_popup_height: None,
             empty_text: "No options".to_owned(),
             bounds: None,
             style: None,
@@ -460,7 +464,7 @@ impl<'a> Dropdown<'a> {
     }
     /// Tallest the box grows before its options scroll.
     pub fn max_popup_height(mut self, h: f32) -> Self {
-        self.max_popup_height = h;
+        self.max_popup_height = Some(h);
         self
     }
     /// Message shown when there are no options.
@@ -623,7 +627,15 @@ impl<'a> Dropdown<'a> {
             2.0 * grid_pad + cols as f32 * tile.x + (cols - 1) as f32 * grid_gap + 2.0
         };
         let popup_w = control.width().max(self.min_popup_width).max(grid_w);
-        let wanted = (ctrl_h + body_h + 1.0).min(self.max_popup_height.max(ctrl_h + row_h));
+        // A list shows at most `DEFAULT_VISIBLE_ROWS` rows and scrolls beyond
+        // that, so a long list still opens downward where a short window could
+        // not hold it whole; a grid is capped by its caller.
+        let cap = self.max_popup_height.unwrap_or(if list_mode {
+            ctrl_h + DEFAULT_VISIBLE_ROWS * row_h + 1.0
+        } else {
+            f32::INFINITY
+        });
+        let wanted = (ctrl_h + body_h + 1.0).min(cap.max(ctrl_h + row_h));
         let placement = choose_direction(control, wanted, bounds);
         let up = placement.direction == Direction::Up;
         let mut x = control.left();
@@ -912,6 +924,9 @@ impl<'a> Dropdown<'a> {
                         .id_salt(id.with("scroll"))
                         .max_height(visible_h)
                         .auto_shrink([false, false])
+                        // Opening upward, the options nearest the control are at
+                        // the bottom: start there.
+                        .stick_to_bottom(up)
                         .show(&mut body, |sui| {
                             sui.spacing_mut().item_spacing = Vec2::ZERO;
                             if n == 0 {
