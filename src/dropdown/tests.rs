@@ -745,7 +745,7 @@ fn lazy_options_are_built_only_while_open() {
     let built = std::cell::Cell::new(0);
     let picked = std::cell::RefCell::new(Vec::new());
     let mut show = |ui: &mut Ui| {
-        let got = Dropdown::new("lazy")
+        let (_, got) = Dropdown::new("lazy")
             .selected_text("b")
             .at_rect(control_at(40.0))
             .show_items_lazy(

@@ -562,14 +562,15 @@ impl<'a> Dropdown<'a> {
         self
     }
 
-    /// [`Self::show_items`] with the item list built only when open.
+    /// [`Self::show_items`] with the item list built only when open. Returns
+    /// the dropdown's response and the item chosen this frame.
     pub fn show_items_lazy<T: Clone + 'a>(
         mut self,
         ui: &mut Ui,
         items: impl FnOnce() -> Vec<T> + 'a,
         label: impl Fn(&T) -> String + 'a,
         is_current: impl Fn(&T) -> bool + 'a,
-    ) -> Option<T> {
+    ) -> (DropdownResponse, Option<T>) {
         let store: std::rc::Rc<std::cell::RefCell<Vec<T>>> = Default::default();
         let sink = store.clone();
         self.lazy = Some(Box::new(move || {
@@ -582,8 +583,9 @@ impl<'a> Dropdown<'a> {
             *sink.borrow_mut() = items;
             (options, selected)
         }));
-        let chosen = self.show(ui).chosen;
-        chosen.and_then(|i| store.borrow().get(i).cloned())
+        let out = self.show(ui);
+        let picked = out.chosen.and_then(|i| store.borrow().get(i).cloned());
+        (out, picked)
     }
 
     fn materialise(&mut self) {
