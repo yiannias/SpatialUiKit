@@ -446,6 +446,24 @@ impl<'a> Dropdown<'a> {
         self
     }
 
+    /// Shows the dropdown over `items` and returns the item chosen this frame.
+    /// `label` names each item and `is_current` marks the current one (shown
+    /// on top, highlighted). The convenience form for a list of values (enum
+    /// variants, units) where the caller maps the pick back to the value.
+    pub fn show_items<T: Clone>(
+        mut self,
+        ui: &mut Ui,
+        items: impl IntoIterator<Item = T>,
+        label: impl Fn(&T) -> String,
+        is_current: impl Fn(&T) -> bool,
+    ) -> Option<T> {
+        let items: Vec<T> = items.into_iter().collect();
+        self.selected = items.iter().position(&is_current);
+        self.options
+            .extend(items.iter().map(|t| DropdownOption::new(label(t))));
+        self.show(ui).chosen.map(|i| items[i].clone())
+    }
+
     /// Draws the control and, while open, the box. Returns the choice made
     /// this frame.
     pub fn show(self, ui: &mut Ui) -> DropdownResponse {

@@ -527,3 +527,29 @@ fn style_derives_monochrome_colours_from_visuals_and_palette() {
     assert_eq!(s2.box_fill, p.surface.background.color32().unwrap());
     assert_eq!(s2.border, p.control.cap_border.color32().unwrap());
 }
+
+#[test]
+fn show_items_returns_the_chosen_item_and_marks_the_current() {
+    let mut h = Harness::new();
+    let picked = std::cell::RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        let got = Dropdown::new("items").at_rect(control_at(40.0)).show_items(
+            ui,
+            [10_u32, 20, 30],
+            |v| format!("{v} mm"),
+            |v| *v == 20,
+        );
+        if let Some(v) = got {
+            picked.borrow_mut().push(v);
+        }
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    let out = h.frame(Vec::new(), &mut show);
+    assert!(
+        control_at(40.0).contains(text_pos(&out, "20 mm")),
+        "the current item is the top row"
+    );
+    h.click(text_pos(&out, "30 mm"), &mut show);
+    assert_eq!(*picked.borrow(), vec![30]);
+}
