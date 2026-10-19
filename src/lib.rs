@@ -7,6 +7,7 @@
 pub mod command_status_panel;
 pub mod dock;
 pub mod dropdown;
+pub mod font_picker;
 pub mod fonts;
 pub mod idle_input;
 pub mod menu;
@@ -15,6 +16,7 @@ pub mod modal;
 pub mod motion;
 pub mod os_style;
 pub mod ribbon;
+pub mod runtime_fonts;
 pub mod settings;
 pub mod sketch;
 pub mod style_list;

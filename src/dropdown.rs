@@ -309,6 +309,15 @@ pub fn dropdown_owns_escape(ctx: &egui::Context) -> bool {
         .is_some_and(|stamp| stamp.saturating_add(1) >= now)
 }
 
+/// Marks a popup of this window as open this frame, so
+/// [`dropdown_owns_escape`] holds for any popup that closes on Escape (the
+/// font picker uses it too).
+pub(crate) fn mark_open(ctx: &egui::Context) {
+    let now = ctx.cumulative_frame_nr();
+    let id = open_stamp_id(ctx);
+    ctx.memory_mut(|m| m.data.insert_temp(id, now));
+}
+
 fn open_stamp_id(ctx: &egui::Context) -> Id {
     Id::new(("spatial_ui_kit_dropdown_open", ctx.viewport_id()))
 }
@@ -1325,8 +1334,7 @@ impl<'a> Dropdown<'a> {
         }
         let direction = popup_rect.map(|_| placement.direction);
         if st.open {
-            let stamp_id = open_stamp_id(ui.ctx());
-            ui.ctx().memory_mut(|m| m.data.insert_temp(stamp_id, now));
+            mark_open(ui.ctx());
         }
         ui.data_mut(|d| d.insert_temp(id, st));
         DropdownResponse {
@@ -1373,24 +1381,33 @@ fn paint_face(ui: &Ui, rect: Rect, face: &Face<'_, '_>) {
         face.color,
     );
     if let Some(open) = face.arrow {
-        let c = Pos2::new(rect.right() - face.arrow_w * 0.5, rect.center().y);
-        let h = 3.5;
-        let dir = if open { -1.0 } else { 1.0 };
-        ui.painter().add(egui::Shape::convex_polygon(
-            vec![
-                c + Vec2::new(-h, -h * 0.6 * dir),
-                c + Vec2::new(h, -h * 0.6 * dir),
-                c + Vec2::new(0.0, h * 0.7 * dir),
-            ],
+        paint_arrow(
+            ui,
+            Pos2::new(rect.right() - face.arrow_w * 0.5, rect.center().y),
+            open,
             face.color,
-            Stroke::NONE,
-        ));
+        );
     }
+}
+
+/// The control's arrow centred on `c`, pointing up while the list is open.
+pub(crate) fn paint_arrow(ui: &Ui, c: Pos2, open: bool, color: Color32) {
+    let h = 3.5;
+    let dir = if open { -1.0 } else { 1.0 };
+    ui.painter().add(egui::Shape::convex_polygon(
+        vec![
+            c + Vec2::new(-h, -h * 0.6 * dir),
+            c + Vec2::new(h, -h * 0.6 * dir),
+            c + Vec2::new(0.0, h * 0.7 * dir),
+        ],
+        color,
+        Stroke::NONE,
+    ));
 }
 
 /// Left-aligned, vertically centred at `pos`, middle-shortened to `max_w`.
 /// Returns the text actually painted.
-fn paint_text(
+pub(crate) fn paint_text(
     ui: &Ui,
     pos: Pos2,
     max_w: f32,
