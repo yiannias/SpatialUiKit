@@ -553,3 +553,25 @@ fn show_items_returns_the_chosen_item_and_marks_the_current() {
     h.click(text_pos(&out, "30 mm"), &mut show);
     assert_eq!(*picked.borrow(), vec![30]);
 }
+
+#[test]
+fn show_value_edits_in_place_and_reports_the_change() {
+    let mut h = Harness::new();
+    let mut value = 20_u32;
+    let mut changes = 0;
+    let mut show = |ui: &mut Ui| {
+        if Dropdown::new("val").at_rect(control_at(40.0)).show_value(
+            ui,
+            &mut value,
+            [10_u32, 20, 30],
+            |v| format!("{v} mm"),
+        ) {
+            changes += 1;
+        }
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    let out = h.frame(Vec::new(), &mut show);
+    h.click(text_pos(&out, "10 mm"), &mut show);
+    assert_eq!((value, changes), (10, 1));
+}

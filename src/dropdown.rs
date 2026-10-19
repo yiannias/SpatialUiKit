@@ -313,6 +313,7 @@ pub struct Dropdown<'a> {
     id_salt: Id,
     text: Option<String>,
     italic_text: bool,
+    control_thumb: Option<ThumbPaint<'a>>,
     options: Vec<DropdownOption<'a>>,
     selected: Option<usize>,
     width: Option<f32>,
@@ -336,6 +337,7 @@ impl<'a> Dropdown<'a> {
             id_salt: Id::new(id_salt),
             text: None,
             italic_text: false,
+            control_thumb: None,
             options: Vec::new(),
             selected: None,
             width: None,
@@ -360,6 +362,13 @@ impl<'a> Dropdown<'a> {
     /// Draws the control's text in italics ("Multiple").
     pub fn italic_text(mut self, italic: bool) -> Self {
         self.italic_text = italic;
+        self
+    }
+    /// Thumbnail for the control row (closed and open) when it should differ
+    /// from the selected option's, e.g. an inherited value that is not itself
+    /// an option.
+    pub fn control_thumb(mut self, paint: impl Fn(&Ui, Rect) + 'a) -> Self {
+        self.control_thumb = Some(Box::new(paint));
         self
     }
     /// Adds one option.
@@ -464,6 +473,26 @@ impl<'a> Dropdown<'a> {
         self.show(ui).chosen.map(|i| items[i].clone())
     }
 
+    /// [`Self::show_items`] for editing a value in place: shows the dropdown
+    /// over `items`, writes a different pick into `value` and returns whether
+    /// it changed.
+    pub fn show_value<T: Clone + PartialEq>(
+        self,
+        ui: &mut Ui,
+        value: &mut T,
+        items: impl IntoIterator<Item = T>,
+        label: impl Fn(&T) -> String,
+    ) -> bool {
+        let current = value.clone();
+        match self.show_items(ui, items, label, |t| *t == current) {
+            Some(t) if t != current => {
+                *value = t;
+                true
+            }
+            _ => false,
+        }
+    }
+
     /// Draws the control and, while open, the box. Returns the choice made
     /// this frame.
     pub fn show(self, ui: &mut Ui) -> DropdownResponse {
@@ -496,7 +525,9 @@ impl<'a> Dropdown<'a> {
             .or_else(|| selected.map(|s| self.options[s].text.clone()))
             .unwrap_or_default();
         let header_thumb = if list_mode {
-            selected.and_then(|s| self.options[s].thumb.as_ref())
+            self.control_thumb
+                .as_ref()
+                .or_else(|| selected.and_then(|s| self.options[s].thumb.as_ref()))
         } else {
             None
         };
