@@ -740,3 +740,11 @@ fn save_status_uses_the_ok_and_warning_colours() {
 fn the_copy_button_label_is_short() {
     assert_eq!(COPY_BUTTON_LABEL, "Copy");
 }
+
+#[test]
+fn cancel_rename_closes_an_open_editor() {
+    let (h, _f) = renaming("Alpha");
+    assert!(rename_is_open(&h.ctx, KEY));
+    cancel_rename(&h.ctx, KEY);
+    assert!(!rename_is_open(&h.ctx, KEY));
+}

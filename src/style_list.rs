@@ -344,6 +344,15 @@ pub fn start_rename(ctx: &egui::Context, key: &str, name: &str) {
     ctx.request_repaint();
 }
 
+/// Closes any rename editor (and a pending one) on the list identified by
+/// `key`, e.g. when the thing the list belongs to is closed or retargeted.
+pub fn cancel_rename(ctx: &egui::Context, key: &str) {
+    ctx.memory_mut(|m| {
+        m.data
+            .insert_temp(rename_edit_id(key), Option::<RenameEdit>::None)
+    });
+}
+
 /// Whether the list identified by `key` has a rename editor open.
 pub fn rename_is_open(ctx: &egui::Context, key: &str) -> bool {
     ctx.memory(|m| m.data.get_temp::<Option<RenameEdit>>(rename_edit_id(key)))
