@@ -554,6 +554,35 @@ pub fn style_list(
     out
 }
 
+/// A check box that always draws its box: a rounded outline on the field
+/// background, with a tick when checked. `ui.checkbox` takes its box colours
+/// from the theme's inactive widget fill and stroke, which a dark theme can set
+/// to nothing -- an unchecked box then vanishes and the row looks empty. Returns
+/// the response; `changed()` is true on the frame the value flipped.
+pub fn sketch_checkbox(ui: &mut egui::Ui, checked: &mut bool) -> egui::Response {
+    let side = ui.spacing().icon_width.max(16.0);
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
+    if response.clicked() {
+        *checked = !*checked;
+        response.mark_changed();
+    }
+    let border = if response.hovered() {
+        palette::BRIGHT
+    } else {
+        palette::FIELD_BORDER
+    };
+    let painter = ui.painter();
+    painter.rect_filled(rect, 3.0, palette::TILE_BG);
+    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border), StrokeKind::Inside);
+    if *checked {
+        let tick = Stroke::new((side * 0.11).max(1.5), palette::BRIGHT);
+        let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * side;
+        painter.line_segment([at(0.24, 0.52), at(0.43, 0.72)], tick);
+        painter.line_segment([at(0.43, 0.72), at(0.78, 0.30)], tick);
+    }
+    response
+}
+
 /// Visual weight of a [`button_row`] button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ButtonKind {
@@ -660,6 +689,30 @@ pub struct TileAction<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The unchecked box is drawn: an outline and a fill, so a row with the
+    /// box off does not look empty (Dimension Style Manager, 2026-10-19).
+    #[test]
+    fn an_unchecked_sketch_checkbox_still_draws_its_box() {
+        let ctx = egui::Context::default();
+        let mut checked = false;
+        let out = ctx.run_ui(egui::RawInput::default(), |ui| {
+            sketch_checkbox(ui, &mut checked);
+        });
+        let mut boxes = 0;
+        fn walk(shape: &egui::Shape, boxes: &mut u32) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, boxes)),
+                egui::Shape::Rect(r) if r.stroke.width > 0.0 => *boxes += 1,
+                _ => {}
+            }
+        }
+        for clipped in &out.shapes {
+            walk(&clipped.shape, &mut boxes);
+        }
+        assert_eq!(boxes, 1);
+        assert!(!checked);
+    }
 
     #[test]
     fn sketch_frame_fits_uniformly_and_anchors_top_left() {
