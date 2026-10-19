@@ -310,8 +310,13 @@ struct RenameEdit {
 /// How long a rename may wait for its row to be listed.
 const PENDING_RENAME_SECS: f64 = 2.0;
 /// How long a committed rename may take to show its new name in the list
-/// before it counts as refused by the command.
-const RENAME_CONFIRM_SECS: f64 = 1.0;
+/// before it counts as refused by the command. The new name appearing is the
+/// confirmation (the host's command result, as the list sees it); this is only a
+/// safety net for a command that never reports, so it is long: a busy main
+/// window can take seconds, and a premature "refused" moves the host's drafts
+/// back to the old name. Even on expiry the list reports a refusal only while
+/// the old name is still listed and the new one is not.
+const RENAME_CONFIRM_SECS: f64 = 10.0;
 
 impl RenameEdit {
     fn new(name: &str, now: f64) -> Self {
@@ -333,6 +338,18 @@ fn rename_edit_id(key: &str) -> egui::Id {
 
 fn rename_menu_id(key: &str) -> egui::Id {
     egui::Id::new(("style_list_menu", key))
+}
+
+/// Whether the right-click menu of the list identified by `key` is open. A
+/// window's own Escape handler must leave Escape to the menu then: it closes
+/// the menu and nothing else.
+pub fn menu_is_open(ctx: &egui::Context, key: &str) -> bool {
+    ctx.memory(|m| {
+        m.data
+            .get_temp::<Option<(String, Pos2)>>(rename_menu_id(key))
+    })
+    .flatten()
+    .is_some()
 }
 
 /// Opens the in-place editor on the row for `name` in the list identified by
@@ -364,7 +381,7 @@ fn rename_focus_stamp_id(ctx: &egui::Context) -> egui::Id {
     egui::Id::new(("style_list_rename_focus_stamp", ctx.viewport_id()))
 }
 
-/// True while a style-list rename field of this window holds the keyboard: it
+/// True while a style-list rename field (or right-click menu) of this window holds the keyboard: it
 /// was focused during the previous frame, so an Esc arriving now belongs to the
 /// edit (which cancels itself) and must not also reach the canvas. A global
 /// Escape handler runs *before* the panels paint, so it can only ask about last
@@ -675,6 +692,11 @@ impl<'a> StyleList<'a> {
         }
         let mut context: Option<ListEvent> = None;
         if let Some((name, at)) = menu.clone() {
+            // An open menu owns Escape for a global handler asking before the
+            // panels paint, exactly like an open rename editor.
+            let frame_nr = ui.ctx().cumulative_frame_nr();
+            let stamp = rename_focus_stamp_id(ui.ctx());
+            ui.memory_mut(|m| m.data.insert_temp(stamp, frame_nr));
             let mut close = false;
             let area = egui::Area::new(menu_id.with("area"))
                 .order(egui::Order::Foreground)

@@ -558,27 +558,85 @@ pub fn style_list(
 /// background, with a tick when checked. `ui.checkbox` takes its box colours
 /// from the theme's inactive widget fill and stroke, which a dark theme can set
 /// to nothing -- an unchecked box then vanishes and the row looks empty. Returns
-/// the response; `changed()` is true on the frame the value flipped.
+/// the response; `changed()` is true on the frame the value flipped. See
+/// [`sketch_checkbox_labeled`] for the accessible name.
 pub fn sketch_checkbox(ui: &mut egui::Ui, checked: &mut bool) -> egui::Response {
+    sketch_checkbox_labeled(ui, checked, "")
+}
+
+/// [`sketch_checkbox`] with the text a screen reader announces (the row's
+/// label, since the box is drawn with no text of its own).
+///
+/// It honours `ui.is_enabled()` (greyed, ignores clicks), draws a focus ring
+/// when the keyboard has it (Space or Enter toggles), lightens its fill on
+/// hover, and picks dark or light colours from the active theme.
+pub fn sketch_checkbox_labeled(
+    ui: &mut egui::Ui,
+    checked: &mut bool,
+    label: &str,
+) -> egui::Response {
     let side = ui.spacing().icon_width.max(16.0);
-    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(side), Sense::click());
-    if response.clicked() {
+    let enabled = ui.is_enabled();
+    let sense = if enabled {
+        Sense::click()
+    } else {
+        Sense::hover()
+    };
+    let (rect, mut response) = ui.allocate_exact_size(Vec2::splat(side), sense);
+    if enabled && response.clicked() {
         *checked = !*checked;
         response.mark_changed();
     }
-    let border = if response.hovered() {
-        palette::BRIGHT
+    let value = *checked;
+    response.widget_info(|| {
+        egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, value, label)
+    });
+    let dark = ui.visuals().dark_mode;
+    let (fill, border, hover_fill, ink) = if dark {
+        (
+            palette::TILE_BG,
+            palette::FIELD_BORDER,
+            Color32::from_rgb(0x26, 0x26, 0x2C),
+            palette::BRIGHT,
+        )
     } else {
-        palette::FIELD_BORDER
+        (
+            Color32::from_rgb(0xFA, 0xFA, 0xFC),
+            Color32::from_rgb(0x70, 0x70, 0x78),
+            Color32::from_rgb(0xEA, 0xEA, 0xF0),
+            Color32::from_rgb(0x20, 0x20, 0x24),
+        )
+    };
+    let hovered = enabled && response.hovered();
+    let fade = |c: Color32| {
+        if enabled {
+            c
+        } else {
+            c.gamma_multiply(0.45)
+        }
     };
     let painter = ui.painter();
-    painter.rect_filled(rect, 3.0, palette::TILE_BG);
-    painter.rect_stroke(rect, 3.0, Stroke::new(1.0, border), StrokeKind::Inside);
+    painter.rect_filled(rect, 3.0, fade(if hovered { hover_fill } else { fill }));
+    let border = if hovered { ink } else { border };
+    painter.rect_stroke(
+        rect,
+        3.0,
+        Stroke::new(1.0, fade(border)),
+        StrokeKind::Inside,
+    );
     if *checked {
-        let tick = Stroke::new((side * 0.11).max(1.5), palette::BRIGHT);
+        let tick = Stroke::new((side * 0.11).max(1.5), fade(ink));
         let at = |x: f32, y: f32| rect.min + Vec2::new(x, y) * side;
         painter.line_segment([at(0.24, 0.52), at(0.43, 0.72)], tick);
         painter.line_segment([at(0.43, 0.72), at(0.78, 0.30)], tick);
+    }
+    if enabled && response.has_focus() {
+        painter.rect_stroke(
+            rect.expand(2.0),
+            5.0,
+            Stroke::new(2.0, palette::PRIMARY),
+            StrokeKind::Outside,
+        );
     }
     response
 }
@@ -712,6 +770,171 @@ mod tests {
         }
         assert_eq!(boxes, 1);
         assert!(!checked);
+    }
+
+    /// One frame of a check box at the top-left with `events`.
+    fn checkbox_frame(
+        ctx: &egui::Context,
+        checked: &mut bool,
+        enabled: bool,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        ctx.run_ui(
+            egui::RawInput {
+                events,
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(200.0, 100.0))),
+                ..Default::default()
+            },
+            |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    sketch_checkbox_labeled(ui, checked, "Hide the thing");
+                });
+            },
+        )
+    }
+
+    fn click_checkbox(ctx: &egui::Context, checked: &mut bool, enabled: bool) -> Vec<egui::Event> {
+        let at = Pos2::new(12.0, 12.0);
+        let mut seen = Vec::new();
+        checkbox_frame(ctx, checked, enabled, vec![egui::Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            let out = checkbox_frame(
+                ctx,
+                checked,
+                enabled,
+                vec![egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for e in out.platform_output.events {
+                seen.push(e);
+            }
+        }
+        // `OutputEvent` is not an input event; report them as a debug string list.
+        let _ = &seen;
+        Vec::new()
+    }
+
+    #[test]
+    fn a_disabled_sketch_checkbox_ignores_clicks() {
+        let ctx = egui::Context::default();
+        let mut checked = false;
+        checkbox_frame(&ctx, &mut checked, false, Vec::new());
+        click_checkbox(&ctx, &mut checked, false);
+        assert!(!checked, "a disabled box must not toggle");
+        let mut on = false;
+        checkbox_frame(&ctx, &mut on, true, Vec::new());
+        click_checkbox(&ctx, &mut on, true);
+        assert!(on, "an enabled box toggles");
+    }
+
+    #[test]
+    fn a_sketch_checkbox_announces_its_label_and_state() {
+        let ctx = egui::Context::default();
+        let mut checked = false;
+        checkbox_frame(&ctx, &mut checked, true, Vec::new());
+        let at = Pos2::new(12.0, 12.0);
+        checkbox_frame(
+            &ctx,
+            &mut checked,
+            true,
+            vec![egui::Event::PointerMoved(at)],
+        );
+        let mut said = String::new();
+        for pressed in [true, false] {
+            let out = checkbox_frame(
+                &ctx,
+                &mut checked,
+                true,
+                vec![egui::Event::PointerButton {
+                    pos: at,
+                    button: egui::PointerButton::Primary,
+                    pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }],
+            );
+            for e in &out.platform_output.events {
+                said.push_str(&format!("{e:?}"));
+            }
+        }
+        assert!(said.contains("Hide the thing"), "{said}");
+    }
+
+    #[test]
+    fn a_focused_sketch_checkbox_draws_a_focus_ring_and_space_toggles() {
+        let ctx = egui::Context::default();
+        let mut checked = false;
+        checkbox_frame(&ctx, &mut checked, true, Vec::new());
+        // Tab moves the keyboard focus onto it.
+        let tab = |pressed| egui::Event::Key {
+            key: egui::Key::Tab,
+            physical_key: Some(egui::Key::Tab),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        checkbox_frame(&ctx, &mut checked, true, vec![tab(true)]);
+        checkbox_frame(&ctx, &mut checked, true, vec![tab(false)]);
+        assert!(!checked);
+        let out = checkbox_frame(&ctx, &mut checked, true, Vec::new());
+        let ring = |out: &egui::FullOutput| {
+            fn walk(shape: &egui::Shape, n: &mut u32) {
+                match shape {
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, n)),
+                    egui::Shape::Rect(r) if r.stroke.width >= 2.0 => *n += 1,
+                    _ => {}
+                }
+            }
+            let mut n = 0;
+            for c in &out.shapes {
+                walk(&c.shape, &mut n);
+            }
+            n
+        };
+        assert_eq!(ring(&out), 1, "a keyboard-focused box shows the ring");
+        // Space toggles it back.
+        let space = |pressed| egui::Event::Key {
+            key: egui::Key::Space,
+            physical_key: Some(egui::Key::Space),
+            pressed,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        };
+        checkbox_frame(&ctx, &mut checked, true, vec![space(true)]);
+        checkbox_frame(&ctx, &mut checked, true, vec![space(false)]);
+        assert!(checked, "Space toggles the focused box");
+    }
+
+    #[test]
+    fn the_sketch_checkbox_follows_the_theme() {
+        let fills = |visuals: egui::Visuals| {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(visuals);
+            let mut checked = false;
+            let out = checkbox_frame(&ctx, &mut checked, true, Vec::new());
+            fn walk(shape: &egui::Shape, out: &mut Vec<Color32>) {
+                match shape {
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                    egui::Shape::Rect(r) if r.fill != Color32::TRANSPARENT => out.push(r.fill),
+                    _ => {}
+                }
+            }
+            let mut v = Vec::new();
+            for c in &out.shapes {
+                walk(&c.shape, &mut v);
+            }
+            v
+        };
+        let dark = fills(egui::Visuals::dark());
+        let light = fills(egui::Visuals::light());
+        assert!(dark.contains(&palette::TILE_BG));
+        assert!(
+            !light.contains(&palette::TILE_BG),
+            "light theme has its own fill"
+        );
     }
 
     #[test]

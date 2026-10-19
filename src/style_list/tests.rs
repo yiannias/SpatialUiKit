@@ -678,7 +678,10 @@ fn a_rename_the_command_refused_reopens_with_a_message() {
     h.key(Key::Enter, &mut |ui| f.show(ui));
     assert_eq!(f.renamed(), vec![("Alpha".to_owned(), "Delta".to_owned())]);
     assert!(edit_of(&h).is_none());
-    h.advance(1.5);
+    h.advance(5.0);
+    h.settle(2, &mut |ui| f.show(ui));
+    assert!(edit_of(&h).is_none(), "a slow command is not a refusal yet");
+    h.advance(6.0);
     h.settle(2, &mut |ui| f.show(ui));
     let edit = edit_of(&h).expect("editor reopened");
     assert_eq!(edit.error.as_deref(), Some("The rename was refused"));
@@ -747,4 +750,36 @@ fn cancel_rename_closes_an_open_editor() {
     assert!(rename_is_open(&h.ctx, KEY));
     cancel_rename(&h.ctx, KEY);
     assert!(!rename_is_open(&h.ctx, KEY));
+}
+
+#[test]
+fn a_slow_command_that_finally_renames_is_never_reported_refused() {
+    let (mut h, mut f) = renaming("Alpha");
+    type_text(&mut h, &mut f, "Delta");
+    h.key(Key::Enter, &mut |ui| f.show(ui));
+    // The main window takes 4 s to run the command.
+    h.advance(4.0);
+    h.settle(2, &mut |ui| f.show(ui));
+    f.names[0] = "Delta".to_owned();
+    h.settle(3, &mut |ui| f.show(ui));
+    h.advance(12.0);
+    h.settle(3, &mut |ui| f.show(ui));
+    assert!(!f
+        .events
+        .iter()
+        .any(|e| matches!(e, ListEvent::RenameRefused(..))));
+    assert!(edit_of(&h).is_none());
+}
+
+#[test]
+fn an_open_menu_owns_escape_and_reports_itself_open() {
+    let mut h = Harness::new();
+    let mut f = Fixture::new();
+    h.settle(2, &mut |ui| f.show(ui));
+    assert!(!menu_is_open(&h.ctx, KEY));
+    right_click(&mut h, &mut f, row_pos(1));
+    assert!(menu_is_open(&h.ctx, KEY));
+    assert!(rename_editor_owns_escape(&h.ctx));
+    h.key(Key::Escape, &mut |ui| f.show(ui));
+    assert!(!menu_is_open(&h.ctx, KEY));
 }
