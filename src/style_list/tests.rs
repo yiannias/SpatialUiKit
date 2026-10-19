@@ -783,3 +783,11 @@ fn an_open_menu_owns_escape_and_reports_itself_open() {
     h.key(Key::Escape, &mut |ui| f.show(ui));
     assert!(!menu_is_open(&h.ctx, KEY));
 }
+
+#[test]
+fn a_claimed_escape_is_owned_for_one_frame() {
+    let h = Harness::new();
+    assert!(!rename_editor_owns_escape(&h.ctx));
+    claim_escape(&h.ctx);
+    assert!(rename_editor_owns_escape(&h.ctx));
+}

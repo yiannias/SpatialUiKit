@@ -393,6 +393,16 @@ pub fn rename_editor_owns_escape(ctx: &egui::Context) -> bool {
         .is_some_and(|stamp| stamp.saturating_add(1) >= now)
 }
 
+/// Marks this frame as one in which a text field of this window holds the
+/// keyboard, so a global Escape handler (see [`rename_editor_owns_escape`])
+/// leaves the key to it. For an in-place editor that is not a [`StyleList`] row,
+/// such as a table cell's rename field: call it every frame the field has focus.
+pub fn claim_escape(ctx: &egui::Context) {
+    let frame_nr = ctx.cumulative_frame_nr();
+    let stamp = rename_focus_stamp_id(ctx);
+    ctx.memory_mut(|m| m.data.insert_temp(stamp, frame_nr));
+}
+
 enum EditResult {
     Open,
     Commit,
