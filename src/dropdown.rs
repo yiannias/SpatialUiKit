@@ -62,6 +62,8 @@ pub struct DropdownOption<'a> {
     pub italic: bool,
     /// Tooltip; by default a text that had to be shortened shows in full.
     pub tooltip: Option<String>,
+    /// A section heading: a muted, non-selectable row in a list.
+    pub heading: bool,
 }
 
 impl<'a> DropdownOption<'a> {
@@ -73,6 +75,15 @@ impl<'a> DropdownOption<'a> {
             indent: 0.0,
             italic: false,
             tooltip: None,
+            heading: false,
+        }
+    }
+    /// A section heading row ("Other"): shown muted, never selectable, skipped
+    /// by the keyboard and type-ahead. List layout only.
+    pub fn heading(text: impl Into<String>) -> Self {
+        Self {
+            heading: true,
+            ..Self::new(text)
         }
     }
     /// Adds a thumbnail painter.
@@ -160,7 +171,7 @@ impl DropdownStyle {
             border: v.widgets.inactive.bg_stroke.color,
             border_strong: v.widgets.hovered.bg_stroke.color,
             text,
-            selected_fill: box_fill.lerp_to_gamma(text, 0.22),
+            selected_fill: box_fill.lerp_to_gamma(text, 0.27),
             hover_fill: box_fill.lerp_to_gamma(text, 0.11),
             focus: v.selection.stroke,
             corner_radius: r,
@@ -183,7 +194,7 @@ impl DropdownStyle {
             s.box_fill = surface;
             s.border = cap_border;
             s.border_strong = cap_hot;
-            s.selected_fill = surface.lerp_to_gamma(s.text, 0.22);
+            s.selected_fill = surface.lerp_to_gamma(s.text, 0.27);
             s.hover_fill = surface.lerp_to_gamma(s.text, 0.11);
         }
         s
@@ -657,7 +668,11 @@ impl<'a> Dropdown<'a> {
             visual_rows.reverse();
         }
         let nav: Vec<usize> = if list_mode {
-            let mut v = visual_rows.clone();
+            let mut v: Vec<usize> = visual_rows
+                .iter()
+                .copied()
+                .filter(|&i| !self.options[i].heading)
+                .collect();
             if let Some(s) = selected {
                 if up {
                     v.push(s);
@@ -746,7 +761,11 @@ impl<'a> Dropdown<'a> {
                 }
             }
             if !typed.is_empty() {
-                let texts: Vec<&str> = self.options.iter().map(|o| o.text.as_str()).collect();
+                let texts: Vec<&str> = self
+                    .options
+                    .iter()
+                    .map(|o| if o.heading { "" } else { o.text.as_str() })
+                    .collect();
                 for ch in typed {
                     if let Some(i) = type_ahead(&texts, st.cursor, ch) {
                         st.cursor = Some(i);
@@ -911,6 +930,20 @@ impl<'a> Dropdown<'a> {
                                 let m = visual_rows.len();
                                 for (k, &i) in visual_rows.iter().enumerate() {
                                     let opt = &self.options[i];
+                                    if opt.heading {
+                                        let (rect, _) = sui.allocate_exact_size(
+                                            Vec2::new(popup_w - 2.0, row_h),
+                                            Sense::hover(),
+                                        );
+                                        sui.painter().text(
+                                            Pos2::new(rect.left() + pad + 1.0, rect.center().y),
+                                            Align2::LEFT_CENTER,
+                                            &opt.text,
+                                            FontId::proportional((font.size * 0.85).max(8.0)),
+                                            style.text.gamma_multiply(0.55),
+                                        );
+                                        continue;
+                                    }
                                     let (rect, row) = sui.allocate_exact_size(
                                         Vec2::new(popup_w - 2.0, row_h),
                                         Sense::click(),

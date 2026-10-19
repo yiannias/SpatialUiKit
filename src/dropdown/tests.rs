@@ -575,3 +575,29 @@ fn show_value_edits_in_place_and_reports_the_change() {
     h.click(text_pos(&out, "10 mm"), &mut show);
     assert_eq!((value, changes), (10, 1));
 }
+
+#[test]
+fn heading_rows_are_shown_but_never_selected() {
+    let mut h = Harness::new();
+    let picked = std::cell::RefCell::new(Vec::new());
+    let mut show = |ui: &mut Ui| {
+        let out = Dropdown::new("sec")
+            .at_rect(control_at(40.0))
+            .option("Continuous")
+            .option(DropdownOption::heading("Other"))
+            .option("Gearwheel")
+            .selected(Some(0))
+            .show(ui);
+        if let Some(i) = out.chosen {
+            picked.borrow_mut().push(i);
+        }
+    };
+    h.settle(3, &mut show);
+    h.click(control_at(40.0).center(), &mut show);
+    let out = h.frame(Vec::new(), &mut show);
+    h.click(text_pos(&out, "Other"), &mut show);
+    assert!(picked.borrow().is_empty(), "a heading is not a choice");
+    h.key(Key::ArrowDown, &mut show);
+    h.key(Key::Enter, &mut show);
+    assert_eq!(*picked.borrow(), vec![2], "the keyboard skips the heading");
+}
