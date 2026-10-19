@@ -920,16 +920,18 @@ fn render_field_row<A: Clone, Ctx>(
                         on_change,
                     } => {
                         let current = value(ctx);
-                        egui::ComboBox::from_id_salt(field.id)
-                            .selected_text(current)
+                        if let Some(opt) = crate::dropdown::Dropdown::new(field.id)
+                            .selected_text(current.clone())
                             .width(CONTROL_WIDGET_WIDTH)
-                            .show_ui(ui, |ui| {
-                                for opt in *options {
-                                    if ui.selectable_label(current == *opt, *opt).clicked() {
-                                        actions.push(on_change(opt));
-                                    }
-                                }
-                            });
+                            .show_items(
+                                ui,
+                                options.iter().copied(),
+                                |o| o.to_string(),
+                                |o| current == *o,
+                            )
+                        {
+                            actions.push(on_change(opt));
+                        }
                     }
                     FieldControl::DynamicDropdown {
                         value,
@@ -938,16 +940,13 @@ fn render_field_row<A: Clone, Ctx>(
                     } => {
                         let current = value(ctx);
                         let opts = options(ctx);
-                        egui::ComboBox::from_id_salt(field.id)
+                        if let Some(opt) = crate::dropdown::Dropdown::new(field.id)
                             .selected_text(current.clone())
                             .width(CONTROL_WIDGET_WIDTH)
-                            .show_ui(ui, |ui| {
-                                for opt in &opts {
-                                    if ui.selectable_label(&current == opt, opt).clicked() {
-                                        actions.push(on_change(opt, ctx));
-                                    }
-                                }
-                            });
+                            .show_items(ui, opts.iter().cloned(), |o| o.clone(), |o| &current == o)
+                        {
+                            actions.push(on_change(&opt, ctx));
+                        }
                     }
                     FieldControl::Static { value } => {
                         // Unlike an editable control, a read-only value is
