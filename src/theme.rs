@@ -212,6 +212,27 @@ impl<'de> Deserialize<'de> for InterfaceScale {
     }
 }
 
+/// Colour for a positive state ("Saved", success), beside [`warning_color`]
+/// ("Unsaved changes"). Dark and light variants, picked from `visuals`; both
+/// read on their theme's window fill. Use these rather than hardcoding a green.
+pub fn ok_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(110, 200, 120)
+    } else {
+        egui::Color32::from_rgb(22, 128, 56)
+    }
+}
+
+/// Colour for a cautionary state ("Unsaved changes"); the orange the apps
+/// already used, with a darker light-theme variant.
+pub fn warning_color(visuals: &egui::Visuals) -> egui::Color32 {
+    if visuals.dark_mode {
+        egui::Color32::from_rgb(240, 180, 70)
+    } else {
+        egui::Color32::from_rgb(176, 104, 0)
+    }
+}
+
 /// Applies `scale` as egui's zoom factor. Also turns off egui's built-in
 /// Ctrl +/-/0 UI zoom: left on, it silently changes the same zoom factor
 /// behind the saved setting's back, and those keys belong to the app.
@@ -725,4 +746,24 @@ pub fn current_text_scale(ui: &egui::Ui) -> f32 {
         .map(|f| f.size)
         .unwrap_or(default_body);
     live_body / default_body
+}
+
+#[cfg(test)]
+mod status_color_tests {
+    use super::*;
+    use crate::os_style::contrast_ratio;
+
+    #[test]
+    fn ok_and_warning_read_on_both_themes_and_differ() {
+        for theme in Theme::ALL {
+            let visuals = theme.visuals();
+            let window = visuals.window_fill();
+            for color in [ok_color(&visuals), warning_color(&visuals)] {
+                assert!(contrast_ratio(color, window) >= 3.0, "{theme:?} {color:?}");
+            }
+            assert_ne!(ok_color(&visuals), warning_color(&visuals));
+            let ok = ok_color(&visuals);
+            assert!(ok.g() > ok.r() && ok.g() > ok.b(), "ok is green");
+        }
+    }
 }
