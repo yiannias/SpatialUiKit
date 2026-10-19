@@ -921,7 +921,7 @@ fn render_field_row<A: Clone, Ctx>(
                     } => {
                         let current = value(ctx);
                         if let Some(opt) = crate::dropdown::Dropdown::new(field.id)
-                            .selected_text(current.clone())
+                            .selected_text(current)
                             .width(CONTROL_WIDGET_WIDTH)
                             .show_items(
                                 ui,
