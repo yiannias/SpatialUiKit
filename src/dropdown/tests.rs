@@ -354,8 +354,7 @@ fn keyboard_type_ahead_jumps_to_the_matching_option() {
 }
 
 #[test]
-fn list_flips_up_only_when_the_window_has_no_room_below_and_the_selection_stays_next_to_the_control(
-) {
+fn list_flips_up_only_when_the_window_has_no_room_below_keeping_reading_order() {
     let mut h = Harness::new();
     // Screen is 700 high; 4 rows do not fit below a control at y=640.
     let mut fx = Fx::new(control_at(640.0));
@@ -372,9 +371,21 @@ fn list_flips_up_only_when_the_window_has_no_room_below_and_the_selection_stays_
     assert!(boxr.top() >= 0.0);
     let cur = text_pos(&out, "Hatch");
     assert!(fx.control.contains(cur), "current stays in the control row");
-    // Mirrored: the first alternative is nearest the control.
-    assert!(text_pos(&out, "Solid").y > text_pos(&out, "Gradient").y);
-    assert!(text_pos(&out, "Gradient").y > text_pos(&out, "None").y);
+    // Reading order, the same as a list that opens down.
+    assert!(text_pos(&out, "Solid").y < text_pos(&out, "Gradient").y);
+    assert!(text_pos(&out, "Gradient").y < text_pos(&out, "None").y);
+    assert!(
+        text_pos(&out, "None").y < cur.y,
+        "the current row is the bottom row"
+    );
+    // Arrow Up from the current row moves to the option right above it.
+    h.key(Key::ArrowUp, &mut |ui| fx.show(ui));
+    h.key(Key::Enter, &mut |ui| fx.show(ui));
+    assert_eq!(
+        fx.picked,
+        vec![3],
+        "None, the last option, sits above the control"
+    );
 }
 
 #[test]

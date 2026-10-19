@@ -856,10 +856,12 @@ impl<'a> Dropdown<'a> {
 
         // Visual (top to bottom) order of list rows, header included when it
         // is the current option.
-        let mut visual_rows = others.clone();
-        if up && list_mode {
-            visual_rows.reverse();
-        }
+        // Reading order both ways: a list that flips up keeps its options in
+        // the same top-to-bottom order as one that opens down (the current one
+        // stays highlighted in the control row, now at the bottom). Mirroring
+        // them made the Text Style Manager's Leader Attachment list read
+        // "Bottom of text" first (2026-10-19 review).
+        let visual_rows = others.clone();
         let nav: Vec<usize> = if list_mode {
             let mut v: Vec<usize> = visual_rows
                 .iter()
