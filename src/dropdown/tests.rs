@@ -580,6 +580,87 @@ fn style_derives_monochrome_colours_from_visuals_and_palette() {
     assert_eq!(s2.border, p.control.cap_border.color32().unwrap());
 }
 
+/// Every filled rect in the frame, in paint order, with its layer.
+fn filled_rects(out: &egui::FullOutput) -> Vec<(Rect, Color32)> {
+    fn walk(shape: &egui::Shape, out: &mut Vec<(Rect, Color32)>) {
+        match shape {
+            egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+            egui::Shape::Rect(r) => out.push((r.rect, r.fill)),
+            _ => {}
+        }
+    }
+    let mut v = Vec::new();
+    for c in &out.shapes {
+        walk(&c.shape, &mut v);
+    }
+    v
+}
+
+/// Regression (Text Style Manager, 2026-10-19): a dropdown inside a row whose
+/// local visuals make widget chrome transparent -- how SDB's managers embed a
+/// `DragValue` in a field frame -- drew its open list with a transparent box, so
+/// the rows beneath showed through. The list must paint an opaque box under
+/// its rows, and the closed control keeps its theme fill, wherever it sits.
+#[test]
+fn the_open_list_has_an_opaque_box_even_inside_transparent_chrome() {
+    let mut h = Harness::new();
+    let control = control_at(40.0);
+    let mut show = |ui: &mut Ui| {
+        ui.scope(|ui| {
+            let v = &mut ui.style_mut().visuals;
+            v.extreme_bg_color = Color32::TRANSPARENT;
+            for w in [
+                &mut v.widgets.inactive,
+                &mut v.widgets.hovered,
+                &mut v.widgets.active,
+            ] {
+                w.bg_fill = Color32::TRANSPARENT;
+                w.weak_bg_fill = Color32::TRANSPARENT;
+            }
+            let _ = Dropdown::new("transparent_row")
+                .options(NAMES.to_vec())
+                .selected(Some(0))
+                .at_rect(control)
+                .show(ui);
+        });
+    };
+    h.settle(3, &mut show);
+    let closed = h.frame(Vec::new(), &mut show);
+    assert!(
+        filled_rects(&closed)
+            .iter()
+            .any(|(r, fill)| *r == control && fill.a() == 255),
+        "the closed control keeps the theme's opaque fill: {:?}",
+        filled_rects(&closed)
+    );
+    h.click(control.center(), &mut show);
+    // Past the popup's fade-in, which multiplies everything in it by its opacity.
+    h.settle(30, &mut show);
+    let out = h.frame(Vec::new(), &mut show);
+    let rects = filled_rects(&out);
+    let (box_rect, fill) = rects
+        .iter()
+        .find(|(r, _)| r.min == control.min && r.height() > control.height() * 2.0)
+        .copied()
+        .expect("the open list paints its box");
+    assert_eq!(fill.a(), 255, "the box is opaque: {fill:?} {rects:?}");
+    // Every option's text sits inside that box.
+    for name in &NAMES[1..] {
+        let p = text_pos(&out, name);
+        assert!(box_rect.contains(p), "{name} at {p:?} outside {box_rect:?}");
+    }
+}
+
+#[test]
+fn opaque_keeps_opaque_colours_and_fills_in_transparent_ones() {
+    assert_eq!(opaque(Color32::RED), Color32::RED);
+    assert_eq!(opaque(Color32::TRANSPARENT).a(), 255);
+    assert_eq!(
+        opaque(Color32::from_rgba_unmultiplied(40, 40, 40, 128)).a(),
+        255
+    );
+}
+
 #[test]
 fn show_items_returns_the_chosen_item_and_marks_the_current() {
     let mut h = Harness::new();

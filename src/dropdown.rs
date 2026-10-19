@@ -178,6 +178,30 @@ impl DropdownStyle {
         }
     }
 
+    /// The style a dropdown drawn in `ui` uses when its caller sets none: the
+    /// **window's theme** (the context's visuals), not `ui`'s local visuals.
+    ///
+    /// A host often scopes a row with transparent widget chrome so a stock
+    /// `DragValue` can sit inside its own field frame (SDB's style managers do,
+    /// for every property row). Read from that scope, the dropdown's box fill
+    /// (`extreme_bg_color`) and control fill were transparent too, so the open
+    /// list drew its rows straight over the rows beneath it (Text Style Manager,
+    /// 2026-10-19 review) and the closed control lost its box. One dropdown style
+    /// everywhere means the theme decides, not the row it happens to sit in.
+    pub fn for_ui(ui: &Ui) -> Self {
+        Self::from_visuals(&ui.ctx().global_style().visuals)
+    }
+
+    /// This style with a fully opaque box fill. The open list is a popup over
+    /// other content; a translucent fill (a theme colour with alpha, a caller's
+    /// override) lets the content beneath show through its rows. Falls back to
+    /// the opaque colour of the same hue.
+    pub fn with_opaque_box(mut self) -> Self {
+        self.box_fill = opaque(self.box_fill);
+        // Row highlights are painted over the box, so they may stay translucent.
+        self
+    }
+
     /// Takes the control and surface colours from a [`ThemePalette`]'s tokens
     /// (`control.cap_*` for the control, `surface.background` for the box),
     /// with text and focus ring from `v`.
@@ -198,6 +222,16 @@ impl DropdownStyle {
             s.hover_fill = surface.lerp_to_gamma(s.text, 0.11);
         }
         s
+    }
+}
+
+/// `c` with full alpha. A fully transparent colour has no hue to keep, so it
+/// becomes a neutral dark surface rather than black.
+fn opaque(c: Color32) -> Color32 {
+    match c.a() {
+        255 => c,
+        0 => Color32::from_gray(30),
+        _ => c.to_opaque(),
     }
 }
 
@@ -617,7 +651,8 @@ impl<'a> Dropdown<'a> {
         let style = self
             .style
             .clone()
-            .unwrap_or_else(|| DropdownStyle::from_visuals(ui.visuals()));
+            .unwrap_or_else(|| DropdownStyle::for_ui(ui))
+            .with_opaque_box();
         let font = self
             .font
             .clone()
