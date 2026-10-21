@@ -295,7 +295,7 @@ pub struct StyleListRow<'a> {
     /// ignored in [`StyleListMode::List`].
     ///
     /// A closure rather than a swatch colour or a fixed preview type: a thumbnail
-    /// is whatever makes a row recognisable at 72 pt, and only the panel that
+    /// is whatever makes a row recognisable at 80 pt, and only the panel that
     /// owns the row knows what that is. A hatch row paints its own line geometry;
     /// a text row paints a glyph run in its own typeface.
     ///
@@ -454,25 +454,19 @@ pub fn style_list(
                         }
                     }
                     StyleListMode::Thumbnails => {
-                        // Sketch: 72-pt squares on a 97 by 122 pitch, name below.
-                        let cell = Vec2::new(sk.len(97.0), sk.len(122.0));
-                        let swatch = sk.len(72.0);
-                        let per_row = ((ui.available_width() / cell.x).floor() as usize).max(1);
+                        let layout = style_list_thumbnail_layout(sk, ui.available_width());
                         let small = sk.font(14.0);
-                        let left = ui.cursor().left();
-                        for chunk_start in (0..rows.len()).step_by(per_row) {
+                        for chunk_start in (0..rows.len()).step_by(layout.per_row) {
+                            let count = (rows.len() - chunk_start).min(layout.per_row);
                             let (band, _) = ui.allocate_exact_size(
-                                Vec2::new(ui.available_width(), cell.y),
+                                Vec2::new(ui.available_width(), layout.cell.y),
                                 Sense::hover(),
                             );
-                            for (offset, row) in
-                                rows[chunk_start..].iter().take(per_row).enumerate()
+                            for (offset, row) in rows[chunk_start..].iter().take(count).enumerate()
                             {
                                 let index = chunk_start + offset;
-                                let cell_rect = Rect::from_min_size(
-                                    Pos2::new(left + cell.x * offset as f32, band.top()),
-                                    cell,
-                                );
+                                let cell_rect =
+                                    style_list_thumbnail_cell(band, layout.cell, offset, count);
                                 // Rows the scroll viewport does not show are skipped
                                 // whole -- no cell, no interact, no thumbnail
                                 // closure. The ScrollArea would clip the output
@@ -490,9 +484,9 @@ pub fn style_list(
                                 let square = Rect::from_center_size(
                                     Pos2::new(
                                         cell_rect.center().x,
-                                        cell_rect.top() + sk.len(8.0) + swatch / 2.0,
+                                        cell_rect.top() + sk.len(8.0) + layout.swatch / 2.0,
                                     ),
-                                    Vec2::splat(swatch),
+                                    Vec2::splat(layout.swatch),
                                 );
                                 let response = ui.interact(
                                     cell_rect,
@@ -525,8 +519,12 @@ pub fn style_list(
                                     },
                                     StrokeKind::Inside,
                                 );
-                                let shown =
-                                    truncate_middle(ui, row.name, &small, cell.x - sk.len(4.0));
+                                let shown = truncate_middle(
+                                    ui,
+                                    row.name,
+                                    &small,
+                                    layout.cell.x - sk.len(4.0),
+                                );
                                 ui.painter().text(
                                     Pos2::new(cell_rect.center().x, square.bottom() + sk.len(8.0)),
                                     Align2::CENTER_TOP,
@@ -552,6 +550,41 @@ pub fn style_list(
             });
     });
     out
+}
+
+/// Shared geometry for the thumbnail grid and its in-place rename editor.
+pub(crate) struct StyleListThumbnailLayout {
+    pub cell: Vec2,
+    pub swatch: f32,
+    pub per_row: usize,
+}
+
+pub(crate) fn style_list_thumbnail_layout(
+    sk: &SketchFrame,
+    available_width: f32,
+) -> StyleListThumbnailLayout {
+    // The enlarged squares use the list panel more deliberately; a 104 pt
+    // pitch still keeps three columns in the Filled Region manager's frame.
+    let cell = Vec2::new(sk.len(104.0), sk.len(132.0));
+    StyleListThumbnailLayout {
+        cell,
+        swatch: sk.len(80.0),
+        per_row: ((available_width / cell.x).floor() as usize).max(1),
+    }
+}
+
+pub(crate) fn style_list_thumbnail_cell(
+    band: Rect,
+    cell: Vec2,
+    index_in_row: usize,
+    cells_in_row: usize,
+) -> Rect {
+    let row_width = cell.x * cells_in_row as f32;
+    let left = band.left() + (band.width() - row_width).max(0.0) / 2.0;
+    Rect::from_min_size(
+        Pos2::new(left + cell.x * index_in_row as f32, band.top()),
+        cell,
+    )
 }
 
 /// A check box that always draws its box: a rounded outline on the field

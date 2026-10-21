@@ -12,8 +12,8 @@
 //! [`ListEvent`]s it gets back. Nothing here knows what a style is.
 //!
 //! The rows are painted by [`crate::sketch::style_list`] except while a rename
-//! is open, when the List rows are painted here with the same geometry and the
-//! renamed row's text is swapped for a field.
+//! is open, when the active view is painted here and the renamed row's text is
+//! swapped for a field.
 //!
 //! Escape and F2 ownership work through `egui` memory, like
 //! [`crate::dropdown::dropdown_owns_escape`]: [`rename_editor_owns_escape`] tells a
@@ -21,8 +21,8 @@
 //! the open editor, and F2 belongs to the one list the user is working in.
 
 use crate::sketch::{
-    button_row, palette, truncate_middle, StyleListMode, StyleListResponse, StyleListRow,
-    ThumbnailPaint,
+    button_row, palette, style_list_thumbnail_cell, style_list_thumbnail_layout, truncate_middle,
+    StyleListMode, StyleListResponse, StyleListRow, ThumbnailPaint,
 };
 use crate::sketch::{ButtonKind, SketchFrame};
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
@@ -425,8 +425,7 @@ pub type MenuExtra<'a> = &'a mut dyn FnMut(&mut egui::Ui, &str) -> bool;
 /// List / Thumbnails switch. Build it with [`StyleList::new`], adjust it with
 /// the builder methods, then call [`StyleList::show`].
 ///
-/// A rename in Thumbnails mode switches the list to List first, because the
-/// editor lives on a List row.
+/// A rename edits the name in place in whichever view is active.
 pub struct StyleList<'a> {
     key: &'a str,
     validate: &'a dyn Fn(&str, &str) -> Result<(), String>,
@@ -594,25 +593,40 @@ impl<'a> StyleList<'a> {
             .collect();
 
         if editor_open {
-            *mode = StyleListMode::List;
             let mut result = EditResult::Open;
             let mut message: Option<(Rect, String)> = None;
             let e = edit.as_mut().expect("checked above");
-            draw_list_with_editor(
-                ui,
-                sk,
-                frame,
-                &plain,
-                selected,
-                key,
-                &|index, original| {
-                    row_kinds[index] != RowKind::Placeholder && row_names[index] == original
-                },
-                e,
-                &mut raw,
-                &mut result,
-                &mut message,
-            );
+            let is_edited = |index: usize, original: &str| {
+                row_kinds[index] != RowKind::Placeholder && row_names[index] == original
+            };
+            match *mode {
+                StyleListMode::List => draw_list_with_editor(
+                    ui,
+                    sk,
+                    frame,
+                    &plain,
+                    selected,
+                    key,
+                    &is_edited,
+                    e,
+                    &mut raw,
+                    &mut result,
+                    &mut message,
+                ),
+                StyleListMode::Thumbnails => draw_thumbnails_with_editor(
+                    ui,
+                    sk,
+                    frame,
+                    &plain,
+                    selected,
+                    key,
+                    &is_edited,
+                    e,
+                    &mut raw,
+                    &mut result,
+                    &mut message,
+                ),
+            }
             match result {
                 EditResult::Cancel => edit = None,
                 EditResult::Commit => {
@@ -850,7 +864,7 @@ fn draw_list_with_editor(
                             Pos2::new(rect.left() + sk.len(6.0), rect.top() + 1.0),
                             Pos2::new(rect.right() - sk.len(6.0), rect.bottom() - 1.0),
                         );
-                        *result = rename_field(ui, sk, field, key, edit);
+                        *result = rename_field(ui, sk, field, key, edit, false);
                         if let Some(error) = &edit.error {
                             *message = Some((field, error.clone()));
                         }
@@ -899,6 +913,118 @@ fn draw_list_with_editor(
     });
 }
 
+/// Thumbnail-mode rows with the renamed tile's label replaced by an editor.
+/// Geometry comes from the same helpers as `crate::sketch::style_list`, so
+/// opening an editor does not recenter or resize the browsable grid.
+#[allow(clippy::too_many_arguments)]
+fn draw_thumbnails_with_editor(
+    ui: &mut egui::Ui,
+    sk: &SketchFrame,
+    frame: Rect,
+    rows: &[StyleListRow<'_>],
+    selected: Option<usize>,
+    key: &str,
+    is_edited: &dyn Fn(usize, &str) -> bool,
+    edit: &mut RenameEdit,
+    out: &mut StyleListResponse,
+    result: &mut EditResult,
+    message: &mut Option<(Rect, String)>,
+) {
+    let inner = Rect::from_min_max(
+        frame.min + Vec2::new(sk.len(8.0), sk.len(30.0)),
+        frame.max - Vec2::new(sk.len(4.0), sk.len(8.0)),
+    );
+    let mut found = false;
+    ui.scope_builder(egui::UiBuilder::new().max_rect(inner), |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("style_list_scroll")
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                let layout = style_list_thumbnail_layout(sk, ui.available_width());
+                let small = sk.font(14.0);
+                for chunk_start in (0..rows.len()).step_by(layout.per_row) {
+                    let count = (rows.len() - chunk_start).min(layout.per_row);
+                    let (band, _) = ui.allocate_exact_size(
+                        Vec2::new(ui.available_width(), layout.cell.y),
+                        Sense::hover(),
+                    );
+                    for (offset, row) in rows[chunk_start..].iter().take(count).enumerate() {
+                        let index = chunk_start + offset;
+                        let cell_rect = style_list_thumbnail_cell(band, layout.cell, offset, count);
+                        let editing_row = !found && is_edited(index, &edit.original);
+                        if !editing_row && !ui.is_rect_visible(cell_rect) {
+                            continue;
+                        }
+                        let square = Rect::from_center_size(
+                            Pos2::new(
+                                cell_rect.center().x,
+                                cell_rect.top() + sk.len(8.0) + layout.swatch / 2.0,
+                            ),
+                            Vec2::splat(layout.swatch),
+                        );
+                        let response = ui.interact(
+                            cell_rect,
+                            ui.id().with(("style_thumb", index)),
+                            Sense::click(),
+                        );
+                        if let Some(paint) = &row.thumbnail {
+                            ui.painter()
+                                .rect_filled(square, sk.radius(6.0), palette::TILE_BG);
+                            paint(ui, square);
+                        }
+                        let is_selected = selected == Some(index) || editing_row;
+                        ui.painter().rect_stroke(
+                            square,
+                            sk.radius(6.0),
+                            if is_selected {
+                                Stroke::new(sk.len(3.0), palette::PRIMARY)
+                            } else if response.hovered() {
+                                Stroke::new(1.0, palette::BRIGHT)
+                            } else {
+                                Stroke::new(1.0, palette::FIELD_BORDER)
+                            },
+                            StrokeKind::Inside,
+                        );
+                        if editing_row {
+                            found = true;
+                            let field = Rect::from_min_size(
+                                Pos2::new(
+                                    cell_rect.left() + sk.len(2.0),
+                                    square.bottom() + sk.len(3.0),
+                                ),
+                                Vec2::new((cell_rect.width() - sk.len(4.0)).max(1.0), sk.len(22.0)),
+                            );
+                            *result = rename_field(ui, sk, field, key, edit, true);
+                            if let Some(error) = &edit.error {
+                                *message = Some((field, error.clone()));
+                            }
+                            continue;
+                        }
+                        let shown =
+                            truncate_middle(ui, row.name, &small, layout.cell.x - sk.len(4.0));
+                        ui.painter().text(
+                            Pos2::new(cell_rect.center().x, square.bottom() + sk.len(8.0)),
+                            egui::Align2::CENTER_TOP,
+                            shown,
+                            small.clone(),
+                            palette::MUTED,
+                        );
+                        if response.clicked() {
+                            out.clicked = Some(index);
+                        }
+                        if response.double_clicked() {
+                            out.double_clicked = Some(index);
+                        }
+                        if response.secondary_clicked() {
+                            out.secondary_clicked = Some(index);
+                        }
+                        response.on_hover_text(row.name);
+                    }
+                }
+            });
+    });
+}
+
 /// The text field on the renamed row. Takes focus with the name selected,
 /// commits on losing focus (Enter or a click elsewhere), cancels on Esc.
 fn rename_field(
@@ -907,6 +1033,7 @@ fn rename_field(
     field: Rect,
     key: &str,
     edit: &mut RenameEdit,
+    center: bool,
 ) -> EditResult {
     let id = rename_edit_id(key).with("field");
     ui.painter()
@@ -937,16 +1064,17 @@ fn rename_field(
             .max_rect(field.shrink2(Vec2::new(sk.len(6.0), 0.0)))
             .layout(egui::Layout::left_to_right(egui::Align::Center)),
         |ui| {
-            response = Some(
-                ui.add(
-                    egui::TextEdit::singleline(&mut edit.text)
-                        .id(id)
-                        .font(sk.font(20.0))
-                        .text_color(palette::BRIGHT)
-                        .frame(egui::Frame::NONE)
-                        .desired_width(f32::INFINITY),
-                ),
-            );
+            let text = egui::TextEdit::singleline(&mut edit.text)
+                .id(id)
+                .font(sk.font(20.0))
+                .text_color(palette::BRIGHT)
+                .frame(egui::Frame::NONE)
+                .desired_width(f32::INFINITY);
+            response = Some(ui.add(if center {
+                text.horizontal_align(egui::Align::Center)
+            } else {
+                text
+            }));
         },
     );
     let response = response.expect("field added");

@@ -636,7 +636,7 @@ fn a_pending_rename_waits_for_its_row_without_taking_over() {
     h.settle(2, &mut |ui| f.show(ui));
     f.names.push("Zeta".to_owned());
     h.settle(3, &mut |ui| f.show(ui));
-    assert_eq!(f.mode, StyleListMode::List);
+    assert_eq!(f.mode, StyleListMode::Thumbnails);
     assert_eq!(edit_of(&h).map(|e| e.original), Some("Zeta".to_owned()));
 }
 
@@ -659,16 +659,35 @@ fn a_pending_rename_whose_entry_never_appears_expires_by_time() {
 }
 
 #[test]
-fn a_rename_in_thumbnail_mode_switches_to_the_list_and_says_so() {
+fn a_rename_in_thumbnail_mode_keeps_the_view_and_edits_the_tile_label() {
     let (mut h, mut f) = (Harness::new(), Fixture::new());
     f.mode = StyleListMode::Thumbnails;
     h.settle(2, &mut |ui| f.show(ui));
     start_rename(&h.ctx, KEY, "Alpha");
-    h.settle(2, &mut |ui| f.show(ui));
-    assert_eq!(f.mode, StyleListMode::List);
-    assert!(f
+    let out = h.frame(Vec::new(), &mut |ui| f.show(ui));
+    assert_eq!(f.mode, StyleListMode::Thumbnails);
+    assert_eq!(edit_of(&h).map(|e| e.original), Some("Alpha".to_owned()));
+    assert!(painted_text(&out).iter().any(|text| text == "Alpha"));
+    assert!(!f
         .events
-        .contains(&ListEvent::ViewModeChanged(StyleListMode::List)));
+        .iter()
+        .any(|event| matches!(event, ListEvent::ViewModeChanged(StyleListMode::List))));
+}
+
+#[test]
+fn thumbnail_rows_center_incomplete_rows_and_use_the_larger_swatches() {
+    let sk = SketchFrame {
+        origin: Pos2::ZERO,
+        scale: 1.0,
+    };
+    let layout = style_list_thumbnail_layout(&sk, 320.0);
+    assert_eq!(layout.per_row, 3);
+    assert_eq!(layout.swatch, 80.0);
+    let band = Rect::from_min_size(Pos2::ZERO, Vec2::new(320.0, layout.cell.y));
+    let first = style_list_thumbnail_cell(band, layout.cell, 0, 2);
+    let second = style_list_thumbnail_cell(band, layout.cell, 1, 2);
+    assert_eq!(first.left(), 56.0);
+    assert_eq!(second.left(), 160.0);
 }
 
 #[test]
