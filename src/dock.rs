@@ -545,7 +545,8 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        self.host.title(*tab).into()
+        // Two no-break spaces of room on the right for the hover-only close X.
+        format!("{}\u{a0}\u{a0}", self.host.title(*tab)).into()
     }
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
@@ -590,7 +591,53 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
         if let Some(drag) = detect_tab_drag(*tab, response, source) {
             *self.tab_drag = Some(drag);
         }
+        // The host turns egui_dock's own close buttons off (`show_close_buttons
+        // (false)`), which frees their 24 pt per tab; the X is drawn, and its
+        // click handled, here.
+        if hover_close_x(response) {
+            self.closed_tabs.push(*tab);
+        }
     }
+}
+
+/// Draws the tab's close X, only while the tab is hovered, over the right-hand
+/// padding the title leaves for it (see `TabViewerAdapter::title`). Returns
+/// true on the frame the X itself is clicked.
+fn hover_close_x(response: &egui::Response) -> bool {
+    const CLOSE_SLOT: f32 = 18.0;
+    const X_SIZE: f32 = 8.0;
+    if !response.hovered() {
+        return false;
+    }
+    let side = CLOSE_SLOT.min(response.rect.height());
+    let slot = egui::Rect::from_center_size(
+        egui::pos2(response.rect.right() - side / 2.0, response.rect.center().y),
+        egui::Vec2::splat(side),
+    );
+    let over_x = response
+        .ctx
+        .pointer_hover_pos()
+        .is_some_and(|p| slot.contains(p));
+    let style = response.ctx.global_style();
+    let visuals = &style.visuals;
+    let color = if over_x {
+        visuals.strong_text_color()
+    } else {
+        visuals.weak_text_color()
+    };
+    let painter = response
+        .ctx
+        .layer_painter(response.layer_id)
+        .with_clip_rect(response.rect);
+    if over_x {
+        painter.rect_filled(slot.shrink(2.0), 4.0, visuals.widgets.hovered.weak_bg_fill);
+    }
+    let h = X_SIZE / 2.0;
+    let c = slot.center();
+    let stroke = egui::Stroke::new(1.3, color);
+    painter.line_segment([c + egui::vec2(-h, -h), c + egui::vec2(h, h)], stroke);
+    painter.line_segment([c + egui::vec2(-h, h), c + egui::vec2(h, -h)], stroke);
+    over_x && response.clicked()
 }
 
 #[cfg(test)]

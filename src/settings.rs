@@ -392,6 +392,15 @@ pub trait SettingsHost {
     /// run the app's native picker. Returns `Some(new_path)` the frame the
     /// user confirms a choice.
     fn browse_path(&self, ui: &mut egui::Ui, current: &str) -> Option<String>;
+
+    /// Whether field names carry a right-click menu this frame (default: no).
+    fn label_menu_enabled(&self, _ctx: &egui::Context) -> bool {
+        false
+    }
+
+    /// Contents of the right-click menu on the field named `field_id`; only
+    /// called while [`Self::label_menu_enabled`] is true.
+    fn label_context_menu(&self, _ui: &mut egui::Ui, _field_id: &'static str) {}
 }
 
 /// Search box for the nav pane, pinned above the tree per the sketch's "🔍
@@ -694,7 +703,7 @@ fn tier_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, b
     let (resp, toggled) = collapsible_label(
         ui,
         egui::RichText::new(label)
-            .size(unit * 1.55)
+            .size(unit * 1.3)
             .strong()
             .color(label_color(ui)),
         open,
@@ -744,7 +753,7 @@ fn section_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response
     let out = collapsible_label(
         ui,
         egui::RichText::new(label)
-            .size(unit * 1.15)
+            .size(unit * 1.02)
             .strong()
             .color(label_color(ui)),
         open,
@@ -1067,13 +1076,22 @@ fn render_field_row<A: Clone, Ctx>(
                 // actually measures for the column (see `measure_column_widths`).
                 ui.set_width(widths.label);
                 let text = egui::RichText::new(field.label).color(name_col);
+                let menu = host.label_menu_enabled(ui.ctx());
+                let name = |ui: &mut egui::Ui| {
+                    if menu {
+                        let r = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+                        r.context_menu(|ui| host.label_context_menu(ui, field.id));
+                    } else {
+                        ui.label(text);
+                    }
+                };
                 if field.nested {
                     ui.horizontal(|ui| {
                         ui.add_space(row_unit(ui) * 1.1);
-                        ui.label(text);
+                        name(ui);
                     });
                 } else {
-                    ui.label(text);
+                    name(ui);
                 }
             });
         })
