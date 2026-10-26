@@ -511,6 +511,31 @@ fn row_unit(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body)
 }
 
+fn density_key() -> egui::Id {
+    egui::Id::new("spatial_ui_kit_settings_density")
+}
+
+/// Sets how tightly the settings content page packs its *vertical* gaps
+/// (above and below headers, between rows, under a field's help text):
+/// `1.0` is the shipped spacing, `0.78` removes about 22% of it. Font sizes
+/// and column widths are never affected -- density is not zoom. Stored in
+/// `ctx` memory like [`crate::motion::set_reduce_motion`]; an app that never
+/// calls this gets exactly the old spacing, so other hosts are unchanged.
+/// Clamped to `0.5..=1.5` so a bad value cannot collapse rows onto each other.
+pub fn set_density(ctx: &egui::Context, density: f32) {
+    ctx.data_mut(|d| d.insert_temp(density_key(), density.clamp(0.5, 1.5)));
+}
+
+fn density(ui: &egui::Ui) -> f32 {
+    ui.ctx().data(|d| d.get_temp(density_key())).unwrap_or(1.0)
+}
+
+/// [`row_unit`] scaled by the density: the base of every vertical gap.
+/// Font sizes keep using [`row_unit`] directly.
+fn space_unit(ui: &egui::Ui) -> f32 {
+    row_unit(ui) * density(ui)
+}
+
 /// The label's actual font size (as opposed to [`row_unit`], a *line
 /// height*, always somewhat taller than the font itself) -- the base every
 /// other text size in a row is stated as a fraction of, per Chris's round-2
@@ -589,21 +614,22 @@ fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
 /// than another box the same weight as everything under it.
 fn tier_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let unit = row_unit(ui);
-    ui.add_space(unit * 1.6);
+    let gap = space_unit(ui);
+    ui.add_space(gap * 1.6);
     let resp = ui.label(
         egui::RichText::new(label)
             .size(unit * 1.55)
             .strong()
             .color(label_color(ui)),
     );
-    ui.add_space(unit * 0.5);
+    ui.add_space(gap * 0.5);
     let rule_rect = ui.available_rect_before_wrap();
     ui.painter().hline(
         rule_rect.x_range(),
         rule_rect.top(),
         ui.visuals().widgets.noninteractive.bg_stroke,
     );
-    ui.add_space(unit * 0.7);
+    ui.add_space(gap * 0.7);
     resp
 }
 
@@ -611,14 +637,15 @@ fn tier_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
 /// semibold, no box, one level down from a tier.
 fn section_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
     let unit = row_unit(ui);
-    ui.add_space(unit * 1.0);
+    let gap = space_unit(ui);
+    ui.add_space(gap * 1.0);
     let resp = ui.label(
         egui::RichText::new(label)
             .size(unit * 1.15)
             .strong()
             .color(label_color(ui)),
     );
-    ui.add_space(unit * 0.45);
+    ui.add_space(gap * 0.45);
     resp
 }
 
@@ -627,14 +654,15 @@ fn section_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
 /// subdivision of the section above it instead of competing with it.
 fn group_header(ui: &mut egui::Ui, label: &str) {
     let unit = row_unit(ui);
-    ui.add_space(unit * 0.6);
+    let gap = space_unit(ui);
+    ui.add_space(gap * 0.6);
     ui.label(
         egui::RichText::new(label)
             .size(unit * 0.85)
             .strong()
             .color(help_text_color(ui)),
     );
-    ui.add_space(unit * 0.3);
+    ui.add_space(gap * 0.3);
 }
 
 /// A comfortable reading measure, in points, approximating ~70 characters
@@ -828,7 +856,7 @@ fn render_section_body<A: Clone, Ctx>(
                 let mut row_rects: Vec<egui::Rect> = Vec::new();
                 let grid = egui::Grid::new(run_id)
                     .num_columns(2)
-                    .spacing([unit * 1.3, unit * 0.5])
+                    .spacing([unit * 1.3, space_unit(ui) * 0.5])
                     .show(ui, |ui| {
                         for node in &tree[start..i] {
                             if let SettingsNode::Field(field) = node {
@@ -1044,7 +1072,7 @@ fn render_field_row<A: Clone, Ctx>(
                 let help_width = widths.control.min(widths.help_cap);
                 if let Some(hint) = field.disabled_hint {
                     if !field.enabled {
-                        ui.add_space(row_unit(ui) * 0.15);
+                        ui.add_space(space_unit(ui) * 0.15);
                         ui.scope(|ui| {
                             ui.set_max_width(help_width);
                             ui.add(
@@ -1058,7 +1086,7 @@ fn render_field_row<A: Clone, Ctx>(
                         });
                     }
                 } else if let Some(text) = field.hover {
-                    ui.add_space(row_unit(ui) * 0.15);
+                    ui.add_space(space_unit(ui) * 0.15);
                     ui.scope(|ui| {
                         ui.set_max_width(help_width);
                         ui.add(
@@ -1078,4 +1106,22 @@ fn render_field_row<A: Clone, Ctx>(
 
     ui.end_row();
     label_rect.union(control_rect)
+}
+
+#[cfg(test)]
+mod density_tests {
+    use super::*;
+
+    #[test]
+    fn density_defaults_to_one_and_is_clamped() {
+        let ctx = egui::Context::default();
+        let read = || -> f32 { ctx.data(|d| d.get_temp(density_key())).unwrap_or(1.0) };
+        assert_eq!(read(), 1.0);
+        set_density(&ctx, 0.78);
+        assert_eq!(read(), 0.78);
+        set_density(&ctx, 0.0);
+        assert_eq!(read(), 0.5);
+        set_density(&ctx, 9.0);
+        assert_eq!(read(), 1.5);
+    }
 }
