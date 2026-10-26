@@ -1291,3 +1291,62 @@ mod density_tests {
         assert_eq!(read(), 1.5);
     }
 }
+
+#[cfg(test)]
+mod collapse_tests {
+    use super::*;
+
+    struct Host;
+    impl SettingsHost for Host {
+        fn browse_path(&self, _ui: &mut egui::Ui, _current: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn tree() -> Vec<SettingsNode<(), ()>> {
+        vec![SettingsNode::section(
+            "a",
+            "Alpha",
+            vec![Field::static_text("f", "Field", |_: &()| String::new())],
+        )]
+    }
+
+    fn frame(ctx: &egui::Context, events: Vec<egui::Event>) -> Collapsed {
+        let raw = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(
+                egui::Pos2::ZERO,
+                egui::vec2(800.0, 600.0),
+            )),
+            events,
+            ..Default::default()
+        };
+        let _ = ctx.run_ui(raw, |ui| {
+            let mut actions: Vec<()> = Vec::new();
+            render_content(ui, &(), &Host, &tree(), None, &mut actions);
+        });
+        ctx.memory(|m| m.data.get_temp::<Collapsed>(collapsed_key()))
+            .unwrap_or_default()
+    }
+
+    /// Clicking a section heading folds it, clicking again unfolds it.
+    #[test]
+    fn clicking_a_heading_folds_and_unfolds_its_section() {
+        let ctx = egui::Context::default();
+        let at = egui::pos2(60.0, 30.0);
+        let click = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&ctx, vec![]);
+        frame(&ctx, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, vec![click(true)]);
+        let folded = frame(&ctx, vec![click(false)]);
+        assert!(folded.contains("a"), "heading click did not fold: {folded:?}");
+        frame(&ctx, vec![egui::Event::PointerMoved(at)]);
+        frame(&ctx, vec![click(true)]);
+        let open = frame(&ctx, vec![click(false)]);
+        assert!(!open.contains("a"));
+    }
+}

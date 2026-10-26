@@ -191,6 +191,20 @@ impl<'a> ThemedWindow<'a> {
         self
     }
 
+    /// Offset from the viewport's top-centre where a `modal` sheet hangs: the
+    /// anchor point when set (an `Area` anchor ignores `fixed_pos`/`pivot`, so
+    /// the point is expressed relative to the top-centre), else straight down
+    /// by `sheet_anchor_top`.
+    fn sheet_anchor_offset(&self, ctx: &egui::Context) -> egui::Vec2 {
+        match self.sheet_anchor_point {
+            Some(p) => {
+                let screen = ctx.content_rect();
+                egui::vec2(p.x - screen.center().x, p.y - screen.top())
+            }
+            None => egui::vec2(0.0, self.sheet_anchor_top),
+        }
+    }
+
     /// Shows the window. `open` follows `egui::Window`'s own convention: the
     /// close button sets it to `false`; the caller checks it afterward and
     /// drops/hides its panel state accordingly. Returns `None` when the
@@ -410,15 +424,8 @@ impl<'a> ThemedWindow<'a> {
             // backdrop blocks input to the rest of the app, Esc/backdrop-
             // click closes it. We paint the sheet's own frame ourselves
             // (see `paint_sheet_content`), so no frame here.
-            let area = match self.sheet_anchor_point {
-                Some(p) => egui::Modal::default_area(self.id)
-                    .pivot(egui::Align2::CENTER_TOP)
-                    .fixed_pos(p),
-                None => egui::Modal::default_area(self.id).anchor(
-                    egui::Align2::CENTER_TOP,
-                    egui::vec2(0.0, self.sheet_anchor_top),
-                ),
-            };
+            let area = egui::Modal::default_area(self.id)
+                .anchor(egui::Align2::CENTER_TOP, self.sheet_anchor_offset(ctx));
             let modal_response = egui::Modal::new(self.id)
                 .area(area)
                 .frame(egui::Frame::NONE)
@@ -446,16 +453,11 @@ impl<'a> ThemedWindow<'a> {
             // rest of the app -- a plain, non-interactable, disabled Area
             // rather than `egui::Modal`, with the backdrop fading out
             // alongside the content.
-            let area = egui::Area::new(self.id).order(egui::Order::Foreground);
-            let area = match self.sheet_anchor_point {
-                Some(p) => area.pivot(egui::Align2::CENTER_TOP).fixed_pos(p),
-                None => area.anchor(
-                    egui::Align2::CENTER_TOP,
-                    egui::vec2(0.0, self.sheet_anchor_top),
-                ),
-            }
-            .interactable(false)
-            .enabled(false);
+            let area = egui::Area::new(self.id)
+                .order(egui::Order::Foreground)
+                .anchor(egui::Align2::CENTER_TOP, self.sheet_anchor_offset(ctx))
+                .interactable(false)
+                .enabled(false);
             area.show(ctx, |ui| {
                 let bg_rect = ui.ctx().content_rect();
                 ui.painter().rect_filled(bg_rect, 0.0, backdrop);
