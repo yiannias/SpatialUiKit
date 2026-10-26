@@ -153,6 +153,14 @@ pub enum FieldControl<A, Ctx> {
     /// grid as everything else instead of a hand-rolled `Custom` row that
     /// couldn't share the grid's column alignment.
     Static { value: ReadFn<Ctx, String> },
+    /// App-drawn control for a row the kit has no kind for (a colour swatch,
+    /// say). It draws in the control column of the shared grid, so the row
+    /// gets the same label colour, column alignment, separator and help text
+    /// as every other field -- unlike a `SettingsNode::Custom`, which is
+    /// drawn outside the grid.
+    Custom {
+        render: Box<dyn Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync>,
+    },
     /// Like `Dropdown`, but the option list is computed from `Ctx` each frame
     /// instead of being a fixed `&'static [&'static str]` -- for a picker
     /// whose choices come from runtime data (e.g. the GPU adapters actually
@@ -225,6 +233,21 @@ impl<A, Ctx> Field<A, Ctx> {
                 value: Box::new(value),
                 options,
                 on_change: Box::new(on_change),
+            },
+        ))
+    }
+
+    /// A field whose control is drawn by the app; see [`FieldControl::Custom`].
+    pub fn custom(
+        id: &'static str,
+        label: &'static str,
+        render: impl Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync + 'static,
+    ) -> SettingsNode<A, Ctx> {
+        SettingsNode::Field(Self::base(
+            id,
+            label,
+            FieldControl::Custom {
+                render: Box::new(render),
             },
         ))
     }
@@ -986,6 +1009,7 @@ fn render_field_row<A: Clone, Ctx>(
                                 .wrap(),
                         );
                     }
+                    FieldControl::Custom { render } => render(ui, ctx, actions),
                     FieldControl::Path {
                         value,
                         on_change,
