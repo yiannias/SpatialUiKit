@@ -74,6 +74,12 @@ pub struct ThemedWindow<'a> {
     /// Defaults to `0.0` (flush against the very top of the viewport) when
     /// never set.
     sheet_anchor_top: f32,
+    /// When set, a `modal` sheet hangs from this point (its top-centre)
+    /// instead of the top of the viewport, for a confirmation that belongs
+    /// beside whatever the user just acted on.
+    sheet_anchor_point: Option<egui::Pos2>,
+    /// Caps the content width of a `modal` sheet (points).
+    sheet_max_width: Option<f32>,
 }
 
 impl<'a> ThemedWindow<'a> {
@@ -94,7 +100,17 @@ impl<'a> ThemedWindow<'a> {
             headerless: false,
             modal: false,
             sheet_anchor_top: 0.0,
+            sheet_anchor_point: None,
+            sheet_max_width: None,
         }
+    }
+
+    /// Hangs a `modal` sheet from `point` (its top-centre) instead of the top
+    /// of the viewport, no wider than `max_width`. No-op on a non-`modal` window.
+    pub fn sheet_anchor_point(mut self, point: egui::Pos2, max_width: f32) -> Self {
+        self.sheet_anchor_point = Some(point);
+        self.sheet_max_width = Some(max_width);
+        self
     }
 
     pub fn default_pos(mut self, pos: impl Into<egui::Pos2>) -> Self {
@@ -394,10 +410,15 @@ impl<'a> ThemedWindow<'a> {
             // backdrop blocks input to the rest of the app, Esc/backdrop-
             // click closes it. We paint the sheet's own frame ourselves
             // (see `paint_sheet_content`), so no frame here.
-            let area = egui::Modal::default_area(self.id).anchor(
-                egui::Align2::CENTER_TOP,
-                egui::vec2(0.0, self.sheet_anchor_top),
-            );
+            let area = match self.sheet_anchor_point {
+                Some(p) => egui::Modal::default_area(self.id)
+                    .pivot(egui::Align2::CENTER_TOP)
+                    .fixed_pos(p),
+                None => egui::Modal::default_area(self.id).anchor(
+                    egui::Align2::CENTER_TOP,
+                    egui::vec2(0.0, self.sheet_anchor_top),
+                ),
+            };
             let modal_response = egui::Modal::new(self.id)
                 .area(area)
                 .frame(egui::Frame::NONE)
@@ -425,14 +446,16 @@ impl<'a> ThemedWindow<'a> {
             // rest of the app -- a plain, non-interactable, disabled Area
             // rather than `egui::Modal`, with the backdrop fading out
             // alongside the content.
-            let area = egui::Area::new(self.id)
-                .order(egui::Order::Foreground)
-                .anchor(
+            let area = egui::Area::new(self.id).order(egui::Order::Foreground);
+            let area = match self.sheet_anchor_point {
+                Some(p) => area.pivot(egui::Align2::CENTER_TOP).fixed_pos(p),
+                None => area.anchor(
                     egui::Align2::CENTER_TOP,
                     egui::vec2(0.0, self.sheet_anchor_top),
-                )
-                .interactable(false)
-                .enabled(false);
+                ),
+            }
+            .interactable(false)
+            .enabled(false);
             area.show(ctx, |ui| {
                 let bg_rect = ui.ctx().content_rect();
                 ui.painter().rect_filled(bg_rect, 0.0, backdrop);
@@ -483,6 +506,9 @@ impl<'a> ThemedWindow<'a> {
         // rect rather than the natural one.
         let where_to_put_frame = ui.painter().add(egui::Shape::Noop);
 
+        if let Some(w) = self.sheet_max_width {
+            ui.set_max_width(w);
+        }
         let top_left = ui.cursor().min;
         if let Some(revealed_height) = revealed_height_px {
             ui.shrink_clip_rect(egui::Rect::from_min_size(

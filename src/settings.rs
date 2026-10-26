@@ -99,6 +99,9 @@ pub struct Field<A, Ctx> {
     /// Drawn as a sub-setting of the field above it (label indented) --
     /// e.g. Text Size under Interface Scale, whose value it refines.
     pub nested: bool,
+    /// Overrides the label's colour (the host colour-codes rows this way);
+    /// `None` keeps the panel's standard label colour.
+    pub label_color: Option<egui::Color32>,
     pub control: FieldControl<A, Ctx>,
 }
 
@@ -183,6 +186,7 @@ impl<A, Ctx> Field<A, Ctx> {
             enabled: true,
             disabled_hint: None,
             nested: false,
+            label_color: None,
             control,
         }
     }
@@ -364,6 +368,20 @@ impl<A, Ctx> SettingsNode<A, Ctx> {
         }
         self
     }
+
+    /// Colours every field label under this node with `color_of(field id)`
+    /// (`None` leaves a label at the standard colour).
+    pub fn tint_labels(&mut self, color_of: &dyn Fn(&'static str) -> Option<egui::Color32>) {
+        match self {
+            SettingsNode::Field(f) => f.label_color = color_of(f.id),
+            SettingsNode::Section { children, .. } | SettingsNode::Group { children, .. } => {
+                for c in children {
+                    c.tint_labels(color_of);
+                }
+            }
+            SettingsNode::Custom { .. } => {}
+        }
+    }
 }
 
 /// App-specific rendering hook a settings tree needs but this crate can't
@@ -388,6 +406,40 @@ pub trait SettingsHost {
 /// comfortable and nice." `corner_radius` = half the field height (a true
 /// pill, not `os_style`'s flat 4px control radius -- search fields read as
 /// a distinct, softer affordance in most native UIs, this one included).
+pub fn render_search_sized(ui: &mut egui::Ui, query: &mut String, height: f32) {
+    // A fixed-height pill (no dependence on available height, so no feedback
+    // loop): painted by hand, with the field laid out inside it.
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let v = ui.visuals();
+    let radius = height / 2.0;
+    ui.painter().rect_filled(rect, radius, v.extreme_bg_color);
+    ui.painter().rect_stroke(
+        rect,
+        radius,
+        v.widgets.noninteractive.bg_stroke,
+        egui::StrokeKind::Inside,
+    );
+    let weak = v.weak_text_color();
+    let mut inner = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
+            .layout(egui::Layout::left_to_right(egui::Align::Center)),
+    );
+    inner.label(egui::RichText::new("\u{1f50d}").size(13.0).color(weak));
+    inner.add(
+        egui::TextEdit::singleline(query)
+            .hint_text("Search")
+            .desired_width(f32::INFINITY)
+            .margin(egui::Margin::ZERO)
+            .frame(egui::Frame::NONE)
+            .vertical_align(egui::Align::Center),
+    );
+}
+
+/// [`render_search_sized`] with the original, taller padding-driven height.
 pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
     // Deliberately no `set_min_height`/`horizontal_centered` -- either
     // stretches to whatever height the surrounding container currently
@@ -635,15 +687,17 @@ fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
 /// (tier / section / group). Large, bold, no box, generous space above, and
 /// a thin full-width rule below it, so a tier reads as a hard break rather
 /// than another box the same weight as everything under it.
-fn tier_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
+fn tier_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, bool) {
     let unit = row_unit(ui);
     let gap = space_unit(ui);
     ui.add_space(gap * 1.6);
-    let resp = ui.label(
+    let (resp, toggled) = collapsible_label(
+        ui,
         egui::RichText::new(label)
             .size(unit * 1.55)
             .strong()
             .color(label_color(ui)),
+        open,
     );
     ui.add_space(gap * 0.5);
     let rule_rect = ui.available_rect_before_wrap();
@@ -653,23 +707,76 @@ fn tier_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
         ui.visuals().widgets.noninteractive.bg_stroke,
     );
     ui.add_space(gap * 0.7);
-    resp
+    (resp, toggled)
+}
+
+/// A heading with a leading chevron; clicking either folds or unfolds what is
+/// under it. Returns the heading's response and whether it was clicked.
+fn collapsible_label(ui: &mut egui::Ui, text: egui::RichText, open: bool) -> (egui::Response, bool) {
+    let side = row_unit(ui) * 0.9;
+    let color = ui.visuals().weak_text_color();
+    let inner = ui.horizontal(|ui| {
+        let (rect, chevron) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+        let c = rect.center();
+        let s = side * 0.22;
+        let pts = if open {
+            [c + egui::vec2(-s, -s * 0.5), c + egui::vec2(0.0, s * 0.5), c + egui::vec2(s, -s * 0.5)]
+        } else {
+            [c + egui::vec2(-s * 0.5, -s), c + egui::vec2(s * 0.5, 0.0), c + egui::vec2(-s * 0.5, s)]
+        };
+        ui.painter()
+            .add(egui::Shape::line(pts.to_vec(), egui::Stroke::new(1.5, color)));
+        let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
+        if chevron.hovered() || label.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
+        (label.clone(), chevron.clicked() || label.clicked())
+    });
+    inner.inner
 }
 
 /// Section header: "Themes", "Visual Fidelity", "GPU & Rendering" -- medium
 /// semibold, no box, one level down from a tier.
-fn section_header(ui: &mut egui::Ui, label: &str) -> egui::Response {
+fn section_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, bool) {
     let unit = row_unit(ui);
     let gap = space_unit(ui);
     ui.add_space(gap * 1.0);
-    let resp = ui.label(
+    let out = collapsible_label(
+        ui,
         egui::RichText::new(label)
             .size(unit * 1.15)
             .strong()
             .color(label_color(ui)),
+        open,
     );
     ui.add_space(gap * 0.45);
-    resp
+    out
+}
+
+type Collapsed = std::collections::HashSet<&'static str>;
+
+fn collapsed_key() -> egui::Id {
+    egui::Id::new("spatial_ui_kit_settings_collapsed")
+}
+
+/// Unfolds every section on the path to `target`, so a jump to it is visible.
+fn expand_path<A, Ctx>(nodes: &[SettingsNode<A, Ctx>], target: &str, collapsed: &mut Collapsed) -> bool {
+    let mut found = false;
+    for n in nodes {
+        match n {
+            SettingsNode::Section { id, children, .. } => {
+                if *id == target || expand_path(children, target, collapsed) {
+                    collapsed.remove(id);
+                    found = true;
+                }
+            }
+            SettingsNode::Group { children, .. } => {
+                found |= expand_path(children, target, collapsed);
+            }
+            _ => {}
+        }
+    }
+    found
 }
 
 /// Group header: "Selection Highlight", "Spacing" -- smaller semibold, in
@@ -796,6 +903,14 @@ pub fn render_content<A: Clone, Ctx>(
     scroll_to: Option<&'static str>,
     actions: &mut Vec<A>,
 ) {
+    // Fold state lives in ctx memory (session-only), keyed by section id.
+    let mut collapsed: Collapsed = ui
+        .ctx()
+        .memory(|m| m.data.get_temp(collapsed_key()))
+        .unwrap_or_default();
+    if let Some(target) = scroll_to {
+        expand_path(tree, target, &mut collapsed);
+    }
     for node in tree {
         match node {
             SettingsNode::Section {
@@ -803,12 +918,22 @@ pub fn render_content<A: Clone, Ctx>(
                 label,
                 children,
             } => {
-                let resp = tier_header(ui, label);
+                let open = !collapsed.contains(id);
+                let (resp, toggled) = tier_header(ui, label, open);
+                if toggled && open {
+                    collapsed.insert(id);
+                } else if toggled {
+                    collapsed.remove(id);
+                }
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                let widths = measure_column_widths(ui, children);
-                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
+                if open {
+                    let widths = measure_column_widths(ui, children);
+                    render_section_body(
+                        ui, ctx, host, widths, children, scroll_to, &mut collapsed, actions,
+                    );
+                }
             }
             // Each app's tree root is a flat list of tier `Section`s, so
             // `Group`/`Field`/`Custom` shouldn't appear here in practice --
@@ -816,10 +941,14 @@ pub fn render_content<A: Clone, Ctx>(
             _ => {
                 let single = std::slice::from_ref(node);
                 let widths = measure_column_widths(ui, single);
-                render_section_body(ui, ctx, host, widths, single, scroll_to, actions);
+                render_section_body(
+                    ui, ctx, host, widths, single, scroll_to, &mut collapsed, actions,
+                );
             }
         }
     }
+    ui.ctx()
+        .memory_mut(|m| m.data.insert_temp(collapsed_key(), collapsed));
 }
 
 /// Walks one tier's subtree, rendering nested `Section`/`Group` headings
@@ -827,6 +956,7 @@ pub fn render_content<A: Clone, Ctx>(
 /// id per run, per egui's own id-clash rule -- see [`measure_column_widths`]),
 /// each cell pinned to `widths` so every run's columns line up regardless of
 /// which run it's in.
+#[allow(clippy::too_many_arguments)]
 fn render_section_body<A: Clone, Ctx>(
     ui: &mut egui::Ui,
     ctx: &Ctx,
@@ -834,6 +964,7 @@ fn render_section_body<A: Clone, Ctx>(
     widths: ColumnWidths,
     tree: &[SettingsNode<A, Ctx>],
     scroll_to: Option<&'static str>,
+    collapsed: &mut Collapsed,
     actions: &mut Vec<A>,
 ) {
     let mut i = 0;
@@ -844,16 +975,26 @@ fn render_section_body<A: Clone, Ctx>(
                 label,
                 children,
             } => {
-                let resp = section_header(ui, label);
+                let open = !collapsed.contains(id);
+                let (resp, toggled) = section_header(ui, label, open);
+                if toggled && open {
+                    collapsed.insert(id);
+                } else if toggled {
+                    collapsed.remove(id);
+                }
                 if scroll_to == Some(*id) {
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
-                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
+                if open {
+                    render_section_body(
+                        ui, ctx, host, widths, children, scroll_to, collapsed, actions,
+                    );
+                }
                 i += 1;
             }
             SettingsNode::Group { label, children } => {
                 group_header(ui, label);
-                render_section_body(ui, ctx, host, widths, children, scroll_to, actions);
+                render_section_body(ui, ctx, host, widths, children, scroll_to, collapsed, actions);
                 i += 1;
             }
             SettingsNode::Custom { render, .. } => {
@@ -918,13 +1059,14 @@ fn render_field_row<A: Clone, Ctx>(
     actions: &mut Vec<A>,
 ) -> egui::Rect {
     let label_col = label_color(ui);
+    let name_col = field.label_color.unwrap_or(label_col);
     let label_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
             ui.scope(|ui| {
                 // Exact width, not just a minimum -- this is what the `Grid`
                 // actually measures for the column (see `measure_column_widths`).
                 ui.set_width(widths.label);
-                let text = egui::RichText::new(field.label).color(label_col);
+                let text = egui::RichText::new(field.label).color(name_col);
                 if field.nested {
                     ui.horizontal(|ui| {
                         ui.add_space(row_unit(ui) * 1.1);
