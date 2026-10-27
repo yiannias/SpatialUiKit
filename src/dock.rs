@@ -513,6 +513,9 @@ pub struct TabViewerAdapter<'h, T: TabId, H: DockHost<T>> {
     pub window: egui::ViewportId,
     pub closed_tabs: Vec<T>,
     pub menu_action: Option<DockMenuAction<T>>,
+    /// Tabs that are alone in their pane. They draw as a plain title, with no
+    /// tab shape, since there is nothing to tell apart or switch between.
+    pub lone_tabs: Vec<T>,
 }
 
 impl<'h, T: TabId, H: DockHost<T>> TabViewerAdapter<'h, T, H> {
@@ -529,6 +532,7 @@ impl<'h, T: TabId, H: DockHost<T>> TabViewerAdapter<'h, T, H> {
             window,
             closed_tabs: Vec::new(),
             menu_action: None,
+            lone_tabs: Vec::new(),
         }
     }
 }
@@ -560,6 +564,33 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
 
     fn allowed_in_windows(&self, _tab: &mut Self::Tab) -> bool {
         false
+    }
+
+    fn tab_style_override(
+        &self,
+        tab: &Self::Tab,
+        global_style: &egui_dock::TabStyle,
+    ) -> Option<egui_dock::TabStyle> {
+        if !self.lone_tabs.contains(tab) {
+            return None;
+        }
+        // No fill, no outline, in every state: just the title text.
+        let mut style = global_style.clone();
+        let title_color = style.active.text_color;
+        for state in [
+            &mut style.active,
+            &mut style.inactive,
+            &mut style.focused,
+            &mut style.hovered,
+            &mut style.active_with_kb_focus,
+            &mut style.inactive_with_kb_focus,
+            &mut style.focused_with_kb_focus,
+        ] {
+            state.bg_fill = egui::Color32::TRANSPARENT;
+            state.outline_color = egui::Color32::TRANSPARENT;
+            state.text_color = title_color;
+        }
+        Some(style)
     }
 
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _node: egui_dock::NodePath) {
