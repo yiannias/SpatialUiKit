@@ -545,8 +545,8 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        // Two no-break spaces of room on the right for the hover-only close X.
-        format!("{}\u{a0}\u{a0}", self.host.title(*tab)).into()
+        // Three no-break spaces of room on the right for the hover-only close X.
+        format!("{}\u{a0}\u{a0}\u{a0}", self.host.title(*tab)).into()
     }
 
     fn closeable(&mut self, _tab: &mut Self::Tab) -> bool {
