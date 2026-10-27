@@ -597,7 +597,21 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
         if hover_close_x(response) {
             self.closed_tabs.push(*tab);
         }
+        // Where this tab's button was drawn this frame, for a host that paints
+        // the pane outline itself and must leave a gap under the active tab.
+        response
+            .ctx
+            .data_mut(|d| d.insert_temp(tab_rect_id(*tab), response.rect));
     }
+}
+
+fn tab_rect_id<T: TabId>(tab: T) -> egui::Id {
+    egui::Id::new(("spatial_ui_kit_dock_tab_rect", tab))
+}
+
+/// The rectangle the adapter last drew `tab`'s button in, if it has been drawn.
+pub fn tab_rect<T: TabId>(ctx: &egui::Context, tab: T) -> Option<egui::Rect> {
+    ctx.data(|d| d.get_temp(tab_rect_id(tab)))
 }
 
 /// Draws the tab's close X, only while the tab is hovered, over the right-hand
