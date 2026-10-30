@@ -401,6 +401,14 @@ pub trait SettingsHost {
     /// Contents of the right-click menu on the field named `field_id`; only
     /// called while [`Self::label_menu_enabled`] is true.
     fn label_context_menu(&self, _ui: &mut egui::Ui, _field_id: &'static str) {}
+
+    /// A fixed label-column width, in body-text heights, shared by every tier
+    /// (default: `None`, each tier sizes the column to its widest label).
+    /// With `Some`, the column does not change width when the reader moves
+    /// between tiers, and a label wider than it wraps onto further lines.
+    fn label_column_units(&self) -> Option<f32> {
+        None
+    }
 }
 
 /// Search box for the nav pane, pinned above the tree per the sketch's "🔍
@@ -721,7 +729,11 @@ fn tier_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, b
 
 /// A heading with a leading chevron; clicking either folds or unfolds what is
 /// under it. Returns the heading's response and whether it was clicked.
-fn collapsible_label(ui: &mut egui::Ui, text: egui::RichText, open: bool) -> (egui::Response, bool) {
+fn collapsible_label(
+    ui: &mut egui::Ui,
+    text: egui::RichText,
+    open: bool,
+) -> (egui::Response, bool) {
     let side = row_unit(ui) * 0.9;
     let color = ui.visuals().weak_text_color();
     let inner = ui.horizontal(|ui| {
@@ -729,12 +741,22 @@ fn collapsible_label(ui: &mut egui::Ui, text: egui::RichText, open: bool) -> (eg
         let c = rect.center();
         let s = side * 0.22;
         let pts = if open {
-            [c + egui::vec2(-s, -s * 0.5), c + egui::vec2(0.0, s * 0.5), c + egui::vec2(s, -s * 0.5)]
+            [
+                c + egui::vec2(-s, -s * 0.5),
+                c + egui::vec2(0.0, s * 0.5),
+                c + egui::vec2(s, -s * 0.5),
+            ]
         } else {
-            [c + egui::vec2(-s * 0.5, -s), c + egui::vec2(s * 0.5, 0.0), c + egui::vec2(-s * 0.5, s)]
+            [
+                c + egui::vec2(-s * 0.5, -s),
+                c + egui::vec2(s * 0.5, 0.0),
+                c + egui::vec2(-s * 0.5, s),
+            ]
         };
-        ui.painter()
-            .add(egui::Shape::line(pts.to_vec(), egui::Stroke::new(1.5, color)));
+        ui.painter().add(egui::Shape::line(
+            pts.to_vec(),
+            egui::Stroke::new(1.5, color),
+        ));
         let label = ui.add(egui::Label::new(text).sense(egui::Sense::click()));
         if chevron.hovered() || label.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -769,7 +791,11 @@ fn collapsed_key() -> egui::Id {
 }
 
 /// Unfolds every section on the path to `target`, so a jump to it is visible.
-fn expand_path<A, Ctx>(nodes: &[SettingsNode<A, Ctx>], target: &str, collapsed: &mut Collapsed) -> bool {
+fn expand_path<A, Ctx>(
+    nodes: &[SettingsNode<A, Ctx>],
+    target: &str,
+    collapsed: &mut Collapsed,
+) -> bool {
     let mut found = false;
     for n in nodes {
         match n {
@@ -847,7 +873,11 @@ fn comfortable_reading_width(ui: &egui::Ui) -> f32 {
 /// widgets stay narrow inside it (see [`CONTROL_WIDGET_WIDTH`]); only help
 /// text and a `Static` read-only value actually use the full column, and
 /// even help text further caps at [`comfortable_reading_width`].
-fn measure_column_widths<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>]) -> ColumnWidths {
+fn measure_column_widths<A, Ctx>(
+    ui: &egui::Ui,
+    host: &impl SettingsHost,
+    tree: &[SettingsNode<A, Ctx>],
+) -> ColumnWidths {
     fn walk<A, Ctx>(
         ui: &egui::Ui,
         font_id: &egui::FontId,
@@ -875,9 +905,13 @@ fn measure_column_widths<A, Ctx>(ui: &egui::Ui, tree: &[SettingsNode<A, Ctx>]) -
     let font_id = egui::TextStyle::Body.resolve(ui.style());
     let mut max_w: f32 = 0.0;
     walk(ui, &font_id, tree, &mut max_w);
-    let label = max_w + 4.0;
-
     let unit = row_unit(ui);
+    let label = match host.label_column_units() {
+        // Half the pane at most, so a narrow window keeps room for controls.
+        Some(units) => (units * unit).min(ui.available_width() * 0.5),
+        None => max_w + 4.0,
+    };
+
     let col_spacing = unit * 1.3;
     let right_margin = col_spacing;
     let control =
@@ -938,9 +972,16 @@ pub fn render_content<A: Clone, Ctx>(
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
                 if open {
-                    let widths = measure_column_widths(ui, children);
+                    let widths = measure_column_widths(ui, host, children);
                     render_section_body(
-                        ui, ctx, host, widths, children, scroll_to, &mut collapsed, actions,
+                        ui,
+                        ctx,
+                        host,
+                        widths,
+                        children,
+                        scroll_to,
+                        &mut collapsed,
+                        actions,
                     );
                 }
             }
@@ -949,9 +990,16 @@ pub fn render_content<A: Clone, Ctx>(
             // handled via the same body renderer for robustness.
             _ => {
                 let single = std::slice::from_ref(node);
-                let widths = measure_column_widths(ui, single);
+                let widths = measure_column_widths(ui, host, single);
                 render_section_body(
-                    ui, ctx, host, widths, single, scroll_to, &mut collapsed, actions,
+                    ui,
+                    ctx,
+                    host,
+                    widths,
+                    single,
+                    scroll_to,
+                    &mut collapsed,
+                    actions,
                 );
             }
         }
@@ -1003,7 +1051,9 @@ fn render_section_body<A: Clone, Ctx>(
             }
             SettingsNode::Group { label, children } => {
                 group_header(ui, label);
-                render_section_body(ui, ctx, host, widths, children, scroll_to, collapsed, actions);
+                render_section_body(
+                    ui, ctx, host, widths, children, scroll_to, collapsed, actions,
+                );
                 i += 1;
             }
             SettingsNode::Custom { render, .. } => {
@@ -1311,6 +1361,64 @@ mod density_tests {
 }
 
 #[cfg(test)]
+mod label_column_tests {
+    use super::*;
+
+    struct Fixed(Option<f32>);
+    impl SettingsHost for Fixed {
+        fn browse_path(&self, _ui: &mut egui::Ui, _current: &str) -> Option<String> {
+            None
+        }
+        fn label_column_units(&self) -> Option<f32> {
+            self.0
+        }
+    }
+
+    fn tier(label: &'static str) -> Vec<SettingsNode<(), ()>> {
+        vec![SettingsNode::section(
+            "a",
+            "Alpha",
+            vec![Field::static_text("f", label, |_: &()| String::new())],
+        )]
+    }
+
+    fn label_width(host: &Fixed, label: &'static str) -> f32 {
+        let ctx = egui::Context::default();
+        let mut out = 0.0;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1000.0, 800.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                out = measure_column_widths(ui, host, &tier(label)).label;
+            },
+        );
+        out
+    }
+
+    #[test]
+    fn fixed_label_column_is_the_same_for_every_tier() {
+        let host = Fixed(Some(16.0));
+        let short = label_width(&host, "Name");
+        let long = label_width(
+            &host,
+            "A very long setting label that would otherwise widen the column",
+        );
+        assert_eq!(short, long);
+    }
+
+    #[test]
+    fn default_label_column_still_follows_the_widest_label() {
+        let host = Fixed(None);
+        assert!(label_width(&host, "A much longer label") > label_width(&host, "Hi"));
+    }
+}
+
+#[cfg(test)]
 mod collapse_tests {
     use super::*;
 
@@ -1361,7 +1469,10 @@ mod collapse_tests {
         frame(&ctx, vec![egui::Event::PointerMoved(at)]);
         frame(&ctx, vec![click(true)]);
         let folded = frame(&ctx, vec![click(false)]);
-        assert!(folded.contains("a"), "heading click did not fold: {folded:?}");
+        assert!(
+            folded.contains("a"),
+            "heading click did not fold: {folded:?}"
+        );
         frame(&ctx, vec![egui::Event::PointerMoved(at)]);
         frame(&ctx, vec![click(true)]);
         let open = frame(&ctx, vec![click(false)]);
