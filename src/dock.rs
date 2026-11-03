@@ -96,6 +96,8 @@ pub enum DockRegion {
     Left,
     Right,
     Central,
+    /// An in-window free-floating card, identified by the host's stable id.
+    Card(u32),
 }
 
 impl From<DockSide> for DockRegion {
@@ -483,6 +485,31 @@ pub trait DockHost<T: TabId> {
     /// splitter) rather than scroll should say so in its own doc comment,
     /// since it now sits inside a `ScrollArea` implicitly.
     fn content(&mut self, ui: &mut egui::Ui, tab: T);
+
+    /// Which scroll contract this tab needs inside its host. `Both` preserves
+    /// the historical adapter behavior; `Vertical` avoids horizontal bars;
+    /// `Own` lets a bounded host (such as a card) provide its own scrollers.
+    fn scroll_mode(&self, _tab: T) -> TabScroll {
+        TabScroll::Both
+    }
+
+    /// Optional natural body height in points, if the panel already knows it
+    /// without relying on the adapter's scroll measurement.
+    fn natural_height(&self, _tab: T) -> Option<f32> {
+        None
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TabScroll {
+    Both,
+    Vertical,
+    Own,
+}
+
+/// Last measured natural tab height, if that tab has been shown.
+pub fn measured_natural_height<T: TabId>(ctx: &egui::Context, tab: T) -> Option<f32> {
+    ctx.data(|d| d.get_temp::<f32>(egui::Id::new(("spatial_ui_kit_dock_natural_height", tab))))
 }
 
 /// Requested from a tab's right-click context menu -- caller applies it via
@@ -504,6 +531,9 @@ pub struct TabViewerAdapter<'h, T: TabId, H: DockHost<T>> {
     pub host: &'h mut H,
     pub tab_drag: &'h mut Option<TabDrag<T>>,
     pub side: Option<DockSide>,
+    /// Region identity used for card-to-card tab drags. Existing consumers
+    /// continue to get their Left/Right identity from `side`.
+    pub region: Option<DockRegion>,
     /// Which window this dock area is showing in, so a drag it detects can
     /// be tagged with a full [`DockRegionId`] (window + role) rather than
     /// just a bare side -- required for [`classify_drag_release`] to tell
@@ -529,11 +559,23 @@ impl<'h, T: TabId, H: DockHost<T>> TabViewerAdapter<'h, T, H> {
             host,
             tab_drag,
             side,
+            region: side.map(DockRegion::from),
             window,
             closed_tabs: Vec::new(),
             menu_action: None,
             lone_tabs: Vec::new(),
         }
+    }
+
+    pub fn for_card(
+        host: &'h mut H,
+        tab_drag: &'h mut Option<TabDrag<T>>,
+        card_id: u32,
+        window: egui::ViewportId,
+    ) -> Self {
+        let mut adapter = Self::new(host, tab_drag, None, window);
+        adapter.region = Some(DockRegion::Card(card_id));
+        adapter
     }
 }
 
@@ -543,9 +585,34 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         let host = &mut self.host;
         let tab = *tab;
-        egui::ScrollArea::both()
-            .id_salt(("dock_tab_scroll", tab))
-            .show(ui, |ui| host.content(ui, tab));
+        let measured = match host.scroll_mode(tab) {
+            TabScroll::Both => {
+                egui::ScrollArea::both()
+                    .id_salt(("dock_tab_scroll", tab))
+                    .show(ui, |ui| host.content(ui, tab))
+                    .content_size
+                    .y
+            }
+            TabScroll::Vertical => {
+                egui::ScrollArea::vertical()
+                    .id_salt(("dock_tab_scroll", tab))
+                    .show(ui, |ui| host.content(ui, tab))
+                    .content_size
+                    .y
+            }
+            TabScroll::Own => {
+                let start = ui.cursor().top();
+                host.content(ui, tab);
+                (ui.min_rect().bottom() - start).max(0.0)
+            }
+        };
+        let measured = host.natural_height(tab).unwrap_or(measured);
+        ui.ctx().data_mut(|d| {
+            d.insert_temp(
+                egui::Id::new(("spatial_ui_kit_dock_natural_height", tab)),
+                measured,
+            )
+        });
     }
 
     fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
@@ -615,9 +682,9 @@ impl<'h, T: TabId, H: DockHost<T>> egui_dock::TabViewer for TabViewerAdapter<'h,
     /// See the module doc comment for why this uses [`detect_tab_drag`]'s
     /// raw-pointer-state approach instead of `response.dragged()`.
     fn on_tab_button(&mut self, tab: &mut Self::Tab, response: &egui::Response) {
-        let source = self.side.map(|side| DockRegionId {
+        let source = self.region.map(|role| DockRegionId {
             window: self.window,
-            role: side.into(),
+            role,
         });
         if let Some(drag) = detect_tab_drag(*tab, response, source) {
             *self.tab_drag = Some(drag);
