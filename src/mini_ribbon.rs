@@ -48,6 +48,8 @@ impl MiniRibbonTheme {
             border_width: self.border_width,
             label_foreground: self.label_foreground,
             label_background: self.label_background,
+            fill: None,
+            shadow: None,
         }
     }
 }

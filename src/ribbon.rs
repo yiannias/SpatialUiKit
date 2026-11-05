@@ -222,16 +222,20 @@ pub trait RibbonHost {
     }
 }
 
-/// Per-theme colors for [`module_frame`]'s capsule border and label pill.
+/// Optional per-theme colors and effects for [`module_frame`]'s capsule.
 /// Plain resolved `Color32`s, not `ColorToken`s: this crate's drawing code
-/// should never be parsing token strings mid-frame, and a host that has no
-/// token system at all (the host app) must still be able to hand over four colors.
+/// should never be parsing token strings mid-frame. The optional fill and
+/// shadow default to no override so existing hosts retain their current look.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct ModuleFrameStyle {
     pub border: egui::Color32,
     pub border_width: f32,
     pub label_foreground: egui::Color32,
     pub label_background: egui::Color32,
+    /// Optional capsule fill override; `None` uses `ui.visuals().window_fill()`.
+    pub fill: Option<egui::Color32>,
+    /// Optional capsule shadow, painted behind this pod only.
+    pub shadow: Option<egui::epaint::Shadow>,
 }
 
 impl Default for ModuleFrameStyle {
@@ -247,6 +251,8 @@ impl Default for ModuleFrameStyle {
             border_width: 1.0,
             label_foreground: MODULE_LABEL_FG,
             label_background: MODULE_LABEL_BG,
+            fill: None,
+            shadow: None,
         }
     }
 }
@@ -464,7 +470,7 @@ fn module_frame_at(
     // And its fill: the flyout paints in its own foreground `Area`, whose
     // style isn't the ribbon's themed one, so reading `window_fill()` there
     // gave a different color than the pod it grows out of.
-    let pod_fill = ui.visuals().window_fill();
+    let pod_fill = style.fill.unwrap_or_else(|| ui.visuals().window_fill());
     ui.data_mut(|d| d.insert_temp(current_pod_fill_id(), pod_fill));
     ui.data_mut(|d| d.insert_temp(current_pod_radius_id(), frame_radius));
     if ui.is_rect_visible(outer_rect) && outer_rect.width() > 0.5 {
@@ -481,6 +487,11 @@ fn module_frame_at(
         // lost the visual contrast entirely, "back where we started" --
         // see `sdb_app::frame`'s dock-`Area` doc comment for the fuller
         // fix that replaced it.)
+        if let Some(shadow) = style.shadow {
+            ui.painter()
+                .with_clip_rect(ui.ctx().content_rect())
+                .add(shadow.as_shape(outer_rect, frame_radius));
+        }
         ui.painter().rect_filled(outer_rect, frame_radius, pod_fill);
         ui.painter().rect_stroke(
             outer_rect,
