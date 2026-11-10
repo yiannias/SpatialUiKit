@@ -858,8 +858,11 @@ fn draw_list_with_editor(
                     let editing_row = !found && is_edited(index, &edit.original);
                     if editing_row {
                         found = true;
-                        ui.painter()
-                            .rect_filled(bar, sk.radius(12.0), palette::PRIMARY);
+                        ui.painter().rect_filled(
+                            bar,
+                            CornerRadius::same(palette::CHIP_RADIUS),
+                            palette::SELECTED,
+                        );
                         let field = Rect::from_min_max(
                             Pos2::new(rect.left() + sk.len(6.0), rect.top() + 1.0),
                             Pos2::new(rect.right() - sk.len(6.0), rect.bottom() - 1.0),
@@ -871,8 +874,11 @@ fn draw_list_with_editor(
                         continue;
                     }
                     if selected == Some(index) {
-                        ui.painter()
-                            .rect_filled(bar, sk.radius(12.0), palette::PRIMARY);
+                        ui.painter().rect_filled(
+                            bar,
+                            CornerRadius::same(palette::CHIP_RADIUS),
+                            palette::SELECTED,
+                        );
                     } else if response.hovered() {
                         ui.painter().rect_filled(
                             bar,

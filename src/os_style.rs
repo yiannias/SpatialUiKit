@@ -17,9 +17,9 @@
 
 use crate::theme::Theme;
 
-/// Windows 11 / WinUI3's small-control corner radius. Buttons, checkboxes,
+/// Small-control corner radius (5, Chris's 2026-11-09 panel-theming pass; WinUI3's is 4). Buttons, checkboxes,
 /// combo boxes, text fields.
-const CONTROL_CORNER_RADIUS: u8 = 4;
+const CONTROL_CORNER_RADIUS: u8 = 5;
 
 /// WinUI3's larger corner radius, for windows, menus/flyouts, and popups.
 const SURFACE_CORNER_RADIUS: u8 = 8;
@@ -70,8 +70,95 @@ pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
     visuals.selection.stroke = egui::Stroke::new(1.0, accent);
     visuals.hyperlink_color = accent;
 
+    if base == Theme::Dark {
+        apply_dark_chips(&mut visuals, accent);
+    }
+
     ensure_readable_text_selection(&mut visuals);
     visuals
+}
+
+/// Dark-theme greys of the 2026-11-09 panel-theming pass (card is `#1E1E23`).
+mod grey {
+    use egui::Color32;
+    /// Recessed wells: dropdowns, toggle tracks, extreme background.
+    pub const WELL: Color32 = Color32::from_rgb(0x14, 0x14, 0x18);
+    /// Resting button chip.
+    pub const CHIP: Color32 = Color32::from_rgb(0x2E, 0x2F, 0x35);
+    /// Hovered chip.
+    pub const CHIP_HOVER: Color32 = Color32::from_rgb(0x38, 0x39, 0x40);
+    /// Pressed chip.
+    pub const CHIP_PRESSED: Color32 = Color32::from_rgb(0x26, 0x27, 0x2C);
+    /// Text-entry fields: lighter than the card.
+    pub const FIELD: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
+    /// Default body text.
+    pub const TEXT: Color32 = Color32::from_rgb(0xDC, 0xDC, 0xE0);
+    /// Quiet label text.
+    pub const TEXT_LABEL: Color32 = Color32::from_rgb(0xB4, 0xB5, 0xBC);
+}
+
+/// Dark-only chip/well/field look. Selection is shown by brightness rather
+/// than the accent so a design tool's chrome never competes with the drawing
+/// (Chris, 2026-11-09); the accent survives on the pressed outline and links.
+fn apply_dark_chips(visuals: &mut egui::Visuals, accent: egui::Color32) {
+    let white = |a: u8| egui::Stroke::new(1.0, egui::Color32::from_white_alpha(a));
+    let w = &mut visuals.widgets;
+    w.inactive.weak_bg_fill = grey::CHIP;
+    w.inactive.bg_fill = grey::CHIP;
+    w.inactive.bg_stroke = white(20);
+    w.inactive.fg_stroke = egui::Stroke::new(1.0, grey::TEXT);
+    w.hovered.weak_bg_fill = grey::CHIP_HOVER;
+    w.hovered.bg_fill = grey::CHIP_HOVER;
+    w.hovered.bg_stroke = white(36);
+    w.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0xF0, 0xF0, 0xF2));
+    w.active.weak_bg_fill = grey::CHIP_PRESSED;
+    w.active.bg_fill = grey::CHIP_PRESSED;
+    w.active.bg_stroke = egui::Stroke::new(1.0, accent);
+    w.open.weak_bg_fill = grey::WELL;
+    w.open.bg_fill = grey::WELL;
+    w.open.bg_stroke = white(36);
+    w.noninteractive.fg_stroke = egui::Stroke::new(1.0, grey::TEXT_LABEL);
+    w.noninteractive.bg_stroke = white(18);
+    visuals.extreme_bg_color = grey::WELL;
+    visuals.text_edit_bg_color = Some(grey::FIELD);
+    visuals.selection.bg_fill = egui::Color32::from_rgb(0x44, 0x46, 0x4F);
+    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0xF0, 0xF0, 0xF2));
+}
+
+/// Runs `add` with dark-well dropdown styling, so a stock `egui::ComboBox`
+/// drawn inside it matches the kit's own dropdown (Chris, 2026-11-09): a dark
+/// `#141418` well with no outline, a muted chevron, and a popup that stays
+/// readable (well background, hovered row `#2E2F35`, selected row `#3A3B42`).
+///
+/// Light theme runs `add` unchanged. One helper, so a panel opts in with a
+/// single wrapper rather than restyling its widgets by hand. A hovered closed
+/// combo uses the row-hover grey rather than `#1A1A1F`, because the same
+/// `widgets.hovered` fill paints the popup's hovered row and `#1A1A1F` on a
+/// `#141418` list would be invisible.
+pub fn dropdown_well_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    if !ui.visuals().dark_mode {
+        return add(ui);
+    }
+    ui.scope(|ui| {
+        let v = ui.visuals_mut();
+        let well = grey::WELL;
+        let muted = egui::Color32::from_rgb(0x8A, 0x8B, 0x93);
+        v.widgets.inactive.weak_bg_fill = well;
+        v.widgets.inactive.bg_fill = well;
+        v.widgets.inactive.bg_stroke = egui::Stroke::NONE;
+        v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, muted);
+        v.widgets.hovered.weak_bg_fill = grey::CHIP;
+        v.widgets.hovered.bg_fill = grey::CHIP;
+        v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
+        v.widgets.open.weak_bg_fill = well;
+        v.widgets.open.bg_fill = well;
+        v.widgets.open.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_white_alpha(36));
+        v.extreme_bg_color = well;
+        v.window_fill = well;
+        v.selection.bg_fill = egui::Color32::from_rgb(0x3A, 0x3B, 0x42);
+        add(ui)
+    })
+    .inner
 }
 
 /// WCAG relative luminance of an opaque sRGB colour.
@@ -216,8 +303,16 @@ mod tests {
         let accent = egui::Color32::from_rgb(0, 120, 215);
         let v = windows11_visuals(Theme::Light, accent);
         assert_eq!(v.hyperlink_color, accent);
-        // The stroke is also the focus ring: it stays the accent.
+        // The stroke is also the focus ring: it stays the accent (light theme).
         assert_eq!(v.selection.stroke.color, accent);
+        // Dark theme (2026-11-09): selection is by brightness, not accent, so the
+        // stroke is near-white; links keep the accent.
+        let d = windows11_visuals(Theme::Dark, accent);
+        assert_eq!(d.hyperlink_color, accent);
+        assert_eq!(
+            d.selection.stroke.color,
+            egui::Color32::from_rgb(0xF0, 0xF0, 0xF2)
+        );
     }
 
     const ACCENTS: [egui::Color32; 6] = [
@@ -253,7 +348,13 @@ mod tests {
                 for surface in surfaces {
                     let v = dock_visuals(theme, accent, surface);
                     let fill = effective_selection_fill(&v);
-                    assert_eq!(v.selection.stroke.color, accent, "focus ring kept");
+                    // Dark selection stroke is a fixed near-white since 2026-11-09
+                    // (selection by brightness, not accent); light keeps the accent.
+                    let ring = match theme {
+                        Theme::Dark => egui::Color32::from_rgb(0xF0, 0xF0, 0xF2),
+                        Theme::Light => accent,
+                    };
+                    assert_eq!(v.selection.stroke.color, ring, "focus ring kept");
                     assert!(
                         contrast_ratio(v.selection.stroke.color, fill)
                             >= MIN_SELECTED_TEXT_CONTRAST,

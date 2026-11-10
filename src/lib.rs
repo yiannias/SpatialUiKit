@@ -4,6 +4,7 @@
 //! app-supplied action type and context type, and this crate never depends
 //! on either app's domain crates.
 
+pub mod choice_toggle;
 pub mod command_status_panel;
 pub mod dock;
 pub mod dropdown;
@@ -21,5 +22,6 @@ pub mod settings;
 pub mod sketch;
 pub mod style_list;
 pub mod theme;
+pub use theme::section_label;
 pub mod tokens;
 pub mod window_chrome;

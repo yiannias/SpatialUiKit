@@ -144,8 +144,11 @@ pub struct DropdownStyle {
     pub box_fill: Color32,
     /// Outline of the closed control and of the open box.
     pub border: Color32,
-    /// Outline while hovered or open.
+    /// Outline while open.
     pub border_strong: Color32,
+    /// Outline while hovered and closed. Equal to `border_strong` except in
+    /// the dark well look, where a resting or hovered control has no outline.
+    pub border_hover: Color32,
     /// Text and arrow colour.
     pub text: Color32,
     /// Fill of the current selection's row.
@@ -164,18 +167,33 @@ impl DropdownStyle {
         let text = v.widgets.inactive.fg_stroke.color;
         let box_fill = v.extreme_bg_color;
         let r = v.widgets.inactive.corner_radius.nw.max(3);
-        Self {
+        let mut s = Self {
             control_fill: v.widgets.inactive.weak_bg_fill,
             control_fill_hovered: v.widgets.hovered.weak_bg_fill,
             box_fill,
             border: v.widgets.inactive.bg_stroke.color,
             border_strong: v.widgets.hovered.bg_stroke.color,
+            border_hover: v.widgets.hovered.bg_stroke.color,
             text,
             selected_fill: box_fill.lerp_to_gamma(text, 0.36),
             hover_fill: box_fill.lerp_to_gamma(text, 0.11),
             focus: v.selection.stroke,
             corner_radius: r,
+        };
+        if v.dark_mode {
+            // Chris, 2026-11-09 theming pass: a closed dropdown is a dark
+            // well with no outline (it is a different kind of control from a
+            // button chip), brightening a step on hover; only the open box
+            // gets a hairline.
+            s.control_fill = Color32::from_rgb(0x14, 0x14, 0x18);
+            s.control_fill_hovered = Color32::from_rgb(0x1A, 0x1A, 0x1F);
+            s.border = Color32::TRANSPARENT;
+            s.border_hover = Color32::TRANSPARENT;
+            s.border_strong = Color32::from_white_alpha(36);
+            s.corner_radius = 5;
+            s.text = Color32::from_rgb(0xDC, 0xDC, 0xE0);
         }
+        s
     }
 
     /// The style a dropdown drawn in `ui` uses when its caller sets none: the
@@ -218,6 +236,7 @@ impl DropdownStyle {
             s.box_fill = surface;
             s.border = cap_border;
             s.border_strong = cap_hot;
+            s.border_hover = cap_hot;
             s.selected_fill = surface.lerp_to_gamma(s.text, 0.36);
             s.hover_fill = surface.lerp_to_gamma(s.text, 0.11);
         }
@@ -1034,10 +1053,13 @@ impl<'a> Dropdown<'a> {
                 arrow: Some(false),
                 pad,
                 arrow_w,
+                arrow_color: arrow_color(ui, style.text),
             };
             paint_face(ui, control, &face);
-            let stroke = if (response.hovered() && enabled) || st.open {
+            let stroke = if st.open {
                 style.border_strong
+            } else if response.hovered() && enabled {
+                style.border_hover
             } else {
                 style.border
             };
@@ -1099,6 +1121,7 @@ impl<'a> Dropdown<'a> {
                         arrow: Some(true),
                         pad,
                         arrow_w,
+                        arrow_color: arrow_color(pui, style.text),
                     };
                     paint_face(pui, header_rect, &face);
                     h_resp.widget_info(|| {
@@ -1359,6 +1382,8 @@ struct Face<'a, 'b> {
     arrow: Option<bool>,
     pad: f32,
     arrow_w: f32,
+    /// Chevron colour: muted in the dark well look, the text colour otherwise.
+    arrow_color: Color32,
 }
 
 /// Paints the control row: thumbnail, text, arrow.
@@ -1387,7 +1412,7 @@ fn paint_face(ui: &Ui, rect: Rect, face: &Face<'_, '_>) {
             ui,
             Pos2::new(rect.right() - face.arrow_w * 0.5, rect.center().y),
             open,
-            face.color,
+            face.arrow_color,
         );
     }
 }
@@ -1477,3 +1502,12 @@ fn layout(
 
 #[cfg(test)]
 mod tests;
+
+/// The chevron colour: `TEXT_MUTED` on the dark well, else the text colour.
+fn arrow_color(ui: &Ui, text: Color32) -> Color32 {
+    if ui.visuals().dark_mode {
+        Color32::from_rgb(0x8A, 0x8B, 0x93)
+    } else {
+        text
+    }
+}

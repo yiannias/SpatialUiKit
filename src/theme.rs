@@ -241,6 +241,24 @@ pub fn apply_interface_scale(ctx: &egui::Context, scale: InterfaceScale) {
     ctx.set_zoom_factor(scale.multiplier());
 }
 
+/// The unscaled text sizes: egui's defaults with Body and Button at 12 and
+/// Heading at 14 (Chris, 2026-11-09: smaller, quieter panel text). One shared
+/// function so [`apply_text_scale`] and [`current_text_scale`] can never
+/// disagree about what "100%" means.
+fn baseline_text_styles() -> std::collections::BTreeMap<egui::TextStyle, egui::FontId> {
+    let mut styles = egui::Style::default().text_styles;
+    for (style, size) in [
+        (egui::TextStyle::Body, 12.0),
+        (egui::TextStyle::Button, 12.0),
+        (egui::TextStyle::Heading, 14.0),
+    ] {
+        if let Some(font) = styles.get_mut(&style) {
+            font.size = size;
+        }
+    }
+    styles
+}
+
 /// Applies `scale` to every named `egui::TextStyle`'s font size, scaled from
 /// egui's own default baseline sizes each time (not compounding on whatever
 /// the live style currently holds) -- so switching presets back and forth
@@ -248,7 +266,7 @@ pub fn apply_interface_scale(ctx: &egui::Context, scale: InterfaceScale) {
 /// "previous scale" to undo first. Only touches font sizes, not spacing/
 /// padding, so this is a text-legibility knob, not a general UI-zoom one.
 pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
-    let baseline = egui::Style::default().text_styles;
+    let baseline = baseline_text_styles();
     ctx.all_styles_mut(|style| {
         for (text_style, font_id) in &baseline {
             let mut font_id = font_id.clone();
@@ -436,8 +454,9 @@ impl ThemePalette {
             // -- previously `ribbon::FRAME_STROKE`'s `rgb(58,59,64)` at 1.0px.
             surface: SurfaceTokens {
                 background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
-                border_color: ColorToken::new(egui::Color32::from_rgb(0x2B, 0x2C, 0x31)),
-                border_width: DimensionToken::new(1.7),
+                // 2026-11-09 (Chris's panel-theming pass): thinner, slightly lighter.
+                border_color: ColorToken::new(egui::Color32::from_rgb(0x34, 0x35, 0x3B)),
+                border_width: DimensionToken::new(1.0),
             },
             // Every value here is the dark-only literal it replaces, so dark
             // mode renders exactly as it did before these tokens existed:
@@ -578,9 +597,11 @@ mod theme_palette_tests {
         let d = ThemePalette::dark();
         assert_eq!(
             d.surface.border_color.color32().unwrap(),
-            egui::Color32::from_rgb(0x2B, 0x2C, 0x31)
+            egui::Color32::from_rgb(0x34, 0x35, 0x3B)
         );
-        assert_eq!(d.surface.border_width.px().unwrap(), 1.7);
+        // 2026-11-09: the surface hairline became 1.0px `#34353B` (was 1.7px
+        // `#2B2C31`) in Chris's panel-theming pass.
+        assert_eq!(d.surface.border_width.px().unwrap(), 1.0);
         // `sdb_ui::appearance::ACCENT`.
         assert_eq!(
             d.control.accent.color32().unwrap(),
@@ -645,7 +666,9 @@ mod theme_palette_tests {
         // egui adopts a new zoom factor at the start of the next pass.
         let _ = ctx.run_ui(Default::default(), |_| {});
         let body_points = ctx.global_style().text_styles[&egui::TextStyle::Body].size;
-        let default_body = egui::Style::default().text_styles[&egui::TextStyle::Body].size;
+        // The baseline is 12 since 2026-11-09, not egui's default 14.
+        let default_body = baseline_text_styles()[&egui::TextStyle::Body].size;
+        assert_eq!(default_body, 12.0);
         let on_screen = body_points * ctx.zoom_factor();
         assert!((on_screen / default_body - 1.15 * 1.15).abs() < 1e-4);
         assert!(!ctx.options(|o| o.zoom_with_keyboard));
@@ -731,8 +754,7 @@ mod theme_palette_tests {
 /// [`apply_text_scale`] without threading a scale value through every call
 /// site's signature. Multiply a hardcoded literal by this.
 pub fn current_text_scale(ui: &egui::Ui) -> f32 {
-    let default_body = egui::Style::default()
-        .text_styles
+    let default_body = baseline_text_styles()
         .get(&egui::TextStyle::Body)
         .map(|f| f.size)
         .unwrap_or(14.0);
@@ -766,4 +788,32 @@ mod status_color_tests {
             assert!(ok.g() > ok.r() && ok.g() > ok.b(), "ok is green");
         }
     }
+}
+
+/// A small, quiet, upper-case section heading ("APPEARANCE"): 10 points at the
+/// current text scale, letter-spaced, muted grey, with 8 points above and 2
+/// below. Replaces oversized in-panel headings (Chris, 2026-11-09).
+pub fn section_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    let dark = ui.visuals().dark_mode;
+    let color = if dark {
+        egui::Color32::from_rgb(0x8A, 0x8B, 0x93)
+    } else {
+        egui::Color32::from_rgb(0x6E, 0x70, 0x78)
+    };
+    let size = 10.0 * current_text_scale(ui);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &text.to_uppercase(),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::proportional(size),
+            color,
+            extra_letter_spacing: 0.8,
+            ..Default::default()
+        },
+    );
+    ui.add_space(8.0);
+    let response = ui.add(egui::Label::new(job));
+    ui.add_space(2.0);
+    response
 }

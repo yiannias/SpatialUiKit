@@ -16,15 +16,26 @@ pub mod palette {
     pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x23);
     /// Frame outlines (sketch `3C3C3D`).
     pub const FRAME: Color32 = Color32::from_rgb(0x3C, 0x3C, 0x3D);
-    /// Headings and muted labels (sketch `828282`).
-    pub const MUTED: Color32 = Color32::from_rgb(0x82, 0x82, 0x82);
+    /// Headings and muted labels (`#8A8B93`, 2026-11-09 theming pass).
+    pub const MUTED: Color32 = Color32::from_rgb(0x8A, 0x8B, 0x93);
     /// Values, style names and field text.
-    pub const BRIGHT: Color32 = Color32::WHITE;
-    /// Field outlines (sketch `808080`).
-    pub const FIELD_BORDER: Color32 = Color32::from_rgb(0x80, 0x80, 0x80);
-    /// Secondary button fill. The sketch's `828282` is darkened a step so
-    /// white button text keeps contrast.
-    pub const BUTTON: Color32 = Color32::from_rgb(0x5A, 0x5A, 0x5E);
+    pub const BRIGHT: Color32 = Color32::from_rgb(0xE8, 0xE8, 0xEC);
+    /// Field outlines, the hairline grey `#4A4B52`.
+    pub const FIELD_BORDER: Color32 = Color32::from_rgb(0x4A, 0x4B, 0x52);
+    /// Secondary button chip fill (`#2E2F35`).
+    pub const BUTTON: Color32 = Color32::from_rgb(0x2E, 0x2F, 0x35);
+    /// Hovered button chip.
+    pub const BUTTON_HOVER: Color32 = Color32::from_rgb(0x38, 0x39, 0x40);
+    /// Pressed button chip.
+    pub const BUTTON_PRESSED: Color32 = Color32::from_rgb(0x26, 0x27, 0x2C);
+    /// Text-entry field fill: lighter than the card.
+    pub const FIELD: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
+    /// List selection bar: brightness, not the accent.
+    pub const SELECTED: Color32 = Color32::from_rgb(0x3A, 0x3B, 0x42);
+    /// Text of a destructive button (Delete).
+    pub const DANGER_TEXT: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5F);
+    /// Corner radius, in screen points, of chips, fields and the selection bar.
+    pub const CHIP_RADIUS: u8 = 5;
     /// Primary button fill and the list selection bar (sketch `557EAF`).
     pub const PRIMARY: Color32 = Color32::from_rgb(0x55, 0x7E, 0xAF);
     /// The hover pill on a preview tile (sketch `6B6B6B`, near-black edge).
@@ -36,8 +47,14 @@ pub mod palette {
 }
 
 /// The sketch's text sizes are 20 pt on a 1618-pt-wide window; drawn at full
-/// size they crowd the 24 pt row pitch the sketch also uses, so text is set a
-/// little smaller than drawn. Geometry is not scaled by this.
+/// size they crowd the 24 pt row pitch the sketch also uses, so text is set
+/// a little smaller than drawn. Geometry is not scaled by this.
+///
+/// Do not use this to make manager text smaller: the host fits its sketch
+/// frame so manager body text equals `TextStyle::Body` at this ratio (SDB's
+/// `scaling_calibration` test), so the managers follow the app-wide baseline
+/// in [`crate::theme::apply_text_scale`]. A 2026-11-09 attempt at 0.86 made
+/// the managers smaller than the Properties panel and was reverted.
 const FONT_RATIO: f32 = 0.95;
 
 /// Maps the sketch's coordinate grid onto the window.
@@ -396,8 +413,8 @@ pub fn style_list(
                             if is_selected {
                                 ui.painter().rect_filled(
                                     rect.shrink2(Vec2::new(sk.len(2.0), 0.0)),
-                                    sk.radius(12.0),
-                                    palette::PRIMARY,
+                                    CornerRadius::same(palette::CHIP_RADIUS),
+                                    palette::SELECTED,
                                 );
                             } else if response.hovered() {
                                 ui.painter().rect_filled(
@@ -681,6 +698,8 @@ pub enum ButtonKind {
     Normal,
     /// The blue default action (Apply).
     Primary,
+    /// Like [`Self::Normal`] but with red-tinted text (Delete).
+    Destructive,
 }
 
 /// One rounded button in the sketch's style.
@@ -699,28 +718,57 @@ pub fn sketch_button(
     };
     let response = ui.interact(rect, ui.id().with(("sketch_button", label)), sense);
     let base = match kind {
-        ButtonKind::Normal => palette::BUTTON,
+        ButtonKind::Normal | ButtonKind::Destructive => palette::BUTTON,
         ButtonKind::Primary => palette::PRIMARY,
     };
+    let chip = kind != ButtonKind::Primary;
     let fill = if !enabled {
         base.gamma_multiply(0.45)
     } else if response.is_pointer_button_down_on() {
-        base.gamma_multiply(0.8)
+        if chip {
+            palette::BUTTON_PRESSED
+        } else {
+            base.gamma_multiply(0.8)
+        }
     } else if response.hovered() {
-        base.lerp_to_gamma(Color32::WHITE, 0.12)
+        if chip {
+            palette::BUTTON_HOVER
+        } else {
+            base.lerp_to_gamma(Color32::WHITE, 0.12)
+        }
     } else {
         base
     };
-    ui.painter().rect_filled(rect, sk.radius(12.0), fill);
+    // A chip, not a pill: a fixed 5-point corner, capped at half the height so
+    // a short button never turns into a capsule.
+    let radius = CornerRadius::same(
+        (palette::CHIP_RADIUS as f32)
+            .min(rect.height() / 2.0)
+            .round() as u8,
+    );
+    ui.painter().rect_filled(rect, radius, fill);
+    if chip {
+        ui.painter().rect_stroke(
+            rect,
+            radius,
+            Stroke::new(1.0, Color32::from_white_alpha(20)),
+            StrokeKind::Inside,
+        );
+    }
+    let ink = if kind == ButtonKind::Destructive {
+        palette::DANGER_TEXT
+    } else {
+        palette::BRIGHT
+    };
     ui.painter().text(
         rect.center(),
         Align2::CENTER_CENTER,
         label,
         sk.font(20.0),
         if enabled {
-            palette::BRIGHT
+            ink
         } else {
-            palette::BRIGHT.gamma_multiply(0.45)
+            ink.gamma_multiply(0.45)
         },
     );
     response
