@@ -113,6 +113,20 @@ impl<'a> ThemedWindow<'a> {
         self
     }
 
+    /// Caps a `modal` sheet's width so a sheet with a narrow fixed-width body
+    /// hugs it. `width` is the OUTER sheet width, so it must include the side
+    /// margins (see `FormMetrics::side_margin`) on both sides of the body.
+    ///
+    /// Needed because the header allocates `ui.available_width()`, and inside
+    /// `egui::Modal`'s area that is egui's default area width (600 pt), which
+    /// would otherwise force every sheet that wide. Unlike
+    /// [`Self::sheet_anchor_point`] this does not move the anchor. No-op on a
+    /// non-`modal` window.
+    pub fn sheet_max_width(mut self, width: f32) -> Self {
+        self.sheet_max_width = Some(width);
+        self
+    }
+
     pub fn default_pos(mut self, pos: impl Into<egui::Pos2>) -> Self {
         self.default_pos = Some(pos.into());
         self
@@ -668,7 +682,25 @@ impl<'a> ThemedWindow<'a> {
         }
 
         if !state.minimized {
-            add_contents(ui);
+            if self.modal {
+                // A sheet's frame has no inner margin so the header can be
+                // full-bleed; without this the body would touch the sheet's
+                // left and right edges. Padding it here, once, means no sheet
+                // body has to pad itself. The frame hugs its content, so the
+                // natural-height measurement in `paint_sheet_content` (which
+                // reads `ui.min_rect()` after this) simply includes the margin.
+                let side = crate::form::FormMetrics::default().side_margin.round() as i8;
+                egui::Frame::new()
+                    .inner_margin(egui::Margin {
+                        left: side,
+                        right: side,
+                        top: 8,
+                        bottom: 12,
+                    })
+                    .show(ui, add_contents);
+            } else {
+                add_contents(ui);
+            }
         }
     }
 }

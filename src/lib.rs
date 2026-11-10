@@ -10,6 +10,7 @@ pub mod dock;
 pub mod dropdown;
 pub mod font_picker;
 pub mod fonts;
+pub mod form;
 pub mod idle_input;
 pub mod menu;
 pub mod mini_ribbon;
