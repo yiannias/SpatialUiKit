@@ -409,6 +409,93 @@ pub trait SettingsHost {
     fn label_column_units(&self) -> Option<f32> {
         None
     }
+
+    /// Search-hit marking for the row keyed `key` (a field id, or a custom
+    /// row's label); `None` (the default) draws the row normally. Called only
+    /// for rows actually drawn, so a host may treat `scroll_to` as "the row
+    /// is on screen now" and clear its request.
+    fn row_mark(&self, _ctx: &egui::Context, _key: &'static str) -> Option<RowMark> {
+        None
+    }
+}
+
+/// How a search hit is drawn on the content page: a band behind the whole
+/// row, with the matched letters of the name and help text on a chip.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RowMark {
+    /// The query, already trimmed and ASCII-lowercased (see [`match_range`]).
+    pub query: String,
+    /// The match Enter has stepped to: gets an outline.
+    pub current: bool,
+    /// Scroll this row into view now (one-shot, set by the host).
+    pub scroll_to: bool,
+}
+
+/// Byte range of the first case-insensitive occurrence of `query_lower`
+/// (already ASCII-lowercased) in `text`. ASCII lowercasing keeps byte
+/// offsets, so the range indexes `text` itself. Empty queries match nothing.
+pub fn match_range(text: &str, query_lower: &str) -> Option<std::ops::Range<usize>> {
+    if query_lower.is_empty() {
+        return None;
+    }
+    let at = text.to_ascii_lowercase().find(query_lower)?;
+    Some(at..at + query_lower.len())
+}
+
+/// `text` as a layout job with the first match of `query_lower` on a chip in
+/// the strong text colour; the rest keeps `color`.
+fn marked_job(
+    ui: &egui::Ui,
+    text: &str,
+    size: f32,
+    color: egui::Color32,
+    query_lower: &str,
+) -> egui::text::LayoutJob {
+    let font = egui::FontId::proportional(size);
+    let plain = egui::TextFormat::simple(font.clone(), color);
+    let mut job = egui::text::LayoutJob::default();
+    match match_range(text, query_lower) {
+        Some(r) => {
+            let chip = egui::TextFormat {
+                background: ui.visuals().selection.bg_fill,
+                ..egui::TextFormat::simple(font, ui.visuals().strong_text_color())
+            };
+            job.append(&text[..r.start], 0.0, plain.clone());
+            job.append(&text[r.clone()], 0.0, chip);
+            job.append(&text[r.end..], 0.0, plain);
+        }
+        None => job.append(text, 0.0, plain),
+    }
+    job
+}
+
+/// Reserves a paint slot behind a row; [`paint_row_band`] fills it once the
+/// row's rect is known.
+fn reserve_band(ui: &egui::Ui) -> egui::layers::ShapeIdx {
+    ui.painter().add(egui::Shape::Noop)
+}
+
+/// The search band behind `rect` (and an outline when it is the current hit).
+fn paint_row_band(ui: &egui::Ui, slot: egui::layers::ShapeIdx, rect: egui::Rect, mark: &RowMark) {
+    let v = ui.visuals();
+    let rect = rect.expand2(egui::vec2(6.0, 2.0));
+    let mut shapes = vec![egui::Shape::rect_filled(
+        rect,
+        4.0,
+        v.selection.bg_fill.gamma_multiply(0.35),
+    )];
+    if mark.current {
+        shapes.push(egui::Shape::rect_stroke(
+            rect,
+            4.0,
+            egui::Stroke::new(1.0, v.strong_text_color()),
+            egui::StrokeKind::Inside,
+        ));
+    }
+    ui.painter().set(slot, egui::Shape::Vec(shapes));
+    if mark.scroll_to {
+        ui.scroll_to_rect(rect, Some(egui::Align::Center));
+    }
 }
 
 /// Search box for the nav pane, pinned above the tree per the sketch's "🔍
@@ -424,6 +511,16 @@ pub trait SettingsHost {
 /// pill, not `os_style`'s flat 4px control radius -- search fields read as
 /// a distinct, softer affordance in most native UIs, this one included).
 pub fn render_search_sized(ui: &mut egui::Ui, query: &mut String, height: f32) {
+    render_search_sized_response(ui, query, height);
+}
+
+/// [`render_search_sized`] returning the text field's response, so a host can
+/// react to Enter (`lost_focus`) to step through matches.
+pub fn render_search_sized_response(
+    ui: &mut egui::Ui,
+    query: &mut String,
+    height: f32,
+) -> egui::Response {
     // A fixed-height pill (no dependence on available height, so no feedback
     // loop): painted by hand, with the field laid out inside it.
     let (rect, _) = ui.allocate_exact_size(
@@ -453,7 +550,7 @@ pub fn render_search_sized(ui: &mut egui::Ui, query: &mut String, height: f32) {
             .margin(egui::Margin::ZERO)
             .frame(egui::Frame::NONE)
             .vertical_align(egui::Align::Center),
-    );
+    )
 }
 
 /// [`render_search_sized`] with the original, taller padding-driven height.
@@ -1056,8 +1153,13 @@ fn render_section_body<A: Clone, Ctx>(
                 );
                 i += 1;
             }
-            SettingsNode::Custom { render, .. } => {
-                render(ui, ctx, actions);
+            SettingsNode::Custom { label, render } => {
+                let mark = host.row_mark(ui.ctx(), label);
+                let slot = mark.as_ref().map(|_| reserve_band(ui));
+                let rect = ui.scope(|ui| render(ui, ctx, actions)).response.rect;
+                if let (Some(mark), Some(slot)) = (&mark, slot) {
+                    paint_row_band(ui, slot, rect, mark);
+                }
                 i += 1;
             }
             SettingsNode::Field(_) => {
@@ -1119,13 +1221,25 @@ fn render_field_row<A: Clone, Ctx>(
 ) -> egui::Rect {
     let label_col = label_color(ui);
     let name_col = field.label_color.unwrap_or(label_col);
+    let mark = host.row_mark(ui.ctx(), field.id);
+    let slot = mark.as_ref().map(|_| reserve_band(ui));
     let label_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
             ui.scope(|ui| {
                 // Exact width, not just a minimum -- this is what the `Grid`
                 // actually measures for the column (see `measure_column_widths`).
                 ui.set_width(widths.label);
-                let text = egui::RichText::new(field.label).color(name_col);
+                let text: egui::WidgetText = match &mark {
+                    Some(m) => marked_job(
+                        ui,
+                        field.label,
+                        egui::TextStyle::Body.resolve(ui.style()).size,
+                        name_col,
+                        &m.query,
+                    )
+                    .into(),
+                    None => egui::RichText::new(field.label).color(name_col).into(),
+                };
                 let menu = host.label_menu_enabled(ui.ctx());
                 let name = |ui: &mut egui::Ui| {
                     if menu {
@@ -1323,14 +1437,21 @@ fn render_field_row<A: Clone, Ctx>(
                     ui.add_space(space_unit(ui) * 0.15);
                     ui.scope(|ui| {
                         ui.set_max_width(help_width);
-                        ui.add(
-                            egui::Label::new(
-                                egui::RichText::new(text)
-                                    .size(help_font_size(ui))
-                                    .color(help_text_color(ui)),
+                        let help: egui::WidgetText = match &mark {
+                            Some(m) => marked_job(
+                                ui,
+                                text,
+                                help_font_size(ui),
+                                help_text_color(ui),
+                                &m.query,
                             )
-                            .wrap(),
-                        );
+                            .into(),
+                            None => egui::RichText::new(text)
+                                .size(help_font_size(ui))
+                                .color(help_text_color(ui))
+                                .into(),
+                        };
+                        ui.add(egui::Label::new(help).wrap());
                     });
                 }
             });
@@ -1338,8 +1459,12 @@ fn render_field_row<A: Clone, Ctx>(
         .response
         .rect;
 
+    let row = label_rect.union(control_rect);
+    if let (Some(mark), Some(slot)) = (&mark, slot) {
+        paint_row_band(ui, slot, row, mark);
+    }
     ui.end_row();
-    label_rect.union(control_rect)
+    row
 }
 
 #[cfg(test)]
