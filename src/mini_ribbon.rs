@@ -50,6 +50,7 @@ impl MiniRibbonTheme {
             label_background: self.label_background,
             fill: None,
             shadow: None,
+            rim: None,
         }
     }
 }

@@ -236,6 +236,10 @@ pub struct ModuleFrameStyle {
     pub fill: Option<egui::Color32>,
     /// Optional capsule shadow, painted behind this pod only.
     pub shadow: Option<egui::epaint::Shadow>,
+    /// Outer rim `(width, color)` drawn just outside the border (see
+    /// [`crate::theme::SurfaceTokens::rim_color`]); `None` draws none.
+    /// Added 2026-11-10 at the end so existing hosts are unaffected.
+    pub rim: Option<(f32, egui::Color32)>,
 }
 
 impl Default for ModuleFrameStyle {
@@ -253,6 +257,7 @@ impl Default for ModuleFrameStyle {
             label_background: MODULE_LABEL_BG,
             fill: None,
             shadow: None,
+            rim: None,
         }
     }
 }
@@ -493,11 +498,12 @@ fn module_frame_at(
                 .add(shadow.as_shape(outer_rect, frame_radius));
         }
         ui.painter().rect_filled(outer_rect, frame_radius, pod_fill);
-        ui.painter().rect_stroke(
+        crate::theme::paint_edge(
+            ui.painter(),
             outer_rect,
             frame_radius,
-            egui::Stroke::new(style.border_width, style.border),
-            egui::StrokeKind::Inside,
+            (style.border_width, style.border),
+            style.rim.unwrap_or((0.0, egui::Color32::TRANSPARENT)),
         );
         if label_w > 4.0 {
             let radius = frame_radius.round().clamp(0.0, u8::MAX as f32) as u8;

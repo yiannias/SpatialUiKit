@@ -359,6 +359,77 @@ pub struct SurfaceTokens {
     /// setting the ribbon has no equivalent of.
     pub border_color: ColorToken,
     pub border_width: DimensionToken,
+    /// Colour of a tight rim drawn just *outside* the surface's border, so a
+    /// floating card reads as glass against whatever is behind it
+    /// (2026-11-10, measured from a reference app). Added at the end of the
+    /// struct with a serde default so themes saved before it existed still
+    /// load; the default is fully transparent, i.e. no rim.
+    #[serde(default = "no_rim_color")]
+    pub rim_color: ColorToken,
+    /// Width of the outer rim in points; `0` draws none.
+    #[serde(default = "no_rim_width")]
+    pub rim_width: DimensionToken,
+}
+
+fn no_rim_color() -> ColorToken {
+    ColorToken::new(egui::Color32::TRANSPARENT)
+}
+
+fn no_rim_width() -> DimensionToken {
+    DimensionToken::new(0.0)
+}
+
+/// Paints a floating surface's edge from its tokens: the hairline border
+/// *inside* `rect`, then the rim as a stroke of `rim_width` just *outside*
+/// it (same corner radius grown by the rim width). Call it after the fill and
+/// content rect are known. Does nothing for a token that is transparent or
+/// zero-width. The painter's clip is widened by the rim so a surface sitting
+/// at the edge of its parent's clip rect does not lose its outer line.
+pub fn paint_surface_edge(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    corner_radius: f32,
+    tokens: &SurfaceTokens,
+) {
+    let border_w = tokens.border_width.px().unwrap_or(0.0);
+    let border = tokens.border_color.color32().unwrap_or_default();
+    let rim_w = tokens.rim_width.px().unwrap_or(0.0);
+    let rim = tokens.rim_color.color32().unwrap_or_default();
+    paint_edge(
+        painter,
+        rect,
+        corner_radius,
+        (border_w, border),
+        (rim_w, rim),
+    );
+}
+
+/// [`paint_surface_edge`] with already-resolved `(width, color)` pairs, for
+/// callers that carry resolved colours rather than tokens.
+pub fn paint_edge(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    corner_radius: f32,
+    border: (f32, egui::Color32),
+    rim: (f32, egui::Color32),
+) {
+    if rim.0 > 0.0 && rim.1.a() > 0 {
+        let wide = painter.with_clip_rect(painter.clip_rect().union(rect.expand(rim.0 + 1.0)));
+        wide.rect_stroke(
+            rect,
+            corner_radius,
+            egui::Stroke::new(rim.0, rim.1),
+            egui::StrokeKind::Outside,
+        );
+    }
+    if border.0 > 0.0 && border.1.a() > 0 {
+        painter.rect_stroke(
+            rect,
+            corner_radius,
+            egui::Stroke::new(border.0, border.1),
+            egui::StrokeKind::Inside,
+        );
+    }
 }
 
 /// Colors for the small chrome *controls* that sit on a surface -- a ribbon
@@ -455,8 +526,15 @@ impl ThemePalette {
             surface: SurfaceTokens {
                 background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
                 // 2026-11-09 (Chris's panel-theming pass): thinner, slightly lighter.
-                border_color: ColorToken::new(egui::Color32::from_rgb(0x34, 0x35, 0x3B)),
+                // 2026-11-10 (Chris): a translucent white hairline, so the
+                // edge's brightness follows what is behind the card, plus a
+                // tight dark rim just outside it. No directional highlight.
+                border_color: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
+                    255, 255, 255, 46,
+                )),
                 border_width: DimensionToken::new(1.0),
+                rim_color: ColorToken::new(egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150)),
+                rim_width: DimensionToken::new(1.0),
             },
             // Every value here is the dark-only literal it replaces, so dark
             // mode renders exactly as it did before these tokens existed:
@@ -520,6 +598,9 @@ impl ThemePalette {
                 background: ColorToken::new(egui::Color32::from_rgb(0xF0, 0xF0, 0xF2)),
                 border_color: ColorToken::new(egui::Color32::from_rgb(150, 151, 158)),
                 border_width: DimensionToken::new(1.0),
+                // No rim in the light theme (2026-11-10).
+                rim_color: ColorToken::new(egui::Color32::TRANSPARENT),
+                rim_width: DimensionToken::new(0.0),
             },
             // Chris, 2026-09-13, on the ribbon capsule titles and the CSP's
             // assist buttons in light mode: "The button/capsule 'labels'
@@ -571,6 +652,22 @@ pub fn is_dark(color: egui::Color32) -> bool {
 mod theme_palette_tests {
     use super::*;
 
+    /// 2026-11-10: a `SurfaceTokens` saved before the outer rim existed (no
+    /// `rim_color`/`rim_width` keys) still loads, with no rim.
+    #[test]
+    fn surface_tokens_saved_without_the_rim_fields_still_load() {
+        let mut value = serde_json::to_value(ThemePalette::dark().surface).unwrap();
+        let obj = value.as_object_mut().unwrap();
+        assert!(obj.remove("rim_color").is_some() && obj.remove("rim_width").is_some());
+        let loaded: SurfaceTokens = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.rim_width.px().unwrap(), 0.0);
+        assert_eq!(
+            loaded.rim_color.color32().unwrap(),
+            egui::Color32::TRANSPARENT
+        );
+        assert_eq!(loaded.border_width.px().unwrap(), 1.0);
+    }
+
     #[test]
     fn dark_and_light_round_trip_through_json() {
         for palette in [ThemePalette::dark(), ThemePalette::light()] {
@@ -595,10 +692,17 @@ mod theme_palette_tests {
     #[test]
     fn the_dark_palette_reproduces_the_literals_it_replaced() {
         let d = ThemePalette::dark();
+        // 2026-11-10 (Chris): the dark border is now a translucent white
+        // hairline (alpha 46, about 18%) plus a black alpha-150 outer rim.
         assert_eq!(
             d.surface.border_color.color32().unwrap(),
-            egui::Color32::from_rgb(0x34, 0x35, 0x3B)
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, 46)
         );
+        assert_eq!(
+            d.surface.rim_color.color32().unwrap(),
+            egui::Color32::from_rgba_unmultiplied(0, 0, 0, 150)
+        );
+        assert_eq!(d.surface.rim_width.px().unwrap(), 1.0);
         // 2026-11-09: the surface hairline became 1.0px `#34353B` (was 1.7px
         // `#2B2C31`) in Chris's panel-theming pass.
         assert_eq!(d.surface.border_width.px().unwrap(), 1.0);
