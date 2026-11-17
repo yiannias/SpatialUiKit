@@ -628,13 +628,14 @@ pub fn render_nav<A, Ctx>(
     filter: &str,
 ) -> Option<&'static str> {
     let filter_lower = filter.to_ascii_lowercase();
-    render_nav_filtered(ui, tree, &filter_lower)
+    render_nav_filtered(ui, tree, &filter_lower, 0)
 }
 
 fn render_nav_filtered<A, Ctx>(
     ui: &mut egui::Ui,
     tree: &[SettingsNode<A, Ctx>],
     filter_lower: &str,
+    depth: usize,
 ) -> Option<&'static str> {
     let mut clicked = None;
     for node in tree {
@@ -647,11 +648,26 @@ fn render_nav_filtered<A, Ctx>(
             if !filter_lower.is_empty() && !node_matches(node, filter_lower) {
                 continue;
             }
-            if ui.selectable_label(false, *label).clicked() {
+            // TASK-123: the tree uses the same modest outline scale as the
+            // page -- one step between a tier and its sections, with
+            // indentation carrying the rest of the hierarchy.
+            let size = row_unit(ui)
+                * if depth == 0 {
+                    OUTLINE_TIER_SIZE
+                } else {
+                    OUTLINE_ROW_SIZE
+                };
+            let mut text = egui::RichText::new(*label).size(size);
+            if depth == 0 {
+                text = text.strong();
+            }
+            if ui.selectable_label(false, text).clicked() {
                 clicked = Some(*id);
             }
             ui.indent(*id, |ui| {
-                if let Some(child_clicked) = render_nav_filtered(ui, children, filter_lower) {
+                if let Some(child_clicked) =
+                    render_nav_filtered(ui, children, filter_lower, depth + 1)
+                {
                     clicked = Some(child_clicked);
                 }
             });
@@ -700,14 +716,23 @@ fn row_unit(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body)
 }
 
-/// Section-body field labels sit below the section heading in the settings
-/// outline. This leaves about two body-text characters after the heading's
-/// disclosure chevron and label spacing at normal and enlarged text sizes.
-const SECTION_ROW_LABEL_INDENT: f32 = 2.6;
+/// Outline scale and indent step (TASK-123): descriptions are the bottom
+/// tier, each level steps up modestly, and the indent -- not the type size --
+/// carries the hierarchy. Defined once here for the page body, the left tree
+/// and every pop-out (which all render through this module).
+const OUTLINE_HELP_SIZE: f32 = 0.85;
+const OUTLINE_ROW_SIZE: f32 = 1.0;
+const OUTLINE_GROUP_SIZE: f32 = 1.0;
+const OUTLINE_SECTION_SIZE: f32 = 1.02;
+const OUTLINE_TIER_SIZE: f32 = 1.02;
+/// One outline level's indent, in row units.
+const OUTLINE_INDENT_UNITS: f32 = 1.2;
+/// Section-body rows sit three levels in (tier, section, group, row).
+const SECTION_ROW_LABEL_INDENT: f32 = OUTLINE_INDENT_UNITS * 3.5;
 
 /// A field explicitly marked `nested` refines another setting and gets one
 /// further step beyond the normal section-row indent.
-const NESTED_ROW_LABEL_INDENT: f32 = 1.1;
+const NESTED_ROW_LABEL_INDENT: f32 = OUTLINE_INDENT_UNITS;
 
 fn field_label_indent(ui: &egui::Ui, field: &Field<impl Sized, impl Sized>) -> f32 {
     row_unit(ui)
@@ -757,7 +782,7 @@ fn label_font_size(ui: &egui::Ui) -> f32 {
 /// wouldn't track Text Size scaling the way every other size in this module
 /// does).
 fn help_font_size(ui: &egui::Ui) -> f32 {
-    label_font_size(ui) * 0.85
+    label_font_size(ui) * OUTLINE_HELP_SIZE
 }
 
 /// Secondary/help text color with enough contrast against the panel
@@ -830,13 +855,11 @@ fn tier_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, b
             // TASK-149: the top level is the same size as a section heading
             // ("General"), bold -- orientation comes from the outline, not
             // from a big type jump. `section_header` states the same size.
-            // TASK-149: the top level is the same size as a section heading
-            // ("General"), bold -- orientation comes from the outline, not
-            // from a big type jump. `section_header` states the same size.
-            .size(unit * 1.02)
+            .size(unit * OUTLINE_TIER_SIZE)
             .strong()
             .color(label_color(ui)),
         open,
+        0.0,
     );
     ui.add_space(gap * 0.5);
     let rule_rect = ui.available_rect_before_wrap();
@@ -855,10 +878,12 @@ fn collapsible_label(
     ui: &mut egui::Ui,
     text: egui::RichText,
     open: bool,
+    indent: f32,
 ) -> (egui::Response, bool) {
     let side = row_unit(ui) * 0.9;
     let color = ui.visuals().weak_text_color();
     let inner = ui.horizontal(|ui| {
+        ui.add_space(indent);
         let (rect, chevron) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
         let c = rect.center();
         let s = side * 0.22;
@@ -897,10 +922,11 @@ fn section_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response
     let out = collapsible_label(
         ui,
         egui::RichText::new(label)
-            .size(unit * 1.02)
+            .size(unit * OUTLINE_SECTION_SIZE)
             .strong()
             .color(label_color(ui)),
         open,
+        unit * OUTLINE_INDENT_UNITS,
     );
     ui.add_space(gap * 0.45);
     out
@@ -943,12 +969,15 @@ fn group_header(ui: &mut egui::Ui, label: &str) {
     let unit = row_unit(ui);
     let gap = space_unit(ui);
     ui.add_space(gap * 0.6);
-    ui.label(
-        egui::RichText::new(label)
-            .size(unit * 0.85)
-            .strong()
-            .color(help_text_color(ui)),
-    );
+    ui.horizontal(|ui| {
+        ui.add_space(unit * OUTLINE_INDENT_UNITS * 2.5);
+        ui.label(
+            egui::RichText::new(label)
+                .size(unit * OUTLINE_GROUP_SIZE)
+                .strong()
+                .color(help_text_color(ui)),
+        );
+    });
     ui.add_space(gap * 0.3);
 }
 
@@ -1031,9 +1060,7 @@ fn measure_column_widths<A, Ctx>(
     let label = match host.label_column_units() {
         // Half the pane at most, so a narrow window keeps room for controls.
         Some(units) => (units * unit).min(ui.available_width() * 0.5),
-        // Auto-size to the widest label, capped at half the pane too, so one
-        // very long label can never starve the control column.
-        None => (max_w + 4.0).min(ui.available_width() * 0.5),
+        None => max_w + 4.0,
     };
 
     let col_spacing = unit * 1.3;
@@ -1785,5 +1812,143 @@ mod heading_scale_tests {
                 "at {scale:.0}% the top-level heading ({tier:.1}) must match the section heading ({section:.1})"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod outline_hierarchy_tests {
+    use super::*;
+
+    struct Host;
+    impl SettingsHost for Host {
+        fn browse_path(&self, _ui: &mut egui::Ui, _current: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn text(shape: &egui::Shape, target: &str) -> Option<(egui::Pos2, f32)> {
+        match shape {
+            egui::Shape::Text(t) if t.galley.text() == target => {
+                Some((t.pos, t.galley.job.sections[0].format.font_id.size))
+            }
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| text(s, target)),
+            _ => None,
+        }
+    }
+
+    fn outline_tree() -> Vec<SettingsNode<(), ()>> {
+        vec![SettingsNode::section(
+            "application",
+            "Application Settings",
+            vec![SettingsNode::section(
+                "application.general",
+                "General",
+                vec![SettingsNode::group(
+                    "Spacing",
+                    vec![
+                        Field::toggle("settings.startup", "Startup File", |_: &()| true, |_| ())
+                            .hover("A short hint."),
+                    ],
+                )],
+            )],
+        )]
+    }
+
+    /// TASK-123: indentation carries the outline at every level, and the type
+    /// scale only steps up modestly -- descriptions at the bottom, then rows,
+    /// groups, sections and the tier, with no reverse steps.
+    #[test]
+    fn outline_indents_each_level_and_steps_type_size_modestly() {
+        let ctx = egui::Context::default();
+        let tree = outline_tree();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 900.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut actions = Vec::new();
+                render_content(ui, &(), &Host, &tree, None, &mut actions);
+            },
+        );
+        let find = |want: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| text(&s.shape, want))
+                .unwrap_or_else(|| panic!("{want:?} is rendered"))
+        };
+        let tier = find("Application Settings");
+        let section = find("General");
+        let group = find("Spacing");
+        let row = find("Startup File");
+        let help = find("A short hint.");
+
+        assert!(
+            tier.0.x < section.0.x && section.0.x < group.0.x && group.0.x < row.0.x,
+            "each outline level must indent past the one above it: tier {:?}, section {:?}, group {:?}, row {:?}",
+            tier.0.x,
+            section.0.x,
+            group.0.x,
+            row.0.x
+        );
+        assert!(
+            help.1 < row.1 && row.1 <= group.1 && group.1 < section.1 && section.1 <= tier.1,
+            "type size steps up from help to the tier with no reverse step: help {:.1}, row {:.1}, group {:.1}, section {:.1}, tier {:.1}",
+            help.1,
+            row.1,
+            group.1,
+            section.1,
+            tier.1
+        );
+        assert!(
+            section.1 / row.1 <= 1.25,
+            "the step from a row to a section heading must stay modest: {:.2}x",
+            section.1 / row.1
+        );
+    }
+
+    /// TASK-123: the left tree uses the same modest step -- a tier is only a
+    /// little larger than its sections, and stays indented above them.
+    #[test]
+    fn tree_steps_type_size_modestly_and_indents_nested_sections() {
+        let ctx = egui::Context::default();
+        let tree = outline_tree();
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(500.0, 700.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let _ = render_nav(ui, &tree, "");
+            },
+        );
+        let find = |want: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|s| text(&s.shape, want))
+                .unwrap_or_else(|| panic!("{want:?} is rendered in the tree"))
+        };
+        let tier = find("Application Settings");
+        let section = find("General");
+        assert!(
+            tier.0.x < section.0.x,
+            "the tree must indent a section under its tier: {:?} vs {:?}",
+            tier.0.x,
+            section.0.x
+        );
+        assert!(
+            tier.1 > section.1 && tier.1 / section.1 <= 1.15,
+            "the tree's tier-to-section type step must be modest: {:.1} vs {:.1}",
+            tier.1,
+            section.1
+        );
     }
 }
