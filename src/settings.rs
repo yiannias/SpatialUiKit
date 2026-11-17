@@ -700,6 +700,25 @@ fn row_unit(ui: &egui::Ui) -> f32 {
     ui.text_style_height(&egui::TextStyle::Body)
 }
 
+/// Section-body field labels sit below the section heading in the settings
+/// outline. This leaves about two body-text characters after the heading's
+/// disclosure chevron and label spacing at normal and enlarged text sizes.
+const SECTION_ROW_LABEL_INDENT: f32 = 2.6;
+
+/// A field explicitly marked `nested` refines another setting and gets one
+/// further step beyond the normal section-row indent.
+const NESTED_ROW_LABEL_INDENT: f32 = 1.1;
+
+fn field_label_indent(ui: &egui::Ui, field: &Field<impl Sized, impl Sized>) -> f32 {
+    row_unit(ui)
+        * (SECTION_ROW_LABEL_INDENT
+            + if field.nested {
+                NESTED_ROW_LABEL_INDENT
+            } else {
+                0.0
+            })
+}
+
 fn density_key() -> egui::Id {
     egui::Id::new("spatial_ui_kit_settings_density")
 }
@@ -992,7 +1011,7 @@ fn measure_column_widths<A, Ctx>(
                         .layout_no_wrap(f.label.to_string(), font_id.clone(), egui::Color32::WHITE)
                         .size()
                         .x;
-                    let w = if f.nested { w + row_unit(ui) * 1.1 } else { w };
+                    let w = w + field_label_indent(ui, f);
                     *max_w = max_w.max(w);
                 }
                 SettingsNode::Custom { .. } => {}
@@ -1221,6 +1240,7 @@ fn render_field_row<A: Clone, Ctx>(
 ) -> egui::Rect {
     let label_col = label_color(ui);
     let name_col = field.label_color.unwrap_or(label_col);
+    let label_indent = field_label_indent(ui, field);
     let mark = host.row_mark(ui.ctx(), field.id);
     let slot = mark.as_ref().map(|_| reserve_band(ui));
     let label_rect = ui
@@ -1228,7 +1248,7 @@ fn render_field_row<A: Clone, Ctx>(
             ui.scope(|ui| {
                 // Exact width, not just a minimum -- this is what the `Grid`
                 // actually measures for the column (see `measure_column_widths`).
-                ui.set_width(widths.label);
+                ui.set_width((widths.label - label_indent).max(0.0));
                 let text: egui::WidgetText = match &mark {
                     Some(m) => marked_job(
                         ui,
@@ -1249,14 +1269,11 @@ fn render_field_row<A: Clone, Ctx>(
                         ui.label(text);
                     }
                 };
-                if field.nested {
-                    ui.horizontal(|ui| {
-                        ui.add_space(row_unit(ui) * 1.1);
-                        name(ui);
-                    });
-                } else {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 0.0;
+                    ui.add_space(label_indent);
                     name(ui);
-                }
+                });
             });
         })
         .response
@@ -1602,5 +1619,84 @@ mod collapse_tests {
         frame(&ctx, vec![click(true)]);
         let open = frame(&ctx, vec![click(false)]);
         assert!(!open.contains("a"));
+    }
+}
+
+#[cfg(test)]
+mod row_indent_tests {
+    use super::*;
+
+    struct Host;
+    impl SettingsHost for Host {
+        fn browse_path(&self, _ui: &mut egui::Ui, _current: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn text_x(shape: &egui::Shape, target: &str) -> Option<f32> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == target => Some(text.pos.x),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| text_x(shape, target)),
+            _ => None,
+        }
+    }
+
+    fn heading_to_row_gap(scale: f32) -> (f32, f32) {
+        let ctx = egui::Context::default();
+        let tree = vec![SettingsNode::section(
+            "section",
+            "Drawing Aids",
+            vec![Field::toggle(
+                "grid.visible",
+                "Grid Visible",
+                |_: &()| true,
+                |_| (),
+            )],
+        )];
+        let mut body_size = 0.0;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 760.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                {
+                    let style = ui.style_mut();
+                    for font in style.text_styles.values_mut() {
+                        font.size *= scale;
+                    }
+                    style.spacing.item_spacing *= scale;
+                    style.spacing.interact_size *= scale;
+                }
+                body_size = ui.text_style_height(&egui::TextStyle::Body);
+                let mut actions = Vec::new();
+                render_content(ui, &(), &Host, &tree, Some("section"), &mut actions);
+            },
+        );
+        let heading_x = output
+            .shapes
+            .iter()
+            .find_map(|shape| text_x(&shape.shape, "Drawing Aids"))
+            .expect("section heading is rendered");
+        let row_x = output
+            .shapes
+            .iter()
+            .find_map(|shape| text_x(&shape.shape, "Grid Visible"))
+            .expect("setting row is rendered");
+        (row_x - heading_x, body_size)
+    }
+
+    #[test]
+    fn setting_rows_are_two_characters_right_of_section_headings_at_100_and_125_percent() {
+        for scale in [1.0, 1.25] {
+            let (gap, body_size) = heading_to_row_gap(scale);
+            assert!(
+                gap >= body_size,
+                "at {scale:.0}% the row label should start at least two characters after the heading; gap={gap:.1}, body={body_size:.1}"
+            );
+        }
     }
 }
