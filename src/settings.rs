@@ -827,7 +827,13 @@ fn tier_header(ui: &mut egui::Ui, label: &str, open: bool) -> (egui::Response, b
     let (resp, toggled) = collapsible_label(
         ui,
         egui::RichText::new(label)
-            .size(unit * 1.3)
+            // TASK-149: the top level is the same size as a section heading
+            // ("General"), bold -- orientation comes from the outline, not
+            // from a big type jump. `section_header` states the same size.
+            // TASK-149: the top level is the same size as a section heading
+            // ("General"), bold -- orientation comes from the outline, not
+            // from a big type jump. `section_header` states the same size.
+            .size(unit * 1.02)
             .strong()
             .color(label_color(ui)),
         open,
@@ -1025,7 +1031,9 @@ fn measure_column_widths<A, Ctx>(
     let label = match host.label_column_units() {
         // Half the pane at most, so a narrow window keeps room for controls.
         Some(units) => (units * unit).min(ui.available_width() * 0.5),
-        None => max_w + 4.0,
+        // Auto-size to the widest label, capped at half the pane too, so one
+        // very long label can never starve the control column.
+        None => (max_w + 4.0).min(ui.available_width() * 0.5),
     };
 
     let col_spacing = unit * 1.3;
@@ -1696,6 +1704,85 @@ mod row_indent_tests {
             assert!(
                 gap >= body_size,
                 "at {scale:.0}% the row label should start at least two characters after the heading; gap={gap:.1}, body={body_size:.1}"
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod heading_scale_tests {
+    use super::*;
+
+    struct Host;
+    impl SettingsHost for Host {
+        fn browse_path(&self, _ui: &mut egui::Ui, _current: &str) -> Option<String> {
+            None
+        }
+    }
+
+    fn text_height(shape: &egui::Shape, target: &str) -> Option<f32> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == target => Some(text.galley.size().y),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| text_height(shape, target)),
+            _ => None,
+        }
+    }
+
+    /// TASK-149: the top-level heading ("Application Settings") is the same
+    /// size as a section heading ("General"), and both stay bold. The old
+    /// 1.3x tier size made the top level a headline far above its sections.
+    #[test]
+    fn top_level_heading_matches_section_heading_size_at_100_and_125_percent() {
+        for scale in [1.0, 1.25] {
+            let ctx = egui::Context::default();
+            let tree = vec![SettingsNode::section(
+                "application",
+                "Application Settings",
+                vec![SettingsNode::section(
+                    "application.general",
+                    "General",
+                    vec![Field::toggle(
+                        "settings.startup",
+                        "Startup File",
+                        |_: &()| true,
+                        |_| (),
+                    )],
+                )],
+            )];
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1100.0, 900.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    {
+                        let style = ui.style_mut();
+                        for font in style.text_styles.values_mut() {
+                            font.size *= scale;
+                        }
+                        style.spacing.item_spacing *= scale;
+                        style.spacing.interact_size *= scale;
+                    }
+                    let mut actions = Vec::new();
+                    render_content(ui, &(), &Host, &tree, None, &mut actions);
+                },
+            );
+            let tier = output
+                .shapes
+                .iter()
+                .find_map(|shape| text_height(&shape.shape, "Application Settings"))
+                .expect("tier heading is rendered");
+            let section = output
+                .shapes
+                .iter()
+                .find_map(|shape| text_height(&shape.shape, "General"))
+                .expect("section heading is rendered");
+            assert!(
+                (tier - section).abs() < 0.6,
+                "at {scale:.0}% the top-level heading ({tier:.1}) must match the section heading ({section:.1})"
             );
         }
     }
