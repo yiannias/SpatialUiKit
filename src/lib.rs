@@ -19,6 +19,7 @@ pub mod motion;
 pub mod os_style;
 pub mod ribbon;
 pub mod runtime_fonts;
+pub mod search;
 pub mod settings;
 pub mod sketch;
 pub mod style_list;

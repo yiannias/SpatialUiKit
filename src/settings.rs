@@ -419,84 +419,8 @@ pub trait SettingsHost {
     }
 }
 
-/// How a search hit is drawn on the content page: a band behind the whole
-/// row, with the matched letters of the name and help text on a chip.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RowMark {
-    /// The query, already trimmed and ASCII-lowercased (see [`match_range`]).
-    pub query: String,
-    /// The match Enter has stepped to: gets an outline.
-    pub current: bool,
-    /// Scroll this row into view now (one-shot, set by the host).
-    pub scroll_to: bool,
-}
-
-/// Byte range of the first case-insensitive occurrence of `query_lower`
-/// (already ASCII-lowercased) in `text`. ASCII lowercasing keeps byte
-/// offsets, so the range indexes `text` itself. Empty queries match nothing.
-pub fn match_range(text: &str, query_lower: &str) -> Option<std::ops::Range<usize>> {
-    if query_lower.is_empty() {
-        return None;
-    }
-    let at = text.to_ascii_lowercase().find(query_lower)?;
-    Some(at..at + query_lower.len())
-}
-
-/// `text` as a layout job with the first match of `query_lower` on a chip in
-/// the strong text colour; the rest keeps `color`.
-fn marked_job(
-    ui: &egui::Ui,
-    text: &str,
-    size: f32,
-    color: egui::Color32,
-    query_lower: &str,
-) -> egui::text::LayoutJob {
-    let font = egui::FontId::proportional(size);
-    let plain = egui::TextFormat::simple(font.clone(), color);
-    let mut job = egui::text::LayoutJob::default();
-    match match_range(text, query_lower) {
-        Some(r) => {
-            let chip = egui::TextFormat {
-                background: ui.visuals().selection.bg_fill,
-                ..egui::TextFormat::simple(font, ui.visuals().strong_text_color())
-            };
-            job.append(&text[..r.start], 0.0, plain.clone());
-            job.append(&text[r.clone()], 0.0, chip);
-            job.append(&text[r.end..], 0.0, plain);
-        }
-        None => job.append(text, 0.0, plain),
-    }
-    job
-}
-
-/// Reserves a paint slot behind a row; [`paint_row_band`] fills it once the
-/// row's rect is known.
-fn reserve_band(ui: &egui::Ui) -> egui::layers::ShapeIdx {
-    ui.painter().add(egui::Shape::Noop)
-}
-
-/// The search band behind `rect` (and an outline when it is the current hit).
-fn paint_row_band(ui: &egui::Ui, slot: egui::layers::ShapeIdx, rect: egui::Rect, mark: &RowMark) {
-    let v = ui.visuals();
-    let rect = rect.expand2(egui::vec2(6.0, 2.0));
-    let mut shapes = vec![egui::Shape::rect_filled(
-        rect,
-        4.0,
-        v.selection.bg_fill.gamma_multiply(0.35),
-    )];
-    if mark.current {
-        shapes.push(egui::Shape::rect_stroke(
-            rect,
-            4.0,
-            egui::Stroke::new(1.0, v.strong_text_color()),
-            egui::StrokeKind::Inside,
-        ));
-    }
-    ui.painter().set(slot, egui::Shape::Vec(shapes));
-    if mark.scroll_to {
-        ui.scroll_to_rect(rect, Some(egui::Align::Center));
-    }
-}
+/// Compatibility re-exports. New code should use the shared search module.
+pub use crate::search::{match_range, RowMark};
 
 /// Search box for the nav pane, pinned above the tree per the sketch's "🔍
 /// Search" box. The app owns `query`'s storage (e.g. `egui::Memory`'s
@@ -521,36 +445,16 @@ pub fn render_search_sized_response(
     query: &mut String,
     height: f32,
 ) -> egui::Response {
-    // A fixed-height pill (no dependence on available height, so no feedback
-    // loop): painted by hand, with the field laid out inside it.
-    let (rect, _) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), height),
-        egui::Sense::hover(),
-    );
-    let v = ui.visuals();
-    let radius = height / 2.0;
-    ui.painter().rect_filled(rect, radius, v.extreme_bg_color);
-    ui.painter().rect_stroke(
-        rect,
-        radius,
-        v.widgets.noninteractive.bg_stroke,
-        egui::StrokeKind::Inside,
-    );
-    let weak = v.weak_text_color();
-    let mut inner = ui.new_child(
-        egui::UiBuilder::new()
-            .max_rect(rect.shrink2(egui::vec2(12.0, 0.0)))
-            .layout(egui::Layout::left_to_right(egui::Align::Center)),
-    );
-    inner.label(egui::RichText::new("\u{1f50d}").size(13.0).color(weak));
-    inner.add(
-        egui::TextEdit::singleline(query)
-            .hint_text("Search")
-            .desired_width(f32::INFINITY)
-            .margin(egui::Margin::ZERO)
-            .frame(egui::Frame::NONE)
-            .vertical_align(egui::Align::Center),
+    crate::search::render_field(
+        ui,
+        query,
+        crate::search::SearchFieldOptions {
+            hint: "Search",
+            height,
+            count: crate::search::SearchCount::Hidden,
+        },
     )
+    .text
 }
 
 /// [`render_search_sized`] with the original, taller padding-driven height.
@@ -565,27 +469,15 @@ pub fn render_search(ui: &mut egui::Ui, query: &mut String) {
     // same taller, more comfortable look without depending on available
     // height at all -- the field's size is purely intrinsic (icon + text
     // line + fixed margin), so there's nothing to feed back into.
-    egui::Frame::new()
-        .fill(ui.visuals().extreme_bg_color)
-        .stroke(ui.visuals().widgets.inactive.bg_stroke)
-        .corner_radius(15)
-        .inner_margin(egui::Margin::symmetric(12, 8))
-        .show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("\u{1f50d}")
-                        .size(13.0)
-                        .color(ui.visuals().weak_text_color()),
-                );
-                ui.add(
-                    egui::TextEdit::singleline(query)
-                        .hint_text("Search")
-                        .desired_width(f32::INFINITY)
-                        .frame(egui::Frame::NONE)
-                        .vertical_align(egui::Align::Center),
-                );
-            });
-        });
+    crate::search::render_field(
+        ui,
+        query,
+        crate::search::SearchFieldOptions {
+            hint: "Search",
+            height: ui.spacing().interact_size.y + 8.0,
+            count: crate::search::SearchCount::Hidden,
+        },
+    );
 }
 
 fn label_contains(label: &str, filter_lower: &str) -> bool {
@@ -1209,10 +1101,10 @@ fn render_section_body<A: Clone, Ctx>(
             }
             SettingsNode::Custom { label, render } => {
                 let mark = host.row_mark(ui.ctx(), label);
-                let slot = mark.as_ref().map(|_| reserve_band(ui));
+                let slot = mark.as_ref().map(|_| crate::search::reserve_row_band(ui));
                 let rect = ui.scope(|ui| render(ui, ctx, actions)).response.rect;
                 if let (Some(mark), Some(slot)) = (&mark, slot) {
-                    paint_row_band(ui, slot, rect, mark);
+                    crate::search::paint_row_band(ui, slot, rect, mark);
                 }
                 i += 1;
             }
@@ -1277,7 +1169,7 @@ fn render_field_row<A: Clone, Ctx>(
     let name_col = field.label_color.unwrap_or(label_col);
     let label_indent = field_label_indent(ui, field);
     let mark = host.row_mark(ui.ctx(), field.id);
-    let slot = mark.as_ref().map(|_| reserve_band(ui));
+    let slot = mark.as_ref().map(|_| crate::search::reserve_row_band(ui));
     let label_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
             ui.scope(|ui| {
@@ -1285,12 +1177,13 @@ fn render_field_row<A: Clone, Ctx>(
                 // actually measures for the column (see `measure_column_widths`).
                 ui.set_width((widths.label - label_indent).max(0.0));
                 let text: egui::WidgetText = match &mark {
-                    Some(m) => marked_job(
-                        ui,
+                    Some(m) => crate::search::marked_job(
                         field.label,
-                        egui::TextStyle::Body.resolve(ui.style()).size,
-                        name_col,
                         &m.query,
+                        m.current.then_some(0),
+                        egui::FontId::proportional(egui::TextStyle::Body.resolve(ui.style()).size),
+                        name_col,
+                        ui.visuals().selection.bg_fill,
                     )
                     .into(),
                     None => egui::RichText::new(field.label).color(name_col).into(),
@@ -1490,12 +1383,14 @@ fn render_field_row<A: Clone, Ctx>(
                     ui.scope(|ui| {
                         ui.set_max_width(help_width);
                         let help: egui::WidgetText = match &mark {
-                            Some(m) => marked_job(
-                                ui,
+                            Some(m) => crate::search::marked_job(
                                 text,
-                                help_font_size(ui),
-                                help_text_color(ui),
                                 &m.query,
+                                (m.current && match_range(field.label, &m.query).is_none())
+                                    .then_some(0),
+                                egui::FontId::proportional(help_font_size(ui)),
+                                help_text_color(ui),
+                                ui.visuals().selection.bg_fill,
                             )
                             .into(),
                             None => egui::RichText::new(text)
@@ -1513,7 +1408,7 @@ fn render_field_row<A: Clone, Ctx>(
 
     let row = label_rect.union(control_rect);
     if let (Some(mark), Some(slot)) = (&mark, slot) {
-        paint_row_band(ui, slot, row, mark);
+        crate::search::paint_row_band(ui, slot, row, mark);
     }
     ui.end_row();
     row
