@@ -1102,7 +1102,13 @@ fn render_section_body<A: Clone, Ctx>(
             SettingsNode::Custom { label, render } => {
                 let mark = host.row_mark(ui.ctx(), label);
                 let slot = mark.as_ref().map(|_| crate::search::reserve_row_band(ui));
-                let rect = ui.scope(|ui| render(ui, ctx, actions)).response.rect;
+                let rect = ui
+                    .scope(|ui| {
+                        crate::search::apply_row_dim(ui, mark.as_ref());
+                        render(ui, ctx, actions)
+                    })
+                    .response
+                    .rect;
                 if let (Some(mark), Some(slot)) = (&mark, slot) {
                     crate::search::paint_row_band(ui, slot, rect, mark);
                 }
@@ -1165,10 +1171,14 @@ fn render_field_row<A: Clone, Ctx>(
     widths: ColumnWidths,
     actions: &mut Vec<A>,
 ) -> egui::Rect {
-    let label_col = label_color(ui);
-    let name_col = field.label_color.unwrap_or(label_col);
-    let label_indent = field_label_indent(ui, field);
     let mark = host.row_mark(ui.ctx(), field.id);
+    let label_col = label_color(ui);
+    let name_col = if mark.as_ref().is_some_and(|mark| mark.dim) {
+        ui.visuals().weak_text_color()
+    } else {
+        field.label_color.unwrap_or(label_col)
+    };
+    let label_indent = field_label_indent(ui, field);
     let slot = mark.as_ref().map(|_| crate::search::reserve_row_band(ui));
     let label_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
@@ -1210,6 +1220,7 @@ fn render_field_row<A: Clone, Ctx>(
     let control_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
             ui.vertical(|ui| {
+                crate::search::apply_row_dim(ui, mark.as_ref());
                 // The *column* takes the remaining content-pane width; each
                 // widget below stays at `CONTROL_WIDGET_WIDTH` regardless (see
                 // `ColumnWidths::control`'s doc comment) -- only help text and a
@@ -1382,6 +1393,11 @@ fn render_field_row<A: Clone, Ctx>(
                     ui.add_space(space_unit(ui) * 0.15);
                     ui.scope(|ui| {
                         ui.set_max_width(help_width);
+                        let help_color = if mark.as_ref().is_some_and(|mark| mark.dim) {
+                            ui.visuals().weak_text_color()
+                        } else {
+                            help_text_color(ui)
+                        };
                         let help: egui::WidgetText = match &mark {
                             Some(m) => crate::search::marked_job(
                                 text,
@@ -1389,13 +1405,13 @@ fn render_field_row<A: Clone, Ctx>(
                                 (m.current && match_range(field.label, &m.query).is_none())
                                     .then_some(0),
                                 egui::FontId::proportional(help_font_size(ui)),
-                                help_text_color(ui),
+                                help_color,
                                 ui.visuals().selection.bg_fill,
                             )
                             .into(),
                             None => egui::RichText::new(text)
                                 .size(help_font_size(ui))
-                                .color(help_text_color(ui))
+                                .color(help_color)
                                 .into(),
                         };
                         ui.add(egui::Label::new(help).wrap());

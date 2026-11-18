@@ -315,6 +315,14 @@ pub struct RowMark {
     pub dim: bool,
 }
 
+/// Reduce text emphasis for a row outside the active query without disabling it.
+pub(crate) fn apply_row_dim(ui: &mut Ui, mark: Option<&RowMark>) {
+    if mark.is_some_and(|mark| mark.dim) {
+        let color = ui.visuals().weak_text_color();
+        ui.visuals_mut().override_text_color = Some(color);
+    }
+}
+
 /// Reserve a painter slot so the row's search treatment can be drawn behind it.
 pub fn reserve_row_band(ui: &Ui) -> egui::layers::ShapeIdx {
     ui.painter().add(egui::Shape::Noop)
@@ -408,5 +416,34 @@ mod tests {
             SearchCount::Results(0).label().as_deref(),
             Some("No matches")
         );
+    }
+
+    #[test]
+    fn dimming_a_nonmatch_changes_text_emphasis_but_keeps_controls_enabled() {
+        let ctx = egui::Context::default();
+        let mark = super::RowMark {
+            query: String::new(),
+            current: false,
+            scroll_to: false,
+            hit: false,
+            dim: true,
+        };
+        let mut enabled = false;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 120.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let expected = ui.visuals().weak_text_color();
+                super::apply_row_dim(ui, Some(&mark));
+                assert_eq!(ui.visuals().override_text_color, Some(expected));
+                enabled = ui.is_enabled();
+            },
+        );
+        assert!(enabled);
     }
 }
