@@ -206,6 +206,69 @@ pub trait MenuHost {
     ) -> egui::Response;
 }
 
+const MENU_BAR_USED_ID: &str = "spatial_ui_kit_menu_bar_used_until_leave";
+const MENU_BAR_NOTICE_ID: &str = "spatial_ui_kit_menu_bar_hide_notice_sent";
+const MENU_BAR_REVEAL_EDGE: f32 = 4.0;
+
+/// Whether a menu bar should be drawn and whether this is the first frame it
+/// became hidden in this egui session. Hosts that combine the menu with
+/// other chrome can use the same policy without adopting [`render_menu_bar`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MenuBarVisibility {
+    pub visible: bool,
+    pub first_hidden_notice: bool,
+}
+
+/// Shared hide/reveal policy for menu bars. Full-screen status comes from the
+/// native viewport, so this does not invent an application full-screen mode.
+/// The menu returns when Alt is held or the pointer reaches the top edge; a
+/// selected menu item hides it until the pointer leaves that edge.
+pub fn menu_bar_visibility(ctx: &egui::Context, hide_in_full_screen: bool) -> MenuBarVisibility {
+    let fullscreen = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));
+    if !fullscreen || !hide_in_full_screen {
+        ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_BAR_USED_ID), false));
+        return MenuBarVisibility {
+            visible: true,
+            first_hidden_notice: false,
+        };
+    }
+
+    let (edge_top, alt_down) = ctx.input(|i| {
+        let pointer = i.pointer.hover_pos();
+        let top = i.viewport().inner_rect.map_or(0.0, |rect| rect.top());
+        (
+            pointer.is_some_and(|p| p.y <= top + MENU_BAR_REVEAL_EDGE),
+            i.modifiers.alt,
+        )
+    });
+    let popup_open = egui::Popup::is_any_open(ctx);
+    let used_id = egui::Id::new(MENU_BAR_USED_ID);
+    let used: bool = ctx.data(|d| d.get_temp(used_id)).unwrap_or(false);
+    let used = if !edge_top && !alt_down && !popup_open {
+        false
+    } else {
+        used
+    };
+    ctx.data_mut(|d| d.insert_temp(used_id, used));
+    let visible = !used && (edge_top || alt_down) || popup_open;
+    let notice_id = egui::Id::new(MENU_BAR_NOTICE_ID);
+    let notified: bool = ctx.data(|d| d.get_temp(notice_id)).unwrap_or(false);
+    let first_hidden_notice = !visible && !notified;
+    if first_hidden_notice {
+        ctx.data_mut(|d| d.insert_temp(notice_id, true));
+    }
+    MenuBarVisibility {
+        visible,
+        first_hidden_notice,
+    }
+}
+
+/// Call after a menu selection to hide a revealed bar until the pointer
+/// leaves the top edge (or the user reveals it again with Alt).
+pub fn note_menu_bar_item_used(ctx: &egui::Context) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::new(MENU_BAR_USED_ID), true));
+}
+
 fn colorize(label: &str, color: &MenuColor) -> egui::RichText {
     match color {
         MenuColor::Default => egui::RichText::new(label),
@@ -331,4 +394,119 @@ pub fn render_menu_bar<A: Clone, Ctx>(
     });
 
     actions
+}
+
+/// Render [`render_menu_bar`] with the shared full-screen hide/reveal policy.
+/// Existing callers keep the old always-visible behavior until they opt in.
+pub fn render_menu_bar_with_visibility<A: Clone, Ctx>(
+    ui: &mut egui::Ui,
+    tree: &[MenuNode<A, Ctx>],
+    ctx: &Ctx,
+    host: &impl MenuHost,
+    hide_in_full_screen: bool,
+) -> (MenuBarVisibility, Vec<A>) {
+    let visibility = menu_bar_visibility(ui.ctx(), hide_in_full_screen);
+    if !visibility.visible {
+        return (visibility, Vec::new());
+    }
+    let actions = render_menu_bar(ui, tree, ctx, host);
+    if !actions.is_empty() {
+        note_menu_bar_item_used(ui.ctx());
+    }
+    (visibility, actions)
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+    use egui::{Event, Modifiers, Pos2, Rect, Vec2, ViewportId};
+
+    fn frame(
+        ctx: &egui::Context,
+        pointer: Option<Pos2>,
+        alt_down: bool,
+        mut draw: impl FnMut(&egui::Context),
+    ) -> MenuBarVisibility {
+        let mut input = egui::RawInput::default();
+        let viewport = input.viewports.get_mut(&ViewportId::ROOT).unwrap();
+        viewport.fullscreen = Some(true);
+        viewport.inner_rect = Some(Rect::from_min_size(Pos2::ZERO, Vec2::new(800.0, 600.0)));
+        input.screen_rect = viewport.inner_rect;
+        input.modifiers = Modifiers {
+            alt: alt_down,
+            ..Default::default()
+        };
+        if let Some(pos) = pointer {
+            input.events.push(Event::PointerMoved(pos));
+        } else {
+            input.events.push(Event::PointerGone);
+        }
+        let mut visibility = MenuBarVisibility {
+            visible: false,
+            first_hidden_notice: false,
+        };
+        let _ = ctx.run_ui(input, |ui| {
+            visibility = menu_bar_visibility(ui.ctx(), true);
+            draw(ui.ctx());
+        });
+        visibility
+    }
+
+    #[test]
+    fn menu_bar_hides_once_reveals_and_hides_after_selection_until_leave() {
+        let ctx = egui::Context::default();
+        let first = frame(&ctx, Some(Pos2::new(100.0, 20.0)), false, |_| {});
+        assert!(!first.visible);
+        assert!(first.first_hidden_notice);
+
+        let revealed = frame(&ctx, Some(Pos2::new(100.0, 1.0)), false, |_| {});
+        assert!(revealed.visible);
+        assert!(!revealed.first_hidden_notice);
+
+        let used = frame(
+            &ctx,
+            Some(Pos2::new(100.0, 1.0)),
+            false,
+            note_menu_bar_item_used,
+        );
+        assert!(used.visible);
+        let hidden = frame(&ctx, Some(Pos2::new(100.0, 20.0)), false, |_| {});
+        assert!(!hidden.visible);
+
+        let alt_revealed = frame(&ctx, Some(Pos2::new(100.0, 20.0)), true, |_| {});
+        assert!(alt_revealed.visible);
+    }
+
+    #[test]
+    fn menu_bar_is_always_visible_when_setting_is_off_or_view_is_not_fullscreen() {
+        let ctx = egui::Context::default();
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&ViewportId::ROOT)
+            .unwrap()
+            .fullscreen = Some(false);
+        let mut state = MenuBarVisibility {
+            visible: false,
+            first_hidden_notice: false,
+        };
+        let _ = ctx.run_ui(input, |ui| state = menu_bar_visibility(ui.ctx(), true));
+        assert_eq!(
+            state,
+            MenuBarVisibility {
+                visible: true,
+                first_hidden_notice: false,
+            }
+        );
+
+        let mut input = egui::RawInput::default();
+        input
+            .viewports
+            .get_mut(&ViewportId::ROOT)
+            .unwrap()
+            .fullscreen = Some(true);
+        let _ = ctx.run_ui(input, |ui| {
+            assert!(menu_bar_visibility(ui.ctx(), false).visible)
+        });
+    }
 }
