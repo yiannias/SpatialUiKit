@@ -35,6 +35,7 @@ enum RowKind {
     Branch,
     Group,
     Item,
+    Hint,
 }
 
 struct ContextAction {
@@ -81,6 +82,21 @@ impl<K> NavigationNode<K> {
             key: Some(key),
             enabled,
             selected,
+            context_actions: Vec::new(),
+            children: Vec::new(),
+        }
+    }
+
+    /// Builds a quiet informational row, for example a branch's empty-search
+    /// message. It cannot be selected and has no children.
+    pub fn hint(label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            count: None,
+            kind: RowKind::Hint,
+            key: None,
+            enabled: false,
+            selected: false,
             context_actions: Vec::new(),
             children: Vec::new(),
         }
@@ -149,6 +165,9 @@ fn render_nodes<K: Clone>(
                 if response.clicked() && !node.selected {
                     *event = Some(NavigationEvent::Select(key.clone()));
                 }
+            }
+            RowKind::Hint => {
+                ui.weak(&node.label);
             }
         });
     }
