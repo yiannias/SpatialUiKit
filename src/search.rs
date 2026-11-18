@@ -69,6 +69,42 @@ pub struct SearchFieldResponse {
     pub action: Option<SearchAction>,
     /// Whether the query changed or was cleared.
     pub changed: bool,
+    /// Zero-based current result index for filtered-list searches.
+    pub current_index: Option<usize>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct ResultCursor {
+    query: String,
+    current: Option<usize>,
+}
+
+impl ResultCursor {
+    fn update(&mut self, query: &str, total: usize, action: Option<SearchAction>) -> Option<usize> {
+        if action == Some(SearchAction::Clear) || query.is_empty() || total == 0 {
+            self.query = query.to_owned();
+            self.current = None;
+            return None;
+        }
+        if self.query != query {
+            self.query = query.to_owned();
+            self.current = Some(0);
+        } else if self.current.is_some_and(|index| index >= total) {
+            self.current = Some(total - 1);
+        }
+        self.current = match (action, self.current) {
+            (Some(SearchAction::Next), current) => Some(match current {
+                Some(index) => (index + 1) % total,
+                None => 0,
+            }),
+            (Some(SearchAction::Previous), current) => Some(match current {
+                Some(index) => (index + total - 1) % total,
+                None => total - 1,
+            }),
+            _ => self.current,
+        };
+        self.current
+    }
 }
 
 /// Render the common pill search field, counter, step buttons, and clear control.
@@ -219,10 +255,26 @@ pub fn render_field(
     } else if action.is_some() {
         text.request_focus();
     }
+    let current_index = match options.count {
+        SearchCount::Hidden => None,
+        SearchCount::Hits { current, .. } => current,
+        SearchCount::Results(total) => {
+            let cursor_id = text.id.with("spatial_ui_kit_search_result_cursor");
+            let mut cursor = ui
+                .ctx()
+                .data(|data| data.get_temp::<ResultCursor>(cursor_id))
+                .unwrap_or_default();
+            let current = cursor.update(query, total, action);
+            ui.ctx()
+                .data_mut(|data| data.insert_temp(cursor_id, cursor));
+            current
+        }
+    };
     SearchFieldResponse {
         text,
         action,
         changed,
+        current_index,
     }
 }
 
@@ -367,7 +419,7 @@ pub fn paint_row_band(ui: &Ui, slot: egui::layers::ShapeIdx, rect: egui::Rect, m
 
 #[cfg(test)]
 mod tests {
-    use super::{marked_job, match_ranges, SearchCount};
+    use super::{marked_job, match_ranges, ResultCursor, SearchAction, SearchCount};
     use egui::{Color32, FontId};
 
     #[test]
@@ -416,6 +468,23 @@ mod tests {
             SearchCount::Results(0).label().as_deref(),
             Some("No matches")
         );
+    }
+
+    #[test]
+    fn filtered_result_cursor_resets_and_wraps() {
+        let mut cursor = ResultCursor::default();
+        assert_eq!(cursor.update("snap", 3, None), Some(0));
+        assert_eq!(cursor.update("snap", 3, Some(SearchAction::Next)), Some(1));
+        assert_eq!(
+            cursor.update("snap", 3, Some(SearchAction::Previous)),
+            Some(0)
+        );
+        assert_eq!(
+            cursor.update("snap", 3, Some(SearchAction::Previous)),
+            Some(2)
+        );
+        assert_eq!(cursor.update("none", 0, None), None);
+        assert_eq!(cursor.update("snap", 3, None), Some(0));
     }
 
     #[test]
