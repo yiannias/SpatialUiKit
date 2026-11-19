@@ -49,6 +49,66 @@ struct ChromeState {
     /// be dragged again afterward -- see `ThemedWindow::show`'s "restore"
     /// handling.
     restore_pos: Option<egui::Pos2>,
+    /// The window's rectangle as last drawn, for keyboard resize.
+    last_rect: Option<egui::Rect>,
+}
+
+/// How far one keyboard resize step grows or shrinks a window (points).
+pub const KEY_RESIZE_STEP: f32 = 16.0;
+
+/// The size after pressing the resize keys: `size` plus `dx`/`dy` steps,
+/// kept within `min` and `max`.
+pub fn resized_by_keys(
+    size: egui::Vec2,
+    dx: i32,
+    dy: i32,
+    min: Option<egui::Vec2>,
+    max: Option<egui::Vec2>,
+) -> egui::Vec2 {
+    let mut next = size + egui::vec2(dx as f32, dy as f32) * KEY_RESIZE_STEP;
+    if let Some(min) = min {
+        next = next.max(min);
+    }
+    if let Some(max) = max {
+        next = next.min(max);
+    }
+    next
+}
+
+/// Alt+Shift+Arrow while focus is inside `rect`: the window's new size, or
+/// `None` when no resize key was pressed. Consumes the keys.
+fn key_resize(
+    ctx: &egui::Context,
+    rect: egui::Rect,
+    min: Option<egui::Vec2>,
+    max: Option<egui::Vec2>,
+) -> Option<egui::Vec2> {
+    let focus_inside = ctx
+        .memory(|m| m.focused())
+        .and_then(|id| ctx.read_response(id))
+        .is_some_and(|r| rect.contains(r.rect.center()));
+    if !focus_inside {
+        return None;
+    }
+    let (dx, dy) = ctx.input_mut(|i| {
+        let m = egui::Modifiers::ALT | egui::Modifiers::SHIFT;
+        let mut dx = 0;
+        let mut dy = 0;
+        if i.consume_key(m, egui::Key::ArrowRight) {
+            dx += 1;
+        }
+        if i.consume_key(m, egui::Key::ArrowLeft) {
+            dx -= 1;
+        }
+        if i.consume_key(m, egui::Key::ArrowDown) {
+            dy += 1;
+        }
+        if i.consume_key(m, egui::Key::ArrowUp) {
+            dy -= 1;
+        }
+        (dx, dy)
+    });
+    (dx != 0 || dy != 0).then(|| resized_by_keys(rect.size(), dx, dy, min, max))
 }
 
 /// Builder for a themed, title-bar-less `egui::Window`. Mirrors
@@ -63,6 +123,8 @@ pub struct ThemedWindow<'a> {
     default_pos: Option<egui::Pos2>,
     fixed_size: Option<egui::Vec2>,
     resizable: bool,
+    min_size: Option<egui::Vec2>,
+    max_size: Option<egui::Vec2>,
     minimizable: bool,
     maximizable: bool,
     headerless: bool,
@@ -95,6 +157,8 @@ impl<'a> ThemedWindow<'a> {
             default_pos: None,
             fixed_size: None,
             resizable: true,
+            min_size: None,
+            max_size: None,
             minimizable: false,
             maximizable: false,
             headerless: false,
@@ -139,6 +203,18 @@ impl<'a> ThemedWindow<'a> {
 
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// The smallest size a resizable window can be dragged (or keyed) to.
+    pub fn min_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.min_size = Some(size.into());
+        self
+    }
+
+    /// The largest size a resizable window can be dragged (or keyed) to.
+    pub fn max_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.max_size = Some(size.into());
         self
     }
 
@@ -255,6 +331,20 @@ impl<'a> ThemedWindow<'a> {
             .resizable(self.resizable && !state.maximized && !state.minimized)
             .movable(!self.headerless)
             .frame(frame);
+        if let Some(min) = self.min_size {
+            window = window.min_size(min);
+        }
+        if let Some(max) = self.max_size {
+            window = window.max_size(max);
+        }
+        // Keyboard resize (Alt+Shift+Arrow with focus inside the window).
+        let keyboard_size = if self.resizable && !state.maximized && !state.minimized {
+            state
+                .last_rect
+                .and_then(|rect| key_resize(ctx, rect, self.min_size, self.max_size))
+        } else {
+            None
+        };
 
         if state.maximized {
             let screen = ctx.content_rect();
@@ -273,9 +363,13 @@ impl<'a> ThemedWindow<'a> {
             }
         }
 
+        if let Some(size) = keyboard_size {
+            window = window.fixed_size(size);
+        }
         let response = window.show(ctx, |ui| {
             self.paint_chrome(ui, ctx, open, &mut state, &chrome_colors, add_contents);
         });
+        state.last_rect = response.as_ref().map(|r| r.response.rect);
 
         ctx.data_mut(|d| d.insert_temp(state_key, state));
 
@@ -856,5 +950,91 @@ mod modal_tests {
         });
         let stored: Option<SpringPresence> = ctx.data(|d| d.get_temp(id.with("sheet_presence")));
         assert!(stored.is_none());
+    }
+}
+
+#[cfg(test)]
+mod resize_tests {
+    use super::*;
+
+    #[test]
+    fn key_steps_stay_inside_min_and_max() {
+        let size = egui::vec2(200.0, 150.0);
+        let min = Some(egui::vec2(180.0, 100.0));
+        let max = Some(egui::vec2(230.0, 400.0));
+        assert_eq!(
+            resized_by_keys(size, 1, 1, min, max),
+            egui::vec2(216.0, 166.0)
+        );
+        assert_eq!(
+            resized_by_keys(size, -3, -4, min, max),
+            egui::vec2(180.0, 100.0),
+            "stops at the minimum"
+        );
+        assert_eq!(
+            resized_by_keys(size, 5, 0, min, max),
+            egui::vec2(230.0, 150.0),
+            "stops at the maximum"
+        );
+    }
+
+    /// Alt+Shift+Right with focus inside the window widens it by one step, and
+    /// the new width sticks on the frames after.
+    #[test]
+    fn alt_shift_arrow_resizes_a_focused_window() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let frame = |t: f64, events: Vec<egui::Event>, mods: egui::Modifiers| -> f32 {
+            let mut width = 0.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    time: Some(t),
+                    modifiers: mods,
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut open = true;
+                    let r = ThemedWindow::new("resize_test", "Test", &palette)
+                        .min_size([120.0, 80.0])
+                        .max_size([600.0, 400.0])
+                        .default_pos([50.0, 50.0])
+                        .show(ui.ctx(), &mut open, |ui| {
+                            let edit = ui.text_edit_singleline(&mut String::new());
+                            edit.request_focus();
+                        });
+                    width = r.map(|r| r.rect.width()).unwrap_or(0.0);
+                },
+            );
+            width
+        };
+        let mut before = 0.0;
+        for t in 1..4 {
+            before = frame(t as f64, vec![], egui::Modifiers::NONE);
+        }
+        let mods = egui::Modifiers::ALT | egui::Modifiers::SHIFT;
+        frame(
+            4.0,
+            vec![egui::Event::Key {
+                key: egui::Key::ArrowRight,
+                physical_key: Some(egui::Key::ArrowRight),
+                pressed: true,
+                repeat: false,
+                modifiers: mods,
+            }],
+            mods,
+        );
+        let mut after = 0.0;
+        for t in 5..8 {
+            after = frame(t as f64, vec![], egui::Modifiers::NONE);
+        }
+        assert!(
+            (after - before - KEY_RESIZE_STEP).abs() < 1.0,
+            "width {before} -> {after}"
+        );
     }
 }
