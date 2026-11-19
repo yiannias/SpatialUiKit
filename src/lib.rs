@@ -20,6 +20,7 @@ pub mod motion;
 pub mod navigation;
 pub mod os_style;
 pub mod popup;
+pub mod reorder;
 pub mod ribbon;
 pub mod runtime_fonts;
 pub mod search;
