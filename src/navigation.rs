@@ -118,14 +118,57 @@ pub fn render_tree<K: Clone>(
     nodes: &[NavigationNode<K>],
 ) -> Option<NavigationEvent<K>> {
     let mut event = None;
-    render_nodes(ui, nodes, &mut event);
+    let mut rows = Vec::new();
+    render_nodes(ui, nodes, &mut event, &mut rows);
+    // Arrow keys (TASK-168 row 1): with one of the tree's rows focused,
+    // Up / Down / PageUp / PageDown / Home / End move the selection through
+    // the enabled item rows, and focus follows it.
+    if event.is_none() && rows.iter().any(|row| row.focused) {
+        let keys = crate::list_nav::consume_keys(ui);
+        if keys.any() {
+            let nav: Vec<usize> = (0..rows.len()).filter(|&i| rows[i].enabled).collect();
+            let current = rows
+                .iter()
+                .position(|row| row.focused)
+                .or_else(|| rows.iter().position(|row| row.selected));
+            let page = nav.len().min(8) as isize;
+            let next = crate::list_nav::apply(&nav, current, keys, page);
+            if let Some(next) = next.filter(|next| Some(*next) != current) {
+                ui.memory_mut(|m| m.request_focus(rows[next].id));
+                if !rows[next].selected {
+                    event = Some(NavigationEvent::Select(rows[next].key.clone()));
+                }
+            }
+        }
+    }
+    // egui itself moves focus between rows on the arrow keys; the selection
+    // follows whichever row has focus.
+    if event.is_none() {
+        if let Some(row) = rows
+            .iter()
+            .find(|row| row.focused && !row.selected && row.enabled)
+        {
+            event = Some(NavigationEvent::Select(row.key.clone()));
+        }
+    }
     event
+}
+
+/// What the tree remembers about one item row while drawing, for keyboard
+/// navigation.
+struct ItemRow<K> {
+    key: K,
+    id: egui::Id,
+    enabled: bool,
+    selected: bool,
+    focused: bool,
 }
 
 fn render_nodes<K: Clone>(
     ui: &mut egui::Ui,
     nodes: &[NavigationNode<K>],
     event: &mut Option<NavigationEvent<K>>,
+    rows: &mut Vec<ItemRow<K>>,
 ) {
     for (index, node) in nodes.iter().enumerate() {
         ui.push_id(index, |ui| match node.kind {
@@ -138,7 +181,9 @@ fn render_nodes<K: Clone>(
                     _ => egui::RichText::new(node.label.clone()),
                 };
                 ui.label(label);
-                ui.indent(&node.label, |ui| render_nodes(ui, &node.children, event));
+                ui.indent(&node.label, |ui| {
+                    render_nodes(ui, &node.children, event, rows)
+                });
             }
             RowKind::Item => {
                 let Some(key) = node.key.as_ref() else {
@@ -148,6 +193,13 @@ fn render_nodes<K: Clone>(
                     node.enabled,
                     egui::Button::selectable(node.selected, &node.label).frame_when_inactive(false),
                 );
+                rows.push(ItemRow {
+                    key: key.clone(),
+                    id: response.id,
+                    enabled: node.enabled,
+                    selected: node.selected,
+                    focused: response.has_focus(),
+                });
                 response.context_menu(|ui| {
                     for action in &node.context_actions {
                         if ui
@@ -193,5 +245,73 @@ mod tests {
         let mut event = None;
         let _ = ctx.run_ui(Default::default(), |ui| event = render_tree(ui, &tree));
         assert_eq!(event, None);
+    }
+
+    fn run(
+        ctx: &egui::Context,
+        time: f64,
+        events: Vec<egui::Event>,
+        selected: usize,
+    ) -> (Option<NavigationEvent<usize>>, Vec<egui::Rect>) {
+        let tree: Vec<NavigationNode<usize>> = (0..4)
+            .map(|i| NavigationNode::item(i, format!("Row {i}"), i == selected, i != 2))
+            .collect();
+        let mut event = None;
+        let mut rects = Vec::new();
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(300.0, 300.0),
+                )),
+                time: Some(time),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                event = render_tree(ui, &tree);
+                rects = (0..4)
+                    .map(|i| {
+                        ui.min_rect()
+                            .with_min_y(ui.min_rect().top() + i as f32 * 24.0)
+                    })
+                    .collect();
+            },
+        );
+        (event, rects)
+    }
+
+    fn key(key: egui::Key) -> Vec<egui::Event> {
+        vec![egui::Event::Key {
+            key,
+            physical_key: Some(key),
+            pressed: true,
+            repeat: false,
+            modifiers: egui::Modifiers::NONE,
+        }]
+    }
+
+    /// With a row focused, Down/Up/Home/End move the selection through the
+    /// enabled rows (the disabled row is skipped), and keys do nothing while
+    /// no row of the tree has focus.
+    #[test]
+    fn arrow_keys_move_the_selection_through_enabled_rows() {
+        let ctx = egui::Context::default();
+        // No row focused yet: Down does nothing.
+        let (event, _) = run(&ctx, 1.0, key(egui::Key::ArrowDown), 0);
+        assert_eq!(event, None, "keys are ignored until a row has focus");
+        // Tab focuses the first row.
+        let (_, _) = run(&ctx, 2.0, key(egui::Key::Tab), 0);
+        let (_, _) = run(&ctx, 2.5, vec![], 0);
+        let (event, _) = run(&ctx, 3.0, key(egui::Key::ArrowDown), 0);
+        assert_eq!(event, Some(NavigationEvent::Select(1)));
+        let (_, _) = run(&ctx, 3.5, vec![], 1);
+        // Down again from row 1 skips the disabled row 2 and lands on 3.
+        let (event, _) = run(&ctx, 4.0, key(egui::Key::ArrowDown), 1);
+        assert_eq!(event, Some(NavigationEvent::Select(3)));
+        let (_, _) = run(&ctx, 4.5, vec![], 3);
+        // End and Home reach the ends.
+        let (event, _) = run(&ctx, 5.0, key(egui::Key::Home), 3);
+        assert_eq!(event, Some(NavigationEvent::Select(0)));
     }
 }
