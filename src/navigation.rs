@@ -196,6 +196,46 @@ struct ItemRow<K> {
     label: String,
 }
 
+/// The chevron-and-label heading of a branch or group. Returns whether the
+/// user asked to toggle it.
+fn disclosure_row(ui: &mut egui::Ui, label: egui::RichText, open: bool) -> bool {
+    ui.horizontal(|ui| {
+        let side = ui.spacing().interact_size.y;
+        let (rect, chevron) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+        let size = side * 0.22;
+        let c = rect.center();
+        let points = if open {
+            [
+                c + egui::vec2(-size, -size * 0.5),
+                c + egui::vec2(0.0, size * 0.5),
+                c + egui::vec2(size, -size * 0.5),
+            ]
+        } else {
+            [
+                c + egui::vec2(-size * 0.5, -size),
+                c + egui::vec2(size * 0.5, 0.0),
+                c + egui::vec2(-size * 0.5, size),
+            ]
+        };
+        ui.painter().add(egui::Shape::line(
+            points.to_vec(),
+            egui::Stroke::new(1.5, ui.visuals().weak_text_color()),
+        ));
+        let text = label.text().to_owned();
+        let name = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+        chevron.widget_info(|| {
+            egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, text.clone())
+        });
+        let mut toggled = chevron.clicked() || name.clicked();
+        if chevron.has_focus() {
+            let key = |k| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+            toggled |= (!open && key(egui::Key::ArrowRight)) || (open && key(egui::Key::ArrowLeft));
+        }
+        toggled
+    })
+    .inner
+}
+
 fn render_nodes<K: Clone>(
     ui: &mut egui::Ui,
     nodes: &[NavigationNode<K>],
@@ -212,10 +252,22 @@ fn render_nodes<K: Clone>(
                     (_, Some(count)) => egui::RichText::new(format!("{}  ({count})", node.label)),
                     _ => egui::RichText::new(node.label.clone()),
                 };
-                ui.label(label);
-                ui.indent(&node.label, |ui| {
-                    render_nodes(ui, &node.children, event, rows)
-                });
+                // A disclosure row: chevron + label. Click, Enter or Space
+                // toggles; Left folds and Right opens while it has focus.
+                let open_id = ui.id().with("sdb_nav_open");
+                let mut open = ui
+                    .memory(|m| m.data.get_temp::<bool>(open_id))
+                    .unwrap_or(true);
+                let toggled = disclosure_row(ui, label, open);
+                if toggled {
+                    open = !open;
+                    ui.memory_mut(|m| m.data.insert_temp(open_id, open));
+                }
+                if open {
+                    ui.indent(&node.label, |ui| {
+                        render_nodes(ui, &node.children, event, rows)
+                    });
+                }
             }
             RowKind::Item => {
                 let Some(key) = node.key.as_ref() else {
@@ -381,6 +433,49 @@ mod tests {
         assert_eq!(
             frame(1.6, vec![egui::Event::Text("c".into())], 0),
             Some(NavigationEvent::Select(3))
+        );
+    }
+
+    /// A branch folds and opens: with its heading focused, Left hides the rows
+    /// under it (the tree gets shorter) and Right shows them again.
+    #[test]
+    fn a_branch_folds_and_opens() {
+        let ctx = egui::Context::default();
+        let tree = vec![NavigationNode::branch(
+            "Marks",
+            1,
+            vec![NavigationNode::item(1, "Closed arrow", false, true)],
+        )];
+        let frame = |time: f64, events: Vec<egui::Event>| -> f32 {
+            let mut height = 0.0;
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 300.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    let _ = render_tree(ui, &tree);
+                    height = ui.min_rect().height();
+                },
+            );
+            height
+        };
+        let open = frame(1.0, vec![]);
+        frame(2.0, key(egui::Key::Tab));
+        frame(3.0, vec![]);
+        frame(4.0, key(egui::Key::ArrowLeft));
+        let folded = frame(5.0, vec![]);
+        assert!(folded < open, "folded {folded} < open {open}");
+        frame(6.0, key(egui::Key::ArrowRight));
+        let reopened = frame(7.0, vec![]);
+        assert!(
+            (reopened - open).abs() < 1.0,
+            "reopened {reopened} vs {open}"
         );
     }
 }
