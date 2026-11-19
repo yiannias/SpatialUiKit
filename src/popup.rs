@@ -82,6 +82,22 @@ pub fn dismissal(ctx: &Context, key: Id, rect: Rect) -> Option<CloseReason> {
     outside.then_some(CloseReason::OutsideClick)
 }
 
+/// For a dialog or window that manages its own dismissal: call every frame
+/// with whether it is open. When it opens, the focused widget is remembered;
+/// when it closes, focus goes back to it. (A popup that also wants Escape
+/// and outside-click handling uses [`dismissal`] + [`finish`] instead.)
+pub fn restore_focus(ctx: &Context, key: Id, open: bool) {
+    if open {
+        let id = state_id(key);
+        if ctx.memory(|m| m.data.get_temp::<PopupState>(id)).is_none() {
+            let previous_focus = ctx.memory(|m| m.focused());
+            ctx.memory_mut(|m| m.data.insert_temp(id, PopupState { previous_focus }));
+        }
+    } else {
+        finish(ctx, key);
+    }
+}
+
 /// Call when the popup has closed (or is not open): forgets its state so the
 /// next opening gets its first-frame guard again, and gives focus back to the
 /// widget that had it when the popup opened. Safe to call every frame while
@@ -230,5 +246,30 @@ mod tests {
             reason = dismissal(ctx, Id::new(KEY), rect());
         });
         assert_eq!(reason, None);
+    }
+
+    /// A dialog that dismisses itself still gets focus back on close.
+    #[test]
+    fn restore_focus_returns_focus_when_the_dialog_closes() {
+        let ctx = Context::default();
+        let trigger = Id::new("trigger");
+        frame(&ctx, 1.0, vec![], |ctx| {
+            ctx.memory_mut(|m| m.request_focus(trigger));
+        });
+        frame(&ctx, 2.0, vec![], |ctx| {
+            restore_focus(ctx, Id::new(KEY), true);
+            ctx.memory_mut(|m| m.request_focus(Id::new("inside")));
+        });
+        frame(&ctx, 3.0, vec![], |ctx| {
+            restore_focus(ctx, Id::new(KEY), true);
+        });
+        frame(&ctx, 4.0, vec![], |ctx| {
+            restore_focus(ctx, Id::new(KEY), false);
+        });
+        let mut focused = None;
+        frame(&ctx, 5.0, vec![], |ctx| {
+            focused = ctx.memory(|m| m.focused());
+        });
+        assert_eq!(focused, Some(trigger));
     }
 }
