@@ -366,20 +366,6 @@ pub fn type_ahead(texts: &[&str], from: Option<usize>, typed: char) -> Option<us
     })
 }
 
-/// Moves a highlight by `delta` in a top-to-bottom list of option indices,
-/// clamped to the ends. With no highlight, forward lands on the first entry
-/// and backward on the last.
-fn step_list(nav: &[usize], cursor: Option<usize>, delta: isize) -> Option<usize> {
-    if nav.is_empty() {
-        return None;
-    }
-    match cursor.and_then(|c| nav.iter().position(|&i| i == c)) {
-        Some(p) => Some(nav[(p as isize + delta).clamp(0, nav.len() as isize - 1) as usize]),
-        None if delta >= 0 => Some(nav[0]),
-        None => Some(nav[nav.len() - 1]),
-    }
-}
-
 #[derive(Clone, Default)]
 struct State {
     open: bool,
@@ -954,10 +940,10 @@ impl<'a> Dropdown<'a> {
             let before = st.cursor;
             if list_mode {
                 if down_k {
-                    st.cursor = step_list(&nav, st.cursor, 1);
+                    st.cursor = crate::list_nav::step(&nav, st.cursor, 1);
                 }
                 if up_k {
-                    st.cursor = step_list(&nav, st.cursor, -1);
+                    st.cursor = crate::list_nav::step(&nav, st.cursor, -1);
                 }
                 if home_k {
                     st.cursor = nav.first().copied();

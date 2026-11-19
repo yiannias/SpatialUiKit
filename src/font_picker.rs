@@ -209,15 +209,7 @@ fn step(rows: &[Row], from: Option<usize>, delta: isize) -> Option<usize> {
     let choices: Vec<usize> = (0..rows.len())
         .filter(|&i| matches!(rows[i], Row::Choice(_)))
         .collect();
-    if choices.is_empty() {
-        return None;
-    }
-    let pos = match from.and_then(|f| choices.iter().position(|&c| c == f)) {
-        Some(p) => (p as isize + delta).clamp(0, choices.len() as isize - 1) as usize,
-        None if delta >= 0 => 0,
-        None => choices.len() - 1,
-    };
-    Some(choices[pos])
+    crate::list_nav::step(&choices, from, delta)
 }
 
 /// The largest font size, at most `max`, at which `text` drawn in `family`
