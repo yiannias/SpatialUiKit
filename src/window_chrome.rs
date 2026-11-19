@@ -123,6 +123,7 @@ pub struct ThemedWindow<'a> {
     default_pos: Option<egui::Pos2>,
     fixed_size: Option<egui::Vec2>,
     resizable: bool,
+    default_size: Option<egui::Vec2>,
     min_size: Option<egui::Vec2>,
     max_size: Option<egui::Vec2>,
     minimizable: bool,
@@ -157,6 +158,7 @@ impl<'a> ThemedWindow<'a> {
             default_pos: None,
             fixed_size: None,
             resizable: true,
+            default_size: None,
             min_size: None,
             max_size: None,
             minimizable: false,
@@ -203,6 +205,16 @@ impl<'a> ThemedWindow<'a> {
 
     pub fn resizable(mut self, resizable: bool) -> Self {
         self.resizable = resizable;
+        self
+    }
+
+    /// The size a resizable window first opens at (the user's resizing then
+    /// takes over). Lets a list inside fill the window instead of sizing it:
+    /// the content must itself fill the available height (a scroll area that
+    /// does not auto-shrink, or `allocate_space(available_size())`), because
+    /// a window shrinks to its content's height otherwise.
+    pub fn default_size(mut self, size: impl Into<egui::Vec2>) -> Self {
+        self.default_size = Some(size.into());
         self
     }
 
@@ -331,6 +343,9 @@ impl<'a> ThemedWindow<'a> {
             .resizable(self.resizable && !state.maximized && !state.minimized)
             .movable(!self.headerless)
             .frame(frame);
+        if let Some(size) = self.default_size {
+            window = window.default_size(size);
+        }
         if let Some(min) = self.min_size {
             window = window.min_size(min);
         }
@@ -1035,6 +1050,40 @@ mod resize_tests {
         assert!(
             (after - before - KEY_RESIZE_STEP).abs() < 1.0,
             "width {before} -> {after}"
+        );
+    }
+
+    /// A default size opens the window at that size regardless of content.
+    #[test]
+    fn default_size_sets_the_opening_size() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let mut size = egui::Vec2::ZERO;
+        for t in 1..4 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(900.0, 700.0),
+                    )),
+                    time: Some(t as f64),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut open = true;
+                    let r = ThemedWindow::new("default_size_test", "Test", &palette)
+                        .default_size([400.0, 300.0])
+                        .default_pos([20.0, 20.0])
+                        .show(ui.ctx(), &mut open, |ui| {
+                            ui.allocate_space(ui.available_size());
+                        });
+                    size = r.map(|r| r.rect.size()).unwrap_or_default();
+                },
+            );
+        }
+        assert!(
+            (size.x - 400.0).abs() < 2.0 && (size.y - 300.0).abs() < 2.0,
+            "opened at {size:?}"
         );
     }
 }
