@@ -42,27 +42,37 @@ pub fn slot_at(rows: &[egui::Rect], y: f32) -> usize {
     rows.iter().filter(|r| r.center().y < y).count()
 }
 
-/// Alt+Up / Alt+Down on the row at `focused` (of `len`): the move one place
-/// up or down, consuming the keys. `None` with no key or at the end.
-pub fn key_move(ui: &mut Ui, focused: usize, len: usize) -> Option<Move> {
+/// Alt+Up / Alt+Down: -1 (up) or +1 (down), consuming the keys. For a list
+/// that works out the neighbour itself (rows grouped by kind, say).
+pub fn key_step(ui: &mut Ui) -> Option<isize> {
     let (up, down) = ui.input_mut(|i| {
         (
             i.consume_key(Modifiers::ALT, Key::ArrowUp),
             i.consume_key(Modifiers::ALT, Key::ArrowDown),
         )
     });
-    if up && focused > 0 {
-        Some(Move {
-            from: focused,
-            to: focused - 1,
-        })
-    } else if down && focused + 1 < len {
-        Some(Move {
-            from: focused,
-            to: focused + 1,
-        })
+    if up {
+        Some(-1)
+    } else if down {
+        Some(1)
     } else {
         None
+    }
+}
+
+/// Alt+Up / Alt+Down on the row at `focused` (of `len`): the move one place
+/// up or down, consuming the keys. `None` with no key or at the end.
+pub fn key_move(ui: &mut Ui, focused: usize, len: usize) -> Option<Move> {
+    match key_step(ui)? {
+        -1 if focused > 0 => Some(Move {
+            from: focused,
+            to: focused - 1,
+        }),
+        1 if focused + 1 < len => Some(Move {
+            from: focused,
+            to: focused + 1,
+        }),
+        _ => None,
     }
 }
 
