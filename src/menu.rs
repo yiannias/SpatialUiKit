@@ -363,6 +363,175 @@ fn render_node<A: Clone, Ctx>(
     }
 }
 
+// ---- Open menu joins its menu-bar title (TASK-224) --------------------------
+
+/// Corner radius of the title tab's top corners.
+const TAB_RADIUS: f32 = 6.0;
+/// Radius of the small inverse curve where the tab meets the wider card.
+const TAB_FILLET: f32 = 5.0;
+
+/// The outline of an open menu's tab, from the card's left edge up round the
+/// tab and down to the card's top edge, with the inverse curve where it meets
+/// the wider card: bottom-left, up, rounded top-left, across, rounded
+/// top-right, down, then the fillet out onto the card top. `card_top` is the
+/// y of the card's top edge (the bottom of the bar).
+pub fn tab_outline(tab: egui::Rect, card_top: f32) -> Vec<egui::Pos2> {
+    let mut points = vec![egui::pos2(tab.left(), card_top)];
+    let r = TAB_RADIUS
+        .min(tab.width() / 2.0)
+        .min((card_top - tab.top()).max(0.0));
+    let arc = |center: egui::Pos2, from: f32, to: f32, out: &mut Vec<egui::Pos2>| {
+        const STEPS: usize = 6;
+        for i in 0..=STEPS {
+            let a = from + (to - from) * i as f32 / STEPS as f32;
+            out.push(center + egui::vec2(a.cos(), a.sin()) * r);
+        }
+    };
+    // Up the left edge, then round the top-left corner.
+    points.push(egui::pos2(tab.left(), tab.top() + r));
+    arc(
+        egui::pos2(tab.left() + r, tab.top() + r),
+        std::f32::consts::PI,
+        std::f32::consts::PI * 1.5,
+        &mut points,
+    );
+    points.push(egui::pos2(tab.right() - r, tab.top()));
+    arc(
+        egui::pos2(tab.right() - r, tab.top() + r),
+        std::f32::consts::PI * 1.5,
+        std::f32::consts::TAU,
+        &mut points,
+    );
+    // Down the right edge to the fillet, then out onto the card's top edge.
+    let f = TAB_FILLET.min((card_top - tab.top()).max(0.0));
+    points.push(egui::pos2(tab.right(), card_top - f));
+    let center = egui::pos2(tab.right() + f, card_top - f);
+    for i in 0..=6 {
+        let a = std::f32::consts::PI - std::f32::consts::FRAC_PI_2 * i as f32 / 6.0;
+        points.push(center + egui::vec2(a.cos(), a.sin()) * f);
+    }
+    points
+}
+
+/// A top-level menu-bar title whose open card joins it as one outline (TASK-224):
+/// the open title becomes the card's tab (bold, drawn in the card's fill), the
+/// card's top-left corner is square under the tab, and the card starts at the
+/// bottom of the bar, never overlapping it. `bar` is the menu bar's rectangle
+/// (the title spans its full height so the card has no gap); `bar_fill` is the
+/// bar's background. Closed, it hovers like any title. Behaves as
+/// `egui::containers::menu::MenuButton` otherwise (hover switches between
+/// open titles, same close rules).
+pub fn title_menu<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    bar: egui::Rect,
+    bar_fill: egui::Color32,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, Option<egui::InnerResponse<R>>) {
+    // The title is as tall as the bar, so the card opens at the bar's bottom edge.
+    // Placed on the bar explicitly (not wherever the row's layout would centre
+    // it), so it is exactly as tall as the bar whatever hosts it.
+    let slot = egui::Rect::from_min_max(
+        egui::pos2(ui.cursor().min.x, bar.top()),
+        egui::pos2(ui.max_rect().right().max(ui.cursor().min.x), bar.bottom()),
+    );
+    let (open, response, inner) = ui
+        .scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(slot)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                let id = ui.next_auto_id();
+                let open = egui::Popup::is_id_open(ui.ctx(), id.with("popup"));
+                let rich = if open {
+                    egui::RichText::new(label).strong()
+                } else {
+                    egui::RichText::new(label)
+                };
+                let button = egui::Button::new(rich)
+                    .frame(false)
+                    .min_size(egui::vec2(0.0, bar.height()));
+                let (response, inner) =
+                    egui::containers::menu::MenuButton::from_button(button).ui(ui, content);
+                (open, response, inner)
+            },
+        )
+        .inner;
+
+    let visuals = ui.visuals().clone();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    if !open && response.hovered() {
+        // The ordinary hover pill, inset from the bar's top and bottom.
+        let pill = response.rect.shrink2(egui::vec2(0.0, 5.0));
+        ui.painter()
+            .rect_filled(pill, 5.0, visuals.widgets.hovered.weak_bg_fill);
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font.clone(),
+            visuals.widgets.hovered.fg_stroke.color,
+        );
+    }
+    if let Some(inner) = &inner {
+        let card = inner.response.rect;
+        let fill = visuals.window_fill();
+        let stroke = visuals.window_stroke();
+        let painter = ui.ctx().layer_painter(inner.response.layer_id);
+        let card_top = card.top();
+        let tab = egui::Rect::from_min_max(
+            egui::pos2(card.left(), bar.top() + 3.0),
+            egui::pos2(response.rect.right().max(card.left() + 8.0), card_top),
+        );
+        // Square the card's top-left corner under the tab.
+        let corner = egui::Rect::from_min_size(card.left_top(), egui::vec2(10.0, 10.0));
+        painter.rect_filled(corner, 0.0, fill);
+        // The card's left edge, straight from the tab down.
+        painter.line_segment(
+            [card.left_top(), card.left_bottom() - egui::vec2(0.0, 8.0)],
+            stroke,
+        );
+        // The tab itself, in the card's fill.
+        painter.rect_filled(
+            tab,
+            egui::CornerRadius {
+                nw: TAB_RADIUS as u8,
+                ne: TAB_RADIUS as u8,
+                sw: 0,
+                se: 0,
+            },
+            fill,
+        );
+        // Open the seam: cover the card's top stroke under the tab...
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(tab.left() + stroke.width, card_top - 1.0),
+                egui::pos2(tab.right() - stroke.width, card_top + stroke.width + 0.5),
+            ),
+            0.0,
+            fill,
+        );
+        // ...and the stretch the inverse curve replaces, with the bar's own colour.
+        painter.rect_filled(
+            egui::Rect::from_min_max(
+                egui::pos2(tab.right() + stroke.width, card_top - 1.0),
+                egui::pos2(tab.right() + TAB_FILLET, card_top + stroke.width * 0.5),
+            ),
+            0.0,
+            bar_fill,
+        );
+        painter.add(egui::Shape::line(tab_outline(tab, card_top), stroke));
+        painter.text(
+            egui::pos2(tab.center().x, (tab.top() + card_top) / 2.0),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font,
+            visuals.strong_text_color(),
+        );
+    }
+    (response, inner)
+}
+
 /// Render an in-window egui menu bar from a `MenuNode` tree's top-level
 /// entries (each expected to be a `Submenu`, matching how both apps build
 /// their trees today) and return the actions triggered this frame.
@@ -508,5 +677,85 @@ mod visibility_tests {
         let _ = ctx.run_ui(input, |ui| {
             assert!(menu_bar_visibility(ui.ctx(), false).visible)
         });
+    }
+}
+
+#[cfg(test)]
+mod title_menu_tests {
+    use super::*;
+
+    /// The tab outline starts on the card's left edge at the card top, rises
+    /// along the tab's left edge, runs across and down its right edge, and ends
+    /// on the card top just past the tab (the inverse curve).
+    #[test]
+    fn the_tab_outline_runs_round_the_tab_and_onto_the_card_top() {
+        let tab = egui::Rect::from_min_max(egui::pos2(100.0, 3.0), egui::pos2(160.0, 32.0));
+        let points = tab_outline(tab, 32.0);
+        assert_eq!(points[0], egui::pos2(100.0, 32.0));
+        let top = points.iter().map(|p| p.y).fold(f32::INFINITY, f32::min);
+        assert!((top - 3.0).abs() < 1e-3, "reaches the tab top: {top}");
+        let last = *points.last().unwrap();
+        assert!(
+            (last.y - 32.0).abs() < 1e-3,
+            "ends on the card top: {last:?}"
+        );
+        assert!(last.x > 160.0, "and past the tab's right edge");
+        assert!(
+            points.iter().all(|p| p.x >= 100.0 - 1e-3),
+            "never left of the card edge"
+        );
+    }
+
+    fn click(pos: egui::Pos2) -> Vec<egui::Event> {
+        let button = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        vec![egui::Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// The open card starts at the bottom of the bar, not below a gap.
+    #[test]
+    fn the_open_card_starts_at_the_bottom_of_the_bar() {
+        let ctx = egui::Context::default();
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 32.0));
+        let mut card_top = None;
+        let frames = [
+            (1.0, vec![]),
+            (2.0, click(egui::pos2(14.0, 16.0))),
+            (3.0, vec![]),
+            (4.0, vec![]),
+        ];
+        for (t, events) in frames {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        let (_, inner) = title_menu(ui, "File", bar, egui::Color32::BLACK, |ui| {
+                            ui.label("Open")
+                        });
+                        if let Some(inner) = inner {
+                            card_top = Some(inner.response.rect.top());
+                        }
+                    });
+                },
+            );
+        }
+        let top = card_top.expect("the menu opened");
+        assert!(
+            (top - bar.bottom()).abs() < 1.5,
+            "card top {top} vs bar bottom {}",
+            bar.bottom()
+        );
     }
 }
