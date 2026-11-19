@@ -142,7 +142,29 @@ pub fn row_with<R>(
     label: &str,
     add_value: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
-    let galley = ui.painter().layout_job(label_job(ui, label, metrics));
+    row_with_accent(ui, metrics, label, None, add_value)
+}
+
+/// [`row_with`] for a row whose value differs from what it would inherit (an
+/// override, TASK-222): with `accent` set, a thin bar in that colour stands in
+/// the margin left of the label and the label draws in the strong text colour
+/// (bar plus brighter label, so the state is a shape and a weight, not only a
+/// colour). `None` is an ordinary row.
+pub fn row_with_accent<R>(
+    ui: &mut egui::Ui,
+    metrics: &FormMetrics,
+    label: &str,
+    accent: Option<egui::Color32>,
+    add_value: impl FnOnce(&mut egui::Ui) -> R,
+) -> R {
+    let mut job = label_job(ui, label, metrics);
+    if accent.is_some() {
+        let strong = ui.visuals().strong_text_color();
+        for section in &mut job.sections {
+            section.format.color = strong;
+        }
+    }
+    let galley = ui.painter().layout_job(job);
     let label_h = galley.size().y;
     let single_line = galley.rows.len() <= 1;
     let height = metrics.row_height.max(label_h);
@@ -169,6 +191,13 @@ pub fn row_with<R>(
         let color = ui.visuals().text_color();
         ui.painter()
             .galley(egui::pos2(rect.left(), top), galley, color);
+        if let Some(accent) = accent {
+            let bar = egui::Rect::from_min_max(
+                egui::pos2(rect.left() - 9.0, rect.top() + 2.0),
+                egui::pos2(rect.left() - 6.0, rect.bottom() - 2.0),
+            );
+            ui.painter().rect_filled(bar, 1.0, accent);
+        }
         ui.spacing_mut().item_spacing.x = original_spacing;
         add_value(ui)
     })
@@ -263,5 +292,32 @@ mod tests {
             );
             assert!(heights[0] >= m.row_height - 0.01, "{heights:?}");
         });
+    }
+
+    /// An override row has an accent bar left of its label and a stronger
+    /// label colour; an ordinary row has neither.
+    #[test]
+    fn an_accent_row_paints_a_bar_and_a_stronger_label() {
+        let accent = egui::Color32::from_rgb(255, 170, 60);
+        let mut with = 0;
+        let mut without = 0;
+        for (accented, count) in [(true, &mut with), (false, &mut without)] {
+            let ctx = egui::Context::default();
+            let out = ctx.run_ui(Default::default(), |ui| {
+                let m = FormMetrics::default();
+                row_with_accent(ui, &m, "Size:", accented.then_some(accent), |_| {});
+            });
+            fn walk(shape: &egui::Shape, accent: egui::Color32, n: &mut usize) {
+                match shape {
+                    egui::Shape::Rect(r) if r.fill == accent => *n += 1,
+                    egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, accent, n)),
+                    _ => {}
+                }
+            }
+            for s in &out.shapes {
+                walk(&s.shape, accent, count);
+            }
+        }
+        assert_eq!((with, without), (1, 0));
     }
 }
