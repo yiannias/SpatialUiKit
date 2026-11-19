@@ -23,6 +23,7 @@ pub mod popup;
 pub mod ribbon;
 pub mod runtime_fonts;
 pub mod search;
+pub mod selection;
 pub mod settings;
 pub mod sketch;
 pub mod style_list;
