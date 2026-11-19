@@ -141,6 +141,37 @@ pub fn render_tree<K: Clone>(
             }
         }
     }
+    // Typing letters with a row focused jumps to the next row starting with
+    // them (shared type-to-find: prefix, pause reset, repeated letter cycles).
+    if event.is_none() && rows.iter().any(|row| row.focused) {
+        let typed: String = ui.input(|i| {
+            i.events
+                .iter()
+                .filter_map(|e| match e {
+                    egui::Event::Text(t) => Some(t.as_str()),
+                    _ => None,
+                })
+                .collect()
+        });
+        let id = ui.id().with("sdb_tree_type_find");
+        let mut find: crate::type_find::TypeFind =
+            ui.memory(|m| m.data.get_temp(id)).unwrap_or_default();
+        let now = ui.input(|i| i.time);
+        if find.feed(&typed, now) {
+            let texts: Vec<&str> = rows
+                .iter()
+                .map(|r| if r.enabled { r.label.as_str() } else { "" })
+                .collect();
+            let current = rows.iter().position(|r| r.focused);
+            if let Some(next) = find.find(&texts, current).filter(|n| Some(*n) != current) {
+                ui.memory_mut(|m| m.request_focus(rows[next].id));
+                if !rows[next].selected {
+                    event = Some(NavigationEvent::Select(rows[next].key.clone()));
+                }
+            }
+        }
+        ui.memory_mut(|m| m.data.insert_temp(id, find));
+    }
     // egui itself moves focus between rows on the arrow keys; the selection
     // follows whichever row has focus.
     if event.is_none() {
@@ -162,6 +193,7 @@ struct ItemRow<K> {
     enabled: bool,
     selected: bool,
     focused: bool,
+    label: String,
 }
 
 fn render_nodes<K: Clone>(
@@ -199,6 +231,7 @@ fn render_nodes<K: Clone>(
                     enabled: node.enabled,
                     selected: node.selected,
                     focused: response.has_focus(),
+                    label: node.label.clone(),
                 });
                 response.context_menu(|ui| {
                     for action in &node.context_actions {
@@ -313,5 +346,41 @@ mod tests {
         // End and Home reach the ends.
         let (event, _) = run(&ctx, 5.0, key(egui::Key::Home), 3);
         assert_eq!(event, Some(NavigationEvent::Select(0)));
+    }
+
+    /// With a row focused, typing letters jumps to the row starting with them.
+    #[test]
+    fn typing_jumps_to_the_row_starting_with_the_letters() {
+        let ctx = egui::Context::default();
+        let tree = |selected: usize| -> Vec<NavigationNode<usize>> {
+            ["Arc", "Beam", "Bevel", "Circle"]
+                .iter()
+                .enumerate()
+                .map(|(i, l)| NavigationNode::item(i, *l, i == selected, true))
+                .collect()
+        };
+        let frame = |time: f64, events: Vec<egui::Event>, selected: usize| {
+            let mut event = None;
+            let t = tree(selected);
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(300.0, 300.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| event = render_tree(ui, &t),
+            );
+            event
+        };
+        frame(1.0, key(egui::Key::Tab), 0);
+        frame(1.5, vec![], 0);
+        assert_eq!(
+            frame(1.6, vec![egui::Event::Text("c".into())], 0),
+            Some(NavigationEvent::Select(3))
+        );
     }
 }

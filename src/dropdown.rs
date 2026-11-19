@@ -373,6 +373,8 @@ struct State {
     /// The cursor is shown only after a key moved it, not while the pointer drives.
     kbd: bool,
     scroll_to_cursor: bool,
+    /// Letters typed so far to find an option (forgotten after a pause).
+    find: crate::type_find::TypeFind,
     /// Frame number of the last frame the control was drawn.
     seen: u64,
 }
@@ -916,11 +918,11 @@ impl<'a> Dropdown<'a> {
             let (down_k, up_k, left_k, right_k, home_k, end_k, enter_k, space_k, esc_k, typed) = ui
                 .input_mut(|i| {
                     let m = Modifiers::NONE;
-                    let typed: Vec<char> = i
+                    let typed: String = i
                         .events
                         .iter()
                         .filter_map(|e| match e {
-                            Event::Text(t) => t.chars().find(|c| c.is_alphanumeric()),
+                            Event::Text(t) => Some(t.as_str()),
                             _ => None,
                         })
                         .collect();
@@ -974,16 +976,15 @@ impl<'a> Dropdown<'a> {
                     st.cursor = Some(nx as usize);
                 }
             }
-            if !typed.is_empty() {
+            let now = ui.input(|i| i.time);
+            if st.find.feed(&typed, now) {
                 let texts: Vec<&str> = self
                     .options
                     .iter()
                     .map(|o| if o.heading { "" } else { o.text.as_str() })
                     .collect();
-                for ch in typed {
-                    if let Some(i) = type_ahead(&texts, st.cursor, ch) {
-                        st.cursor = Some(i);
-                    }
+                if let Some(i) = st.find.find(&texts, st.cursor) {
+                    st.cursor = Some(i);
                 }
             }
             if st.cursor != before {
