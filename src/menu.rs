@@ -370,6 +370,29 @@ const TAB_RADIUS: f32 = 6.0;
 /// Radius of the small inverse curve where the tab meets the wider card.
 const TAB_FILLET: f32 = 5.0;
 
+/// Options for customizing the title menu tab appearance (TASK-237).
+#[derive(Clone, Copy, Debug)]
+pub struct TitleMenuOptions {
+    /// Vertical gap between the menu bar top and the tab top.
+    /// Default: 3.0 (TASK-224 original). Increase for more breathing room.
+    pub tab_vertical_gap: f32,
+    /// Horizontal padding inside the tab (added to both left and right of the text).
+    /// Default: 0.0. Increase so the title doesn't hug the tab edges.
+    pub tab_horizontal_padding: f32,
+    /// Minimum tab width. Default: 8.0.
+    pub min_tab_width: f32,
+}
+
+impl Default for TitleMenuOptions {
+    fn default() -> Self {
+        Self {
+            tab_vertical_gap: 3.0,
+            tab_horizontal_padding: 0.0,
+            min_tab_width: 8.0,
+        }
+    }
+}
+
 /// The outline of an open menu's tab, from the card's left edge up round the
 /// tab and down to the card's top edge, with the inverse curve where it meets
 /// the wider card: bottom-left, up, rounded top-left, across, rounded
@@ -428,6 +451,25 @@ pub fn title_menu<R>(
     bar_fill: egui::Color32,
     content: impl FnOnce(&mut egui::Ui) -> R,
 ) -> (egui::Response, Option<egui::InnerResponse<R>>) {
+    title_menu_with_options(
+        ui,
+        label,
+        bar,
+        bar_fill,
+        content,
+        TitleMenuOptions::default(),
+    )
+}
+
+/// Same as [`title_menu`] but with customizable tab padding (TASK-237).
+pub fn title_menu_with_options<R>(
+    ui: &mut egui::Ui,
+    label: &str,
+    bar: egui::Rect,
+    bar_fill: egui::Color32,
+    content: impl FnOnce(&mut egui::Ui) -> R,
+    options: TitleMenuOptions,
+) -> (egui::Response, Option<egui::InnerResponse<R>>) {
     // The title is as tall as the bar, so the card opens at the bar's bottom edge.
     // Placed on the bar explicitly (not wherever the row's layout would centre
     // it), so it is exactly as tall as the bar whatever hosts it.
@@ -480,8 +522,16 @@ pub fn title_menu<R>(
         let painter = ui.ctx().layer_painter(inner.response.layer_id);
         let card_top = card.top();
         let tab = egui::Rect::from_min_max(
-            egui::pos2(card.left(), bar.top() + 3.0),
-            egui::pos2(response.rect.right().max(card.left() + 8.0), card_top),
+            egui::pos2(
+                card.left() + options.tab_horizontal_padding,
+                bar.top() + options.tab_vertical_gap,
+            ),
+            egui::pos2(
+                response.rect.right().max(
+                    card.left() + options.min_tab_width + options.tab_horizontal_padding * 2.0,
+                ),
+                card_top,
+            ),
         );
         // Square the card's top-left corner under the tab.
         let corner = egui::Rect::from_min_size(card.left_top(), egui::vec2(10.0, 10.0));
