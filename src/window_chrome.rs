@@ -121,6 +121,9 @@ pub struct ThemedWindow<'a> {
     title: String,
     palette: &'a ThemePalette,
     default_pos: Option<egui::Pos2>,
+    /// Clamp the window to this rect (screen/content area). Used to keep
+    /// secondary windows below the ribbon / inside the app content (TASK-280).
+    constrain_to: Option<egui::Rect>,
     fixed_size: Option<egui::Vec2>,
     resizable: bool,
     default_size: Option<egui::Vec2>,
@@ -156,6 +159,7 @@ impl<'a> ThemedWindow<'a> {
             title: title.into(),
             palette,
             default_pos: None,
+            constrain_to: None,
             fixed_size: None,
             resizable: true,
             default_size: None,
@@ -195,6 +199,14 @@ impl<'a> ThemedWindow<'a> {
 
     pub fn default_pos(mut self, pos: impl Into<egui::Pos2>) -> Self {
         self.default_pos = Some(pos.into());
+        self
+    }
+
+    /// Constrain the window to `rect` (TASK-280). Pass the main content area
+    /// below the ribbon so secondary windows cannot open with their title bar
+    /// hidden under the ribbon.
+    pub fn constrain_to(mut self, rect: egui::Rect) -> Self {
+        self.constrain_to = Some(rect);
         self
     }
 
@@ -380,6 +392,11 @@ impl<'a> ThemedWindow<'a> {
 
         if let Some(size) = keyboard_size {
             window = window.fixed_size(size);
+        }
+        if !state.maximized {
+            if let Some(rect) = self.constrain_to {
+                window = window.constrain_to(rect);
+            }
         }
         let response = window.show(ctx, |ui| {
             self.paint_chrome(ui, ctx, open, &mut state, &chrome_colors, add_contents);
