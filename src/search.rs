@@ -107,6 +107,22 @@ impl ResultCursor {
     }
 }
 
+/// Paints a monochrome magnifier inside `rect` (TASK-244/260).
+///
+/// Kept as a separate helper so the icon can be verified and reused without
+/// standing up a whole search field. The circle sits in the upper-left of the
+/// square and the handle runs to the lower-right, the usual magnifier silhouette.
+fn paint_search_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
+    let stroke = Stroke::new(1.4, color);
+    let d = rect.width().min(rect.height());
+    let center = egui::pos2(rect.left() + d * 0.42, rect.top() + d * 0.42);
+    let radius = d * 0.27;
+    painter.circle_stroke(center, radius, stroke);
+    let from = egui::pos2(center.x + radius * 0.72, center.y + radius * 0.72);
+    let to = egui::pos2(rect.right() - d * 0.12, rect.bottom() - d * 0.12);
+    painter.line_segment([from, to], stroke);
+}
+
 /// Render the common pill search field, counter, step buttons, and clear control.
 ///
 /// Each panel owns its query and match state; this widget standardizes their
@@ -145,7 +161,14 @@ pub fn render_field(
     );
     inner.spacing_mut().item_spacing.x = 3.0;
     let weak = inner.visuals().weak_text_color();
-    inner.label(egui::RichText::new("⌕").size(15.0).color(weak));
+    // Draw the magnifier as geometry, not the `⌕` (U+2315) text glyph: that
+    // character is absent from the bundled fonts and rendered as a hollow
+    // missing-glyph box in every search field (TASK-244/260). A painted circle
+    // plus handle needs no font coverage and inherits the field's text color.
+    let icon_size = 15.0;
+    let (icon_rect, _) =
+        inner.allocate_exact_size(egui::vec2(icon_size, icon_size), egui::Sense::hover());
+    paint_search_icon(inner.painter(), icon_rect, weak);
 
     let counter = if active { options.count.label() } else { None };
     let counter_width = counter
@@ -419,8 +442,57 @@ pub fn paint_row_band(ui: &Ui, slot: egui::layers::ShapeIdx, rect: egui::Rect, m
 
 #[cfg(test)]
 mod tests {
-    use super::{marked_job, match_ranges, ResultCursor, SearchAction, SearchCount};
-    use egui::{Color32, FontId};
+    use super::{
+        marked_job, match_ranges, render_field, ResultCursor, SearchAction, SearchCount,
+        SearchFieldOptions,
+    };
+    use egui::{Color32, FontId, Pos2, Rect};
+
+    /// TASK-244/260: the magnifier is drawn as a circle plus a handle line,
+    /// never as a text glyph (U+2315 was missing from the bundled fonts and
+    /// rendered as an empty box).
+    #[test]
+    fn search_icon_is_painted_as_shapes_not_text() {
+        fn walk(shape: &egui::Shape, out: &mut Vec<String>) {
+            match shape {
+                egui::Shape::Vec(v) => v.iter().for_each(|s| walk(s, out)),
+                egui::Shape::Circle(_) => out.push("circle".into()),
+                egui::Shape::LineSegment { .. } => out.push("line".into()),
+                egui::Shape::Text(t) => out.push(t.galley.text().to_string()),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        let mut query = String::new();
+        let mut render: &mut dyn FnMut(&mut egui::Ui) = &mut |ui| {
+            render_field(
+                ui,
+                &mut query,
+                SearchFieldOptions {
+                    hint: "Search",
+                    height: 24.0,
+                    count: SearchCount::Hidden,
+                },
+            );
+        };
+        let out = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 200.0))),
+                ..Default::default()
+            },
+            &mut render,
+        );
+        let mut painted = Vec::new();
+        for c in &out.shapes {
+            walk(&c.shape, &mut painted);
+        }
+        assert!(painted.iter().any(|s| s == "circle"), "magnifier circle");
+        assert!(painted.iter().any(|s| s == "line"), "magnifier handle");
+        assert!(
+            !painted.iter().any(|s| s.contains('\u{2315}')),
+            "U+2315 must not be painted as text: {painted:?}"
+        );
+    }
 
     #[test]
     fn finds_every_non_overlapping_case_insensitive_occurrence() {
