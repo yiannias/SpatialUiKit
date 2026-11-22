@@ -1104,3 +1104,51 @@ mod resize_tests {
         );
     }
 }
+
+#[cfg(test)]
+mod constrain_tests {
+    use super::*;
+
+    /// TASK-280: a window built with `constrain_to` must not open outside the
+    /// rect the caller gave it (the content area below the ribbon for a
+    /// secondary window that used to sit under it).
+    #[test]
+    fn constrain_to_clamps_the_opening_rect() {
+        let ctx = egui::Context::default();
+        let palette = ThemePalette::dark();
+        let mut rect = egui::Rect::ZERO;
+        for t in 1..4 {
+            let _ = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(800.0, 600.0),
+                    )),
+                    time: Some(t as f64),
+                    ..Default::default()
+                },
+                |ui| {
+                    let mut open = true;
+                    let r = ThemedWindow::new("constrain_regression", "Test", &palette)
+                        .default_pos([200.0, 200.0])
+                        .default_size([200.0, 150.0])
+                        .constrain_to(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(400.0, 300.0),
+                        ))
+                        .show(ui.ctx(), &mut open, |ui| {
+                            ui.allocate_space(ui.available_size());
+                        });
+                    rect = r.map(|r| r.rect).unwrap_or(egui::Rect::ZERO);
+                },
+            );
+        }
+        assert!(
+            rect.left() >= 0.0
+                && rect.top() >= 0.0
+                && rect.right() <= 400.0
+                && rect.bottom() <= 300.0,
+            "constrained window must stay inside the rect: {rect:?}"
+        );
+    }
+}
