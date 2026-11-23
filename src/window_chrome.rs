@@ -132,6 +132,8 @@ pub struct ThemedWindow<'a> {
     minimizable: bool,
     maximizable: bool,
     headerless: bool,
+    /// Opt-in title style: left-aligned, tall row (see [`ThemedWindow::tall_left_title`]).
+    left_title: bool,
     modal: bool,
     /// Y (in screen/viewport space) the sheet hangs flush against when
     /// `modal` -- the bottom edge of whatever's above the content area
@@ -168,6 +170,7 @@ impl<'a> ThemedWindow<'a> {
             minimizable: false,
             maximizable: false,
             headerless: false,
+            left_title: false,
             modal: false,
             sheet_anchor_top: 0.0,
             sheet_anchor_point: None,
@@ -277,6 +280,17 @@ impl<'a> ThemedWindow<'a> {
     /// Cancel and the title bar earns nothing.
     pub fn headerless(mut self, headerless: bool) -> Self {
         self.headerless = headerless;
+        self
+    }
+
+    /// Opt-in header style used by the approved file window
+    /// (`docs/design/2026-11-19_file-browser-*`): the title is left-aligned
+    /// at 18 pt in a 55 pt row that shares the window's own background, with
+    /// the rule underneath, instead of the default centred 13 pt title in a
+    /// 32 pt band. Off by default, so no other window changes. Adopting it for
+    /// every window is a separate design decision: the end state is ONE chrome.
+    pub fn tall_left_title(mut self, on: bool) -> Self {
+        self.left_title = on;
         self
     }
 
@@ -712,8 +726,9 @@ impl<'a> ThemedWindow<'a> {
         }
 
         let width = ui.available_width();
+        let metrics = header_metrics(self.left_title, colors.header_h);
         let (header_rect, _) =
-            ui.allocate_exact_size(egui::vec2(width, colors.header_h), egui::Sense::hover());
+            ui.allocate_exact_size(egui::vec2(width, metrics.height), egui::Sense::hover());
 
         let painter = ui.painter();
         let top_rounding = egui::CornerRadius {
@@ -730,16 +745,29 @@ impl<'a> ThemedWindow<'a> {
             sw: 0,
             se: 0,
         };
-        painter.rect_filled(header_rect, top_rounding, colors.header_bg);
+        if !metrics.left_aligned {
+            painter.rect_filled(header_rect, top_rounding, colors.header_bg);
+        }
         painter.line_segment(
             [header_rect.left_bottom(), header_rect.right_bottom()],
             egui::Stroke::new(1.0, colors.header_border),
         );
+        let (anchor, pos) = if metrics.left_aligned {
+            (
+                egui::Align2::LEFT_CENTER,
+                egui::pos2(
+                    header_rect.left() + metrics.title_inset,
+                    header_rect.center().y,
+                ),
+            )
+        } else {
+            (egui::Align2::CENTER_CENTER, header_rect.center())
+        };
         painter.text(
-            header_rect.center(),
-            egui::Align2::CENTER_CENTER,
+            pos,
+            anchor,
             &self.title,
-            egui::FontId::proportional(13.0),
+            egui::FontId::proportional(metrics.title_size),
             colors.title_color,
         );
 
@@ -749,7 +777,7 @@ impl<'a> ThemedWindow<'a> {
         let mut button = |ui: &mut egui::Ui, kind: ButtonKind, next_right: &mut f32| {
             let rect = egui::Rect::from_min_size(
                 egui::pos2(*next_right - button_w, header_rect.top()),
-                egui::vec2(button_w, colors.header_h),
+                egui::vec2(button_w, metrics.height),
             );
             *next_right -= button_w;
             let response = ui.interact(
@@ -850,6 +878,73 @@ struct ResolvedChrome {
     header_h: f32,
     shadow_blur: u8,
     shadow_color: egui::Color32,
+}
+
+/// Header geometry for one chrome style (points).
+#[derive(Debug, PartialEq)]
+struct HeaderMetrics {
+    height: f32,
+    title_size: f32,
+    /// Distance from the window's left edge to a left-aligned title.
+    title_inset: f32,
+    left_aligned: bool,
+}
+
+/// The default style keeps the themed header height and a centred 13 pt title;
+/// [`ThemedWindow::tall_left_title`] gives the approved file window's 55 pt
+/// row with an 18 pt title 24 pt in from the left.
+fn header_metrics(left_title: bool, themed_height: f32) -> HeaderMetrics {
+    if left_title {
+        HeaderMetrics {
+            height: 55.0,
+            title_size: 18.0,
+            title_inset: 24.0,
+            left_aligned: true,
+        }
+    } else {
+        HeaderMetrics {
+            height: themed_height,
+            title_size: 13.0,
+            title_inset: 0.0,
+            left_aligned: false,
+        }
+    }
+}
+
+#[cfg(test)]
+mod header_style_tests {
+    use super::*;
+
+    #[test]
+    fn default_header_is_unchanged() {
+        assert_eq!(
+            header_metrics(false, 32.0),
+            HeaderMetrics {
+                height: 32.0,
+                title_size: 13.0,
+                title_inset: 0.0,
+                left_aligned: false
+            }
+        );
+    }
+
+    #[test]
+    fn opt_in_header_is_the_tall_left_aligned_row() {
+        let m = header_metrics(true, 32.0);
+        assert_eq!((m.height, m.title_size, m.title_inset), (55.0, 18.0, 24.0));
+        assert!(m.left_aligned);
+    }
+
+    #[test]
+    fn the_builder_defaults_off_and_turns_on() {
+        let palette = ThemePalette::dark();
+        assert!(!ThemedWindow::new("a", "t", &palette).left_title);
+        assert!(
+            ThemedWindow::new("a", "t", &palette)
+                .tall_left_title(true)
+                .left_title
+        );
+    }
 }
 
 #[cfg(test)]
