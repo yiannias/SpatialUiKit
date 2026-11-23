@@ -521,17 +521,13 @@ pub fn title_menu_with_options<R>(
         let stroke = visuals.window_stroke();
         let painter = ui.ctx().layer_painter(inner.response.layer_id);
         let card_top = card.top();
-        let tab = egui::Rect::from_min_max(
-            egui::pos2(
-                card.left() + options.tab_horizontal_padding,
-                bar.top() + options.tab_vertical_gap,
-            ),
-            egui::pos2(
-                response.rect.right().max(
-                    card.left() + options.min_tab_width + options.tab_horizontal_padding * 2.0,
-                ),
-                card_top,
-            ),
+        let tab = tab_rect(
+            card.left(),
+            response.rect,
+            bar.top(),
+            card_top,
+            ui.spacing().item_spacing.x,
+            &options,
         );
         // Square the card's top-left corner under the tab.
         let corner = egui::Rect::from_min_size(card.left_top(), egui::vec2(10.0, 10.0));
@@ -571,8 +567,11 @@ pub fn title_menu_with_options<R>(
             bar_fill,
         );
         painter.add(egui::Shape::line(tab_outline(tab, card_top), stroke));
+        // The title is drawn ONCE, where the bar draws it (the title button's own
+        // centre), over the bar's copy, which the tab's fill covers. Drawn at the
+        // tab's own centre it landed beside the bar's text and read "FFile".
         painter.text(
-            egui::pos2(tab.center().x, (tab.top() + card_top) / 2.0),
+            response.rect.center(),
             egui::Align2::CENTER_CENTER,
             label,
             font,
@@ -580,6 +579,28 @@ pub fn title_menu_with_options<R>(
         );
     }
     (response, inner)
+}
+
+/// The open tab's rectangle. Its left edge IS the card's left edge (one
+/// continuous frame), it covers the whole title button so the bar's copy of the
+/// title is hidden underneath, and it extends right of the title by at most the
+/// gap to the next title, so it never overlaps its neighbour.
+fn tab_rect(
+    card_left: f32,
+    title: egui::Rect,
+    bar_top: f32,
+    card_top: f32,
+    title_gap: f32,
+    options: &TitleMenuOptions,
+) -> egui::Rect {
+    let extra = options
+        .tab_horizontal_padding
+        .min((title_gap - 2.0).max(0.0));
+    let right = (title.right() + extra).max(card_left + options.min_tab_width);
+    egui::Rect::from_min_max(
+        egui::pos2(card_left, bar_top + options.tab_vertical_gap),
+        egui::pos2(right, card_top),
+    )
 }
 
 /// Render an in-window egui menu bar from a `MenuNode` tree's top-level
@@ -756,6 +777,32 @@ mod title_menu_tests {
         );
     }
 
+    /// The tab hides the bar's copy of the title and stays clear of the next one:
+    /// flush with the card edge, covering the whole title button, never reaching
+    /// into the gap before the next title.
+    #[test]
+    fn the_tab_covers_its_own_title_and_stops_before_the_next_one() {
+        let title = egui::Rect::from_min_max(egui::pos2(100.0, 0.0), egui::pos2(140.0, 32.0));
+        let options = TitleMenuOptions {
+            tab_vertical_gap: 6.0,
+            tab_horizontal_padding: 10.0,
+            min_tab_width: 8.0,
+        };
+        // Items sit 8 px apart, so the next title starts at x = 148.
+        let tab = tab_rect(100.0, title, 0.0, 32.0, 8.0, &options);
+        assert_eq!(tab.left(), 100.0, "left edge on the card edge");
+        assert!(
+            tab.right() >= title.right(),
+            "covers the whole title button"
+        );
+        assert!(tab.right() < 148.0, "clear of the next title: {tab:?}");
+        assert_eq!(tab.top(), 6.0);
+        assert_eq!(tab.bottom(), 32.0);
+        // No padding: exactly the title's width.
+        let plain = tab_rect(100.0, title, 0.0, 32.0, 8.0, &TitleMenuOptions::default());
+        assert_eq!(plain.right(), 140.0);
+    }
+
     fn click(pos: egui::Pos2) -> Vec<egui::Event> {
         let button = |pressed| egui::Event::PointerButton {
             pos,
@@ -764,6 +811,74 @@ mod title_menu_tests {
             modifiers: egui::Modifiers::NONE,
         };
         vec![egui::Event::PointerMoved(pos), button(true), button(false)]
+    }
+
+    /// The open menu's title is the same text in the same place twice over (the
+    /// bar's own and the tab's, one covering the other), never two offset copies
+    /// ("FFile").
+    #[test]
+    fn the_open_title_is_drawn_in_one_place() {
+        fn texts(shape: &egui::Shape, label: &str, out: &mut Vec<egui::Pos2>) {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text() == label => {
+                    out.push(t.pos + t.galley.size() * 0.5)
+                }
+                egui::Shape::Vec(v) => v.iter().for_each(|s| texts(s, label, out)),
+                _ => {}
+            }
+        }
+        let ctx = egui::Context::default();
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 32.0));
+        let options = TitleMenuOptions {
+            tab_vertical_gap: 6.0,
+            tab_horizontal_padding: 10.0,
+            min_tab_width: 8.0,
+        };
+        let mut found = Vec::new();
+        let frames = [
+            (1.0, vec![]),
+            (2.0, click(egui::pos2(14.0, 16.0))),
+            (3.0, vec![]),
+            (4.0, vec![]),
+        ];
+        for (t, events) in frames {
+            let output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(400.0, 300.0),
+                    )),
+                    time: Some(t),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    egui::MenuBar::new().ui(ui, |ui| {
+                        title_menu_with_options(
+                            ui,
+                            "File",
+                            bar,
+                            egui::Color32::BLACK,
+                            |ui| ui.label("Open"),
+                            options,
+                        );
+                        ui.label("Edit");
+                    });
+                },
+            );
+            found.clear();
+            for clipped in &output.shapes {
+                texts(&clipped.shape, "File", &mut found);
+            }
+        }
+        assert!(found.len() >= 2, "bar copy and tab copy: {found:?}");
+        let (first, rest) = found.split_first().unwrap();
+        for other in rest {
+            assert!(
+                (other.x - first.x).abs() < 0.6 && (other.y - first.y).abs() < 0.6,
+                "two offset copies of the title: {found:?}"
+            );
+        }
     }
 
     /// The open card starts at the bottom of the bar, not below a gap.
