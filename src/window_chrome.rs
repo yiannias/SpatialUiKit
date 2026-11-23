@@ -287,7 +287,8 @@ impl<'a> ThemedWindow<'a> {
     /// (`docs/design/2026-11-19_file-browser-*`): the title is left-aligned
     /// at 18 pt in a 55 pt row that shares the window's own background, with
     /// the rule underneath, instead of the default centred 13 pt title in a
-    /// 32 pt band. Off by default, so no other window changes. Adopting it for
+    /// 32 pt band, and the body sits flush against the frame (the window lays
+    /// out its own padding). Off by default, so no other window changes. Adopting it for
     /// every window is a separate design decision: the end state is ONE chrome.
     pub fn tall_left_title(mut self, on: bool) -> Self {
         self.left_title = on;
@@ -789,7 +790,8 @@ impl<'a> ThemedWindow<'a> {
                 ui.painter().rect_filled(rect, 0, colors.button_hover_bg);
             }
             let icon_stroke = egui::Stroke::new(1.0, colors.button_icon_color);
-            let icon = rect.shrink(11.0);
+            // Always a square, so a tall header does not stretch the glyph.
+            let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 10.0));
             match kind {
                 ButtonKind::Minimize => {
                     let y = icon.bottom();
@@ -836,7 +838,7 @@ impl<'a> ThemedWindow<'a> {
         }
 
         if !state.minimized {
-            if self.modal {
+            if self.modal && !self.left_title {
                 // A sheet's frame has no inner margin so the header can be
                 // full-bleed; without this the body would touch the sheet's
                 // left and right edges. Padding it here, once, means no sheet
