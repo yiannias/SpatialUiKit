@@ -259,7 +259,9 @@ pub fn capsule_styled(
         let (name, _) = state.flash.as_ref().unwrap();
         (
             name.as_str(),
-            style.color.unwrap_or(egui::Color32::from_rgb(120, 230, 150)),
+            style
+                .color
+                .unwrap_or(egui::Color32::from_rgb(120, 230, 150)),
         )
     } else {
         (
