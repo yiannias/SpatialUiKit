@@ -193,6 +193,9 @@ pub enum CapsuleAnchor {
     BottomRight,
     TopLeft,
     TopRight,
+    /// Just below and right of the pointer (falls back to bottom-left when
+    /// the pointer is outside the window).
+    NearCursor,
 }
 
 /// Size, place and colour of the capsule. `Default` is the original look
@@ -259,6 +262,13 @@ pub fn capsule_styled(
             egui::pos2(rect.right() - margin.x, rect.top() + margin.y),
             egui::Align2::RIGHT_TOP,
         ),
+        CapsuleAnchor::NearCursor => match ui.input(|i| i.pointer.hover_pos()) {
+            Some(p) if rect.contains(p) => (p + egui::vec2(24.0, 24.0), egui::Align2::LEFT_TOP),
+            _ => (
+                egui::pos2(rect.left() + margin.x, rect.bottom() - margin.y),
+                egui::Align2::LEFT_BOTTOM,
+            ),
+        },
     };
 
     let (text, color): (&str, egui::Color32) = if flashing {
@@ -339,6 +349,11 @@ pub fn paint_capsule_preview(
         }
         CapsuleAnchor::TopLeft => egui::pos2(area.left() + m, area.top() + m),
         CapsuleAnchor::TopRight => egui::pos2(area.right() - m - size.x, area.top() + m),
+        // A sample cursor position: a little right of center and above the middle.
+        CapsuleAnchor::NearCursor => egui::pos2(
+            area.center().x + 8.0 * fit,
+            area.center().y - size.y / 2.0 + 8.0 * fit,
+        ),
     };
     let rect = egui::Rect::from_min_size(min, size);
     let painter = ui.painter().with_clip_rect(area);
