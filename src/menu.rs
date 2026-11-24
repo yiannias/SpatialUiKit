@@ -483,6 +483,20 @@ pub fn title_menu_with_options<R>(
                 .max_rect(slot)
                 .layout(egui::Layout::left_to_right(egui::Align::Center)),
             |ui| {
+                // The title sits inside its tab with equal padding left and right (TASK-326): the
+                // padding is part of the title button, so the card (which opens at the button's
+                // left edge) and the tab share one left edge and the text is inset from it.
+                // A frameless button has no padding of its own, so the width is set explicitly.
+                let text_width = ui
+                    .painter()
+                    .layout_no_wrap(
+                        label.to_owned(),
+                        egui::TextStyle::Button.resolve(ui.style()),
+                        egui::Color32::WHITE,
+                    )
+                    .size()
+                    .x;
+                let title_width = text_width + 2.0 * options.tab_horizontal_padding.max(0.0);
                 let id = ui.next_auto_id();
                 let open = egui::Popup::is_id_open(ui.ctx(), id.with("popup"));
                 let rich = if open {
@@ -492,7 +506,7 @@ pub fn title_menu_with_options<R>(
                 };
                 let button = egui::Button::new(rich)
                     .frame(false)
-                    .min_size(egui::vec2(0.0, bar.height()));
+                    .min_size(egui::vec2(title_width, bar.height()));
                 let (response, inner) =
                     egui::containers::menu::MenuButton::from_button(button).ui(ui, content);
                 (open, response, inner)
@@ -675,10 +689,9 @@ fn tab_rect(
     title_gap: f32,
     options: &TitleMenuOptions,
 ) -> egui::Rect {
-    let extra = options
-        .tab_horizontal_padding
-        .min((title_gap - 2.0).max(0.0));
-    let right = (title.right() + extra).max(card_left + options.min_tab_width);
+    // The title button already carries the padding on both sides, so the tab ends where it does.
+    let _ = title_gap;
+    let right = title.right().max(card_left + options.min_tab_width);
     egui::Rect::from_min_max(
         egui::pos2(card_left, bar_top + options.tab_vertical_gap),
         egui::pos2(right, card_top),
@@ -870,12 +883,14 @@ mod title_menu_tests {
             tab_horizontal_padding: 10.0,
             min_tab_width: 8.0,
         };
-        // Items sit 8 px apart, so the next title starts at x = 148.
+        // Items sit 8 px apart, so the next title starts at x = 148. The title button carries
+        // the padding itself, so the tab ends exactly where the button does.
         let tab = tab_rect(100.0, title, 0.0, 32.0, 8.0, &options);
         assert_eq!(tab.left(), 100.0, "left edge on the card edge");
-        assert!(
-            tab.right() >= title.right(),
-            "covers the whole title button"
+        assert_eq!(
+            tab.right(),
+            title.right(),
+            "covers exactly the title button"
         );
         assert!(tab.right() < 148.0, "clear of the next title: {tab:?}");
         assert_eq!(tab.top(), 6.0);
@@ -883,6 +898,54 @@ mod title_menu_tests {
         // No padding: exactly the title's width.
         let plain = tab_rect(100.0, title, 0.0, 32.0, 8.0, &TitleMenuOptions::default());
         assert_eq!(plain.right(), 140.0);
+    }
+
+    /// TASK-326: the title sits inside its tab with equal padding on the left and the right, and
+    /// that padding is the option's value (the title button carries it, so the card edge, which
+    /// is the button's left edge, is the tab's left edge).
+    #[test]
+    fn the_title_has_equal_padding_left_and_right_inside_its_tab() {
+        let ctx = egui::Context::default();
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(400.0, 32.0));
+        let mut measured = None;
+        let _ = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(400.0, 200.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                ui.horizontal(|ui| {
+                    let (response, _) = title_menu_with_options(
+                        ui,
+                        "Modify",
+                        bar,
+                        egui::Color32::BLACK,
+                        |ui| ui.label("row"),
+                        TitleMenuOptions {
+                            tab_vertical_gap: 6.0,
+                            tab_horizontal_padding: 8.0,
+                            min_tab_width: 8.0,
+                        },
+                    );
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let text = ui
+                        .painter()
+                        .layout_no_wrap("Modify".to_owned(), font, egui::Color32::WHITE)
+                        .size()
+                        .x;
+                    measured = Some((response.rect.width(), text));
+                });
+            },
+        );
+        let (button, text) = measured.expect("the title was drawn");
+        let padding = (button - text) / 2.0;
+        assert!(
+            (padding - 8.0).abs() < 0.6,
+            "padding left = right = 8 (button {button}, text {text}, each side {padding})"
+        );
     }
 
     fn click(pos: egui::Pos2) -> Vec<egui::Event> {
