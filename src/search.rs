@@ -236,7 +236,7 @@ pub fn render_field(
         if inner
             .add_enabled(
                 can_step,
-                egui::Button::new("↑")
+                egui::Button::new("⏶")
                     .frame(false)
                     .min_size(egui::vec2(button_width, height - 6.0)),
             )
@@ -248,7 +248,7 @@ pub fn render_field(
         if inner
             .add_enabled(
                 can_step,
-                egui::Button::new("↓")
+                egui::Button::new("⏷")
                     .frame(false)
                     .min_size(egui::vec2(button_width, height - 6.0)),
             )

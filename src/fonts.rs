@@ -60,3 +60,77 @@ pub fn apply_typeface(ctx: &egui::Context, typeface: Typeface) {
 
     ctx.set_fonts(defs);
 }
+
+/// Every non-ASCII character the kit writes as UI text must be in the bundled
+/// fonts or it shows as an empty box (the search arrows did, TASK-244): this
+/// scans the kit source for string-literal characters, in both typefaces.
+/// Paint the shape with geometry instead, or use a glyph the fonts have.
+#[cfg(test)]
+mod glyph_coverage {
+    use super::*;
+    use std::path::Path;
+
+    fn characters() -> std::collections::BTreeMap<char, String> {
+        let mut found = std::collections::BTreeMap::new();
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for entry in std::fs::read_dir(dir).unwrap().flatten() {
+            let path = entry.path();
+            if path.extension().is_none_or(|e| e != "rs") {
+                continue;
+            }
+            let text = std::fs::read_to_string(&path).unwrap();
+            for (number, line) in text.lines().enumerate() {
+                if line.trim_start().starts_with("#[cfg(test)]") {
+                    break;
+                }
+                if line.trim_start().starts_with("//") {
+                    continue;
+                }
+                let (mut in_string, mut escaped) = (false, false);
+                for c in line.chars() {
+                    if in_string {
+                        if escaped {
+                            escaped = false;
+                        } else if c == '\\' {
+                            escaped = true;
+                        } else if c == '"' {
+                            in_string = false;
+                        } else if !c.is_ascii() {
+                            found.entry(c).or_insert_with(|| {
+                                format!(
+                                    "{}:{}",
+                                    path.file_name().unwrap().to_string_lossy(),
+                                    number + 1
+                                )
+                            });
+                        }
+                    } else if c == '"' {
+                        in_string = true;
+                    }
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn every_character_the_kit_writes_is_in_the_fonts() {
+        for typeface in Typeface::ALL {
+            let ctx = egui::Context::default();
+            apply_typeface(&ctx, typeface);
+            let _ = ctx.run_ui(egui::RawInput::default(), |_| {});
+            let font = egui::FontId::proportional(13.0);
+            let missing: Vec<String> = characters()
+                .into_iter()
+                .filter(|(c, _)| !ctx.fonts_mut(|f| f.has_glyph(&font, *c)))
+                .map(|(c, at)| format!("U+{:04X} first at {at}", c as u32))
+                .collect();
+            assert!(
+                missing.is_empty(),
+                "{} font cannot draw (empty box on screen): {}",
+                typeface.label(),
+                missing.join("; ")
+            );
+        }
+    }
+}
