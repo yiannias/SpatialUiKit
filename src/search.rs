@@ -113,14 +113,25 @@ impl ResultCursor {
 /// standing up a whole search field. The circle sits in the upper-left of the
 /// square and the handle runs to the lower-right, the usual magnifier silhouette.
 fn paint_search_icon(painter: &egui::Painter, rect: egui::Rect, color: Color32) {
-    let stroke = Stroke::new(1.4, color);
-    let d = rect.width().min(rect.height());
-    let center = egui::pos2(rect.left() + d * 0.42, rect.top() + d * 0.42);
-    let radius = d * 0.27;
-    painter.circle_stroke(center, radius, stroke);
-    let from = egui::pos2(center.x + radius * 0.72, center.y + radius * 0.72);
-    let to = egui::pos2(rect.right() - d * 0.12, rect.bottom() - d * 0.12);
-    painter.line_segment([from, to], stroke);
+    crate::glyphs::magnifier(painter, rect, color);
+}
+
+/// A step button's chevron, painted over its (empty) button: dimmed when it
+/// cannot step.
+fn step_chevron(ui: &egui::Ui, response: &egui::Response, enabled: bool, dir: crate::glyphs::Dir) {
+    let color = if !enabled {
+        ui.visuals().weak_text_color().gamma_multiply(0.6)
+    } else if response.hovered() {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().text_color()
+    };
+    crate::glyphs::chevron(
+        ui.painter(),
+        egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(14.0)),
+        dir,
+        color,
+    );
 }
 
 /// Render the common pill search field, counter, step buttons, and clear control.
@@ -233,41 +244,47 @@ pub fn render_field(
             SearchCount::Hits { total, .. } | SearchCount::Results(total) => total > 0,
             SearchCount::Hidden => false,
         };
-        if inner
-            .add_enabled(
-                can_step,
-                egui::Button::new("⏶")
-                    .frame(false)
-                    .min_size(egui::vec2(button_width, height - 6.0)),
-            )
-            .on_hover_text("Previous match")
-            .clicked()
-        {
-            action = Some(SearchAction::Previous);
-        }
-        if inner
-            .add_enabled(
-                can_step,
-                egui::Button::new("⏷")
-                    .frame(false)
-                    .min_size(egui::vec2(button_width, height - 6.0)),
-            )
-            .on_hover_text("Next match")
-            .clicked()
-        {
-            action = Some(SearchAction::Next);
+        for (dir, hover, step) in [
+            (
+                crate::glyphs::Dir::Up,
+                "Previous match",
+                SearchAction::Previous,
+            ),
+            (crate::glyphs::Dir::Down, "Next match", SearchAction::Next),
+        ] {
+            let response = inner
+                .add_enabled(
+                    can_step,
+                    egui::Button::new("")
+                        .frame(false)
+                        .min_size(egui::vec2(button_width, height - 6.0)),
+                )
+                .on_hover_text(hover);
+            step_chevron(&inner, &response, can_step, dir);
+            if response.clicked() {
+                action = Some(step);
+            }
         }
     }
     if active {
-        if inner
+        let response = inner
             .add(
-                egui::Button::new("×")
+                egui::Button::new("")
                     .frame(false)
                     .min_size(egui::vec2(button_width, height - 6.0)),
             )
-            .on_hover_text("Clear search")
-            .clicked()
-        {
+            .on_hover_text("Clear search");
+        let color = if response.hovered() {
+            inner.visuals().strong_text_color()
+        } else {
+            inner.visuals().text_color()
+        };
+        crate::glyphs::close_x(
+            inner.painter(),
+            egui::Rect::from_center_size(response.rect.center(), egui::Vec2::splat(9.0)),
+            color,
+        );
+        if response.clicked() {
             action = Some(SearchAction::Clear);
         }
     }

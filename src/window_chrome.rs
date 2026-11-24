@@ -789,7 +789,10 @@ impl<'a> ThemedWindow<'a> {
             if response.hovered() {
                 ui.painter().rect_filled(rect, 0, colors.button_hover_bg);
             }
-            let icon_stroke = egui::Stroke::new(1.0, colors.button_icon_color);
+            let icon_stroke = egui::Stroke::new(
+                crate::glyphs::stroke::px(ui.painter(), crate::glyphs::stroke::THIN),
+                colors.button_icon_color,
+            );
             // Always a square, so a tall header does not stretch the glyph.
             let icon = egui::Rect::from_center_size(rect.center(), egui::vec2(10.0, 10.0));
             match kind {
@@ -805,10 +808,7 @@ impl<'a> ThemedWindow<'a> {
                         .rect_stroke(icon, 0, icon_stroke, egui::StrokeKind::Inside);
                 }
                 ButtonKind::Close => {
-                    ui.painter()
-                        .line_segment([icon.left_top(), icon.right_bottom()], icon_stroke);
-                    ui.painter()
-                        .line_segment([icon.left_bottom(), icon.right_top()], icon_stroke);
+                    crate::glyphs::close_x(ui.painter(), icon, colors.button_icon_color);
                 }
             }
             if response.clicked() {

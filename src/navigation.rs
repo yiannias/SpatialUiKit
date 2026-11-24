@@ -221,25 +221,16 @@ fn disclosure_row(
             let side = ui.spacing().interact_size.y;
             let (rect, chevron) =
                 ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-            let size = side * 0.22;
-            let c = rect.center();
-            let points = if open {
-                [
-                    c + egui::vec2(-size, -size * 0.5),
-                    c + egui::vec2(0.0, size * 0.5),
-                    c + egui::vec2(size, -size * 0.5),
-                ]
-            } else {
-                [
-                    c + egui::vec2(-size * 0.5, -size),
-                    c + egui::vec2(size * 0.5, 0.0),
-                    c + egui::vec2(-size * 0.5, size),
-                ]
-            };
-            ui.painter().add(egui::Shape::line(
-                points.to_vec(),
-                egui::Stroke::new(1.5, ui.visuals().weak_text_color()),
-            ));
+            crate::glyphs::chevron(
+                ui.painter(),
+                egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(side * 0.786)),
+                if open {
+                    crate::glyphs::Dir::Down
+                } else {
+                    crate::glyphs::Dir::Right
+                },
+                ui.visuals().weak_text_color(),
+            );
             let text = label.text().to_owned();
             let name = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
             chevron.widget_info(|| {

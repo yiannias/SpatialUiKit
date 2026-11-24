@@ -1406,17 +1406,16 @@ fn paint_face(ui: &Ui, rect: Rect, face: &Face<'_, '_>) {
 
 /// The control's arrow centred on `c`, pointing up while the list is open.
 pub(crate) fn paint_arrow(ui: &Ui, c: Pos2, open: bool, color: Color32) {
-    let h = 3.5;
-    let dir = if open { -1.0 } else { 1.0 };
-    ui.painter().add(egui::Shape::convex_polygon(
-        vec![
-            c + Vec2::new(-h, -h * 0.6 * dir),
-            c + Vec2::new(h, -h * 0.6 * dir),
-            c + Vec2::new(0.0, h * 0.7 * dir),
-        ],
+    crate::glyphs::chevron(
+        ui.painter(),
+        Rect::from_center_size(c, Vec2::splat(12.0)),
+        if open {
+            crate::glyphs::Dir::Up
+        } else {
+            crate::glyphs::Dir::Down
+        },
         color,
-        Stroke::NONE,
-    ));
+    );
 }
 
 /// Left-aligned, vertically centred at `pos`, middle-shortened to `max_w`.

@@ -744,11 +744,11 @@ fn hover_close_x(response: &egui::Response) -> bool {
     if over_x {
         painter.rect_filled(slot.shrink(2.0), 4.0, visuals.widgets.hovered.weak_bg_fill);
     }
-    let h = X_SIZE / 2.0;
-    let c = slot.center();
-    let stroke = egui::Stroke::new(1.3, color);
-    painter.line_segment([c + egui::vec2(-h, -h), c + egui::vec2(h, h)], stroke);
-    painter.line_segment([c + egui::vec2(-h, h), c + egui::vec2(h, -h)], stroke);
+    crate::glyphs::close_x(
+        &painter,
+        egui::Rect::from_center_size(slot.center(), egui::vec2(X_SIZE, X_SIZE)),
+        color,
+    );
     over_x && response.clicked()
 }
 

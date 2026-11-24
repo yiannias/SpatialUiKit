@@ -11,6 +11,7 @@ pub mod dropdown;
 pub mod font_picker;
 pub mod fonts;
 pub mod form;
+pub mod glyphs;
 pub mod idle_input;
 pub mod list_nav;
 pub mod menu;

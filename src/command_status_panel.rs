@@ -396,7 +396,11 @@ pub fn annunciator_response_styled(
     let font = egui::FontId::monospace(
         crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui) * scale,
     );
-    let stroke_w = 1.3 * scale.max(0.75);
+    // Whole physical pixels (SDB TASK-350, wave 5): 1.0 px up to 125%, 1.5 px at
+    // 150%, scaled with the panel's own scale and never under 1.0 px.
+    let ppp = painter.pixels_per_point();
+    let base_px = if ppp >= 1.5 { 1.5 } else { 1.0 };
+    let stroke_w = ((base_px * scale.max(0.75) / 0.5).round() * 0.5).max(1.0) / ppp;
     if lit {
         if style.backlit {
             // Back-illumination: wide translucent underpaints beneath the
