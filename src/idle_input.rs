@@ -50,6 +50,14 @@ impl IdleInputState {
         self.last_key_time = None;
     }
 
+    /// Start the green confirmation flash for `name` without going through
+    /// the typed-alias path, so any other launch source (Space, Enter,
+    /// right-click repeat, ribbon, menu) shows the same pill the same way.
+    pub fn show_flash(&mut self, ctx: &egui::Context, name: &str) {
+        self.flash = Some((name.to_string(), Instant::now()));
+        ctx.request_repaint_after(DEFAULT_FLASH_DURATION);
+    }
+
     /// The buffer's current contents, for a caller that wants to draw its
     /// own capsule instead of using [`capsule`].
     pub fn text(&self) -> &str {
@@ -167,6 +175,48 @@ pub fn update<A>(
 /// the resolved command's name briefly flashing green after it fires.
 /// No-op while both are empty/expired.
 pub fn capsule(ui: &mut egui::Ui, viewport_rect: egui::Rect, state: &IdleInputState) {
+    capsule_styled(ui, viewport_rect, state, &CapsuleStyle::default());
+}
+
+/// Where the capsule sits inside the viewport rect.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum CapsuleAnchor {
+    #[default]
+    BottomLeft,
+    BottomCenter,
+    BottomRight,
+    TopLeft,
+    TopRight,
+}
+
+/// Size, place and colour of the capsule. `Default` is the original look
+/// (bottom-left, 28 pt, amber typing / green flash).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CapsuleStyle {
+    /// Multiplies the 28 pt text size and the padding.
+    pub scale: f32,
+    pub anchor: CapsuleAnchor,
+    /// Overrides both the typing and the flash colour when set.
+    pub color: Option<egui::Color32>,
+}
+
+impl Default for CapsuleStyle {
+    fn default() -> Self {
+        Self {
+            scale: 1.0,
+            anchor: CapsuleAnchor::BottomLeft,
+            color: None,
+        }
+    }
+}
+
+/// [`capsule`] with an explicit [`CapsuleStyle`].
+pub fn capsule_styled(
+    ui: &mut egui::Ui,
+    viewport_rect: egui::Rect,
+    state: &IdleInputState,
+    style: &CapsuleStyle,
+) {
     let flashing = state
         .flash
         .as_ref()
@@ -177,38 +227,66 @@ pub fn capsule(ui: &mut egui::Ui, viewport_rect: egui::Rect, state: &IdleInputSt
     let ctx = ui.ctx().clone();
 
     let margin = egui::vec2(24.0, 24.0);
-    let pos = if viewport_rect.width() > 1.0 && viewport_rect.height() > 1.0 {
-        egui::pos2(
-            viewport_rect.left() + margin.x,
-            viewport_rect.bottom() - margin.y,
-        )
+    let rect = if viewport_rect.width() > 1.0 && viewport_rect.height() > 1.0 {
+        viewport_rect
     } else {
-        ui.max_rect().left_bottom() + egui::vec2(margin.x, -margin.y)
+        ui.max_rect()
+    };
+    let (pos, pivot) = match style.anchor {
+        CapsuleAnchor::BottomLeft => (
+            egui::pos2(rect.left() + margin.x, rect.bottom() - margin.y),
+            egui::Align2::LEFT_BOTTOM,
+        ),
+        CapsuleAnchor::BottomCenter => (
+            egui::pos2(rect.center().x, rect.bottom() - margin.y),
+            egui::Align2::CENTER_BOTTOM,
+        ),
+        CapsuleAnchor::BottomRight => (
+            egui::pos2(rect.right() - margin.x, rect.bottom() - margin.y),
+            egui::Align2::RIGHT_BOTTOM,
+        ),
+        CapsuleAnchor::TopLeft => (
+            egui::pos2(rect.left() + margin.x, rect.top() + margin.y),
+            egui::Align2::LEFT_TOP,
+        ),
+        CapsuleAnchor::TopRight => (
+            egui::pos2(rect.right() - margin.x, rect.top() + margin.y),
+            egui::Align2::RIGHT_TOP,
+        ),
     };
 
     let (text, color): (&str, egui::Color32) = if flashing {
         let (name, _) = state.flash.as_ref().unwrap();
-        (name.as_str(), egui::Color32::from_rgb(120, 230, 150))
+        (
+            name.as_str(),
+            style.color.unwrap_or(egui::Color32::from_rgb(120, 230, 150)),
+        )
     } else {
-        (&state.buffer, egui::Color32::from_rgb(255, 178, 82))
+        (
+            &state.buffer,
+            style.color.unwrap_or(egui::Color32::from_rgb(255, 178, 82)),
+        )
     };
 
     egui::Area::new(egui::Id::new("idle_input_capsule"))
         .order(egui::Order::Tooltip)
         .fixed_pos(pos)
-        .pivot(egui::Align2::LEFT_BOTTOM)
+        .pivot(pivot)
         .interactable(false)
         .show(&ctx, |ui| {
             egui::Frame::new()
                 .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 35, 235))
                 .stroke(egui::Stroke::new(2.0, color))
                 .corner_radius(20)
-                .inner_margin(egui::Margin::symmetric(20, 10))
+                .inner_margin(egui::Margin::symmetric(
+                    (20.0 * style.scale) as i8,
+                    (10.0 * style.scale) as i8,
+                ))
                 .show(ui, |ui| {
                     ui.add(
                         egui::Label::new(
                             egui::RichText::new(text)
-                                .font(egui::FontId::monospace(28.0))
+                                .font(egui::FontId::monospace(28.0 * style.scale))
                                 .strong()
                                 .color(color),
                         )
