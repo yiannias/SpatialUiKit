@@ -32,6 +32,8 @@ pub struct NavigationNode<K> {
 
 #[derive(Clone, Copy)]
 enum RowKind {
+    /// A boxed top-level row, such as "This drawing" or a library.
+    Root,
     Branch,
     Group,
     Item,
@@ -44,6 +46,15 @@ struct ContextAction {
 }
 
 impl<K> NavigationNode<K> {
+    /// Builds a boxed top-level row (a document or a loaded library) holding
+    /// branches.
+    pub fn root(label: impl Into<String>, count: usize, children: Vec<Self>) -> Self {
+        Self {
+            kind: RowKind::Root,
+            ..Self::branch(label, count, children)
+        }
+    }
+
     /// Builds a major branch row, such as a document or symbol category.
     pub fn branch(label: impl Into<String>, count: usize, children: Vec<Self>) -> Self {
         Self {
@@ -198,42 +209,68 @@ struct ItemRow<K> {
 
 /// The chevron-and-label heading of a branch or group. Returns whether the
 /// user asked to toggle it.
-fn disclosure_row(ui: &mut egui::Ui, label: egui::RichText, open: bool) -> bool {
-    ui.horizontal(|ui| {
-        let side = ui.spacing().interact_size.y;
-        let (rect, chevron) = ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
-        let size = side * 0.22;
-        let c = rect.center();
-        let points = if open {
-            [
-                c + egui::vec2(-size, -size * 0.5),
-                c + egui::vec2(0.0, size * 0.5),
-                c + egui::vec2(size, -size * 0.5),
-            ]
-        } else {
-            [
-                c + egui::vec2(-size * 0.5, -size),
-                c + egui::vec2(size * 0.5, 0.0),
-                c + egui::vec2(-size * 0.5, size),
-            ]
-        };
-        ui.painter().add(egui::Shape::line(
-            points.to_vec(),
-            egui::Stroke::new(1.5, ui.visuals().weak_text_color()),
-        ));
-        let text = label.text().to_owned();
-        let name = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
-        chevron.widget_info(|| {
-            egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, text.clone())
-        });
-        let mut toggled = chevron.clicked() || name.clicked();
-        if chevron.has_focus() {
-            let key = |k| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
-            toggled |= (!open && key(egui::Key::ArrowRight)) || (open && key(egui::Key::ArrowLeft));
-        }
-        toggled
-    })
-    .inner
+fn disclosure_row(
+    ui: &mut egui::Ui,
+    label: egui::RichText,
+    count: Option<usize>,
+    open: bool,
+    boxed: bool,
+) -> bool {
+    let draw = |ui: &mut egui::Ui| {
+        ui.horizontal(|ui| {
+            let side = ui.spacing().interact_size.y;
+            let (rect, chevron) =
+                ui.allocate_exact_size(egui::vec2(side, side), egui::Sense::click());
+            let size = side * 0.22;
+            let c = rect.center();
+            let points = if open {
+                [
+                    c + egui::vec2(-size, -size * 0.5),
+                    c + egui::vec2(0.0, size * 0.5),
+                    c + egui::vec2(size, -size * 0.5),
+                ]
+            } else {
+                [
+                    c + egui::vec2(-size * 0.5, -size),
+                    c + egui::vec2(size * 0.5, 0.0),
+                    c + egui::vec2(-size * 0.5, size),
+                ]
+            };
+            ui.painter().add(egui::Shape::line(
+                points.to_vec(),
+                egui::Stroke::new(1.5, ui.visuals().weak_text_color()),
+            ));
+            let text = label.text().to_owned();
+            let name = ui.add(egui::Label::new(label).sense(egui::Sense::click()));
+            chevron.widget_info(|| {
+                egui::WidgetInfo::selected(egui::WidgetType::Button, true, open, text.clone())
+            });
+            let mut toggled = chevron.clicked() || name.clicked();
+            if chevron.has_focus() {
+                let key = |k| ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, k));
+                toggled |=
+                    (!open && key(egui::Key::ArrowRight)) || (open && key(egui::Key::ArrowLeft));
+            }
+            // The count is a plain weak number at the row's right edge.
+            if let Some(count) = count {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.label(egui::RichText::new(count.to_string()).weak());
+                });
+            }
+            toggled
+        })
+        .inner
+    };
+    if boxed {
+        egui::Frame::new()
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+            .corner_radius(6.0)
+            .inner_margin(egui::Margin::symmetric(4, 2))
+            .show(ui, draw)
+            .inner
+    } else {
+        draw(ui)
+    }
 }
 
 fn render_nodes<K: Clone>(
@@ -244,12 +281,11 @@ fn render_nodes<K: Clone>(
 ) {
     for (index, node) in nodes.iter().enumerate() {
         ui.push_id(index, |ui| match node.kind {
-            RowKind::Branch | RowKind::Group => {
-                let label = match (node.kind, node.count) {
-                    (RowKind::Branch, Some(count)) => {
-                        egui::RichText::new(format!("{}  ({count})", node.label)).strong()
+            RowKind::Root | RowKind::Branch | RowKind::Group => {
+                let label = match node.kind {
+                    RowKind::Root | RowKind::Branch => {
+                        egui::RichText::new(node.label.clone()).strong()
                     }
-                    (_, Some(count)) => egui::RichText::new(format!("{}  ({count})", node.label)),
                     _ => egui::RichText::new(node.label.clone()),
                 };
                 // A disclosure row: chevron + label. Click, Enter or Space
@@ -258,7 +294,13 @@ fn render_nodes<K: Clone>(
                 let mut open = ui
                     .memory(|m| m.data.get_temp::<bool>(open_id))
                     .unwrap_or(true);
-                let toggled = disclosure_row(ui, label, open);
+                let toggled = disclosure_row(
+                    ui,
+                    label,
+                    node.count,
+                    open,
+                    matches!(node.kind, RowKind::Root),
+                );
                 if toggled {
                     open = !open;
                     ui.memory_mut(|m| m.data.insert_temp(open_id, open));
@@ -330,6 +372,35 @@ mod tests {
         let mut event = None;
         let _ = ctx.run_ui(Default::default(), |ui| event = render_tree(ui, &tree));
         assert_eq!(event, None);
+    }
+
+    /// A root row nests branches and its label has no parenthesised count.
+    #[test]
+    fn root_row_holds_branches() {
+        let tree = vec![NavigationNode::root(
+            "This drawing",
+            1,
+            vec![NavigationNode::branch(
+                "Marks",
+                1,
+                vec![NavigationNode::item(1, "Arrow", false, true)],
+            )],
+        )];
+        let ctx = egui::Context::default();
+        let mut event = None;
+        let _ = ctx.run_ui(Default::default(), |ui| event = render_tree(ui, &tree));
+        assert_eq!(event, None);
+        let mut text = String::new();
+        let out = ctx.run_ui(Default::default(), |ui| {
+            let _ = render_tree(ui, &tree);
+        });
+        for clipped in &out.shapes {
+            if let egui::epaint::Shape::Text(t) = &clipped.shape {
+                text.push_str(&t.galley.text());
+            }
+        }
+        assert!(text.contains("This drawing"));
+        assert!(!text.contains("(1)"));
     }
 
     fn run(
