@@ -30,6 +30,7 @@ pub mod settings;
 pub mod sketch;
 pub mod style_list;
 pub mod theme;
+pub mod tooltips;
 pub mod type_find;
 pub mod virtual_list;
 pub use theme::section_label;
