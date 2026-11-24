@@ -581,6 +581,88 @@ pub fn title_menu_with_options<R>(
     (response, inner)
 }
 
+/// What a viewport-hosted menu title reports (TASK-286).
+#[derive(Clone, Debug)]
+pub struct ViewportTitle {
+    /// The title's own response (click toggles, hover switches an open menu).
+    pub response: egui::Response,
+}
+
+/// A menu-bar title whose card is NOT an egui popup in this window: the caller opens the card
+/// in a child OS window (`open` says it is showing), so the card can sit above other floating
+/// windows, which are separate OS windows that always draw above this one. This draws only the
+/// title: hovering like any title, and, while `open`, the card-coloured tab (bold) that the
+/// card window below joins. Additive next to [`title_menu_with_options`]; the egui-popup path
+/// stays the default for every other menu.
+pub fn viewport_title(
+    ui: &mut egui::Ui,
+    label: &str,
+    bar: egui::Rect,
+    open: bool,
+    options: TitleMenuOptions,
+) -> ViewportTitle {
+    let slot = egui::Rect::from_min_max(
+        egui::pos2(ui.cursor().min.x, bar.top()),
+        egui::pos2(ui.max_rect().right().max(ui.cursor().min.x), bar.bottom()),
+    );
+    let response = ui
+        .scope_builder(
+            egui::UiBuilder::new()
+                .max_rect(slot)
+                .layout(egui::Layout::left_to_right(egui::Align::Center)),
+            |ui| {
+                let button = egui::Button::new(egui::RichText::new(label))
+                    .frame(false)
+                    .min_size(egui::vec2(0.0, bar.height()));
+                ui.add(button)
+            },
+        )
+        .inner;
+    let visuals = ui.visuals().clone();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    if open {
+        let tab = egui::Rect::from_min_max(
+            egui::pos2(
+                response.rect.left() - options.tab_horizontal_padding,
+                bar.top() + options.tab_vertical_gap,
+            ),
+            egui::pos2(
+                response.rect.right() + options.tab_horizontal_padding,
+                bar.bottom(),
+            ),
+        );
+        ui.painter().rect_filled(
+            tab,
+            egui::CornerRadius {
+                nw: TAB_RADIUS as u8,
+                ne: TAB_RADIUS as u8,
+                sw: 0,
+                se: 0,
+            },
+            visuals.window_fill(),
+        );
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font,
+            visuals.strong_text_color(),
+        );
+    } else if response.hovered() {
+        let pill = response.rect.shrink2(egui::vec2(0.0, 5.0));
+        ui.painter()
+            .rect_filled(pill, 5.0, visuals.widgets.hovered.weak_bg_fill);
+        ui.painter().text(
+            response.rect.center(),
+            egui::Align2::CENTER_CENTER,
+            label,
+            font,
+            visuals.widgets.hovered.fg_stroke.color,
+        );
+    }
+    ViewportTitle { response }
+}
+
 /// The open tab's rectangle. Its left edge IS the card's left edge (one
 /// continuous frame), it covers the whole title button so the bar's copy of the
 /// title is hidden underneath, and it extends right of the title by at most the
