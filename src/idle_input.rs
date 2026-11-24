@@ -58,6 +58,12 @@ impl IdleInputState {
         ctx.request_repaint_after(DEFAULT_FLASH_DURATION);
     }
 
+    /// Drop a running confirmation flash (an app that hides the pill for one
+    /// launch source clears the flash the alias path just started).
+    pub fn clear_flash(&mut self) {
+        self.flash = None;
+    }
+
     /// The buffer's current contents, for a caller that wants to draw its
     /// own capsule instead of using [`capsule`].
     pub fn text(&self) -> &str {
@@ -296,6 +302,54 @@ pub fn capsule_styled(
                     );
                 });
         });
+}
+
+/// Paints a static sample capsule reading `text` inside `area` with the same
+/// size, anchor and colour [`capsule_styled`] would use, for a settings
+/// preview. `typing` picks the typing colour instead of the flash colour.
+pub fn paint_capsule_preview(
+    ui: &egui::Ui,
+    area: egui::Rect,
+    text: &str,
+    typing: bool,
+    style: &CapsuleStyle,
+) {
+    let color = style.color.unwrap_or(if typing {
+        egui::Color32::from_rgb(255, 178, 82)
+    } else {
+        egui::Color32::from_rgb(120, 230, 150)
+    });
+    // The real capsule's 24 px margin and 28 pt text, scaled down to the
+    // preview box so a Large pill still fits.
+    let fit = (area.height() / 160.0).clamp(0.3, 1.0);
+    let k = style.scale * fit;
+    let galley =
+        ui.painter()
+            .layout_no_wrap(text.to_owned(), egui::FontId::monospace(28.0 * k), color);
+    let pad = egui::vec2(20.0 * k, 10.0 * k);
+    let size = galley.size() + pad * 2.0;
+    let m = 24.0 * fit;
+    let min = match style.anchor {
+        CapsuleAnchor::BottomLeft => egui::pos2(area.left() + m, area.bottom() - m - size.y),
+        CapsuleAnchor::BottomCenter => {
+            egui::pos2(area.center().x - size.x / 2.0, area.bottom() - m - size.y)
+        }
+        CapsuleAnchor::BottomRight => {
+            egui::pos2(area.right() - m - size.x, area.bottom() - m - size.y)
+        }
+        CapsuleAnchor::TopLeft => egui::pos2(area.left() + m, area.top() + m),
+        CapsuleAnchor::TopRight => egui::pos2(area.right() - m - size.x, area.top() + m),
+    };
+    let rect = egui::Rect::from_min_size(min, size);
+    let painter = ui.painter().with_clip_rect(area);
+    painter.rect(
+        rect,
+        20.0 * k,
+        egui::Color32::from_rgba_unmultiplied(30, 30, 35, 235),
+        egui::Stroke::new(2.0 * k.max(0.5), color),
+        egui::StrokeKind::Inside,
+    );
+    painter.galley(min + pad, galley, color);
 }
 
 #[cfg(test)]
