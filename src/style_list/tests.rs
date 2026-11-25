@@ -810,3 +810,41 @@ fn a_claimed_escape_is_owned_for_one_frame() {
     claim_escape(&h.ctx);
     assert!(rename_editor_owns_escape(&h.ctx));
 }
+
+#[test]
+fn wide_samples_paint_beside_the_name_and_rows_stay_clickable() {
+    let sample = RefCell::new(None::<Rect>);
+    let clicked = RefCell::new(None::<usize>);
+    let wide = RefCell::new(true);
+    let mut show = |ui: &mut egui::Ui| {
+        let sk = SketchFrame::fit(ui.max_rect(), Vec2::new(900.0, 700.0));
+        let frame = Rect::from_min_size(Pos2::new(20.0, 40.0), Vec2::new(360.0, 400.0));
+        let validate = |_: &str, _: &str| Ok(());
+        let rows = vec![
+            ListRow::style("Hidden").with_thumbnail(|_, r| *sample.borrow_mut() = Some(r)),
+            ListRow::style("Center"),
+        ];
+        let mut mode = StyleListMode::List;
+        let mut list = StyleList::new("wide", &validate);
+        if *wide.borrow() {
+            list = list.wide_samples();
+        }
+        let out = list.show(ui, &sk, frame, rows, Some(0), &mut mode);
+        if let Some(i) = out.selected() {
+            *clicked.borrow_mut() = Some(i);
+        }
+    };
+    let mut h = Harness::new();
+    h.settle(3, &mut show);
+    let r = sample.borrow().expect("the sample is painted in List mode");
+    assert!(r.width() > 2.0 * r.height(), "a wide rect: {r:?}");
+    assert!(r.left() > 180.0 && r.right() < 380.0, "at the right: {r:?}");
+    // The second row, one row and the item spacing further down.
+    h.click(Pos2::new(60.0, r.center().y + r.height() / 0.8), &mut show);
+    assert_eq!(*clicked.borrow(), Some(1));
+    // Without the option, List mode paints no sample, as before.
+    *wide.borrow_mut() = false;
+    *sample.borrow_mut() = None;
+    h.settle(2, &mut show);
+    assert!(sample.borrow().is_none());
+}

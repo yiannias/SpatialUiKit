@@ -151,8 +151,9 @@ pub struct ListRow<'a> {
     /// Text shown after the name, e.g. `*` for unapplied edits. Never part of
     /// the name an event carries.
     pub marker: Option<&'a str>,
-    /// Paints this row's thumbnail in [`StyleListMode::Thumbnails`]; `None`
-    /// leaves the empty outlined square.
+    /// Paints this row's thumbnail in [`StyleListMode::Thumbnails`] (`None`
+    /// leaves the empty outlined square) and, with
+    /// [`StyleList::wide_samples`], its sample in List mode.
     pub thumbnail: Option<ThumbnailPaint<'a>>,
     /// Draw the name in italics (a built-in the user cannot change).
     pub italic: bool,
@@ -433,6 +434,7 @@ pub struct StyleList<'a> {
     can_delete: Option<&'a dyn Fn(&str) -> bool>,
     extra_menu: Option<MenuExtra<'a>>,
     switch: bool,
+    wide_samples: bool,
 }
 
 impl<'a> StyleList<'a> {
@@ -448,6 +450,7 @@ impl<'a> StyleList<'a> {
             can_delete: None,
             extra_menu: None,
             switch: true,
+            wide_samples: false,
         }
     }
 
@@ -482,6 +485,15 @@ impl<'a> StyleList<'a> {
         self
     }
 
+    /// In List mode, use taller rows and call each row's thumbnail painter
+    /// with a wide rect at the right of the row, beside the name: for entries
+    /// that only read at length, such as line patterns. Thumbnails mode keeps
+    /// its squares.
+    pub fn wide_samples(mut self) -> Self {
+        self.wide_samples = true;
+        self
+    }
+
     /// Draws the list in `frame` (the framed region; the switch sits in its
     /// header band) and returns what the user did.
     pub fn show(
@@ -500,6 +512,7 @@ impl<'a> StyleList<'a> {
             can_delete,
             extra_menu: mut extra,
             switch,
+            wide_samples,
         } = self;
         let mode_before = *mode;
         let mut out = ListOutput::default();
@@ -600,18 +613,21 @@ impl<'a> StyleList<'a> {
                 row_kinds[index] != RowKind::Placeholder && row_names[index] == original
             };
             match *mode {
-                StyleListMode::List => draw_list_with_editor(
+                StyleListMode::List => draw_list_rows(
                     ui,
                     sk,
                     frame,
                     &plain,
                     selected,
-                    key,
-                    &is_edited,
-                    e,
+                    wide_samples,
+                    Some(ListEditor {
+                        key,
+                        is_edited: &is_edited,
+                        edit: e,
+                        result: &mut result,
+                        message: &mut message,
+                    }),
                     &mut raw,
-                    &mut result,
-                    &mut message,
                 ),
                 StyleListMode::Thumbnails => draw_thumbnails_with_editor(
                     ui,
@@ -658,6 +674,8 @@ impl<'a> StyleList<'a> {
                     paint_error_bubble(ui, sk, edit_id, field, &text);
                 }
             }
+        } else if wide_samples && *mode == StyleListMode::List {
+            draw_list_rows(ui, sk, frame, &plain, selected, true, None, &mut raw);
         } else {
             raw = crate::sketch::style_list(ui, sk, frame, &plain, selected, *mode);
         }
@@ -820,23 +838,36 @@ fn paint_error_bubble(ui: &egui::Ui, sk: &SketchFrame, edit_id: egui::Id, field:
     painter.galley(bubble.min + pad, galley, Color32::LIGHT_RED);
 }
 
-/// List-mode rows with the renamed row's text swapped for a field. Geometry
-/// and painting mirror [`crate::sketch::style_list`]'s List branch, including
-/// the `style_list_scroll` salt, so the list does not jump when the editor
-/// opens.
+/// Row height of the plain list and of [`StyleList::wide_samples`] rows, in
+/// sketch points.
+const ROW_HEIGHT: f32 = 24.2;
+const SAMPLE_ROW_HEIGHT: f32 = 36.0;
+/// How far across a [`StyleList::wide_samples`] row its sample starts.
+const SAMPLE_START: f32 = 0.52;
+
+/// An open rename, as [`draw_list_rows`] needs it.
+struct ListEditor<'e> {
+    key: &'e str,
+    is_edited: &'e dyn Fn(usize, &str) -> bool,
+    edit: &'e mut RenameEdit,
+    result: &'e mut EditResult,
+    message: &'e mut Option<(Rect, String)>,
+}
+
+/// List-mode rows painted here: while a rename is open (the renamed row's text
+/// is swapped for a field) and always with wide samples. Geometry and painting
+/// mirror [`crate::sketch::style_list`]'s List branch, including the
+/// `style_list_scroll` salt, so the list does not jump when the editor opens.
 #[allow(clippy::too_many_arguments)]
-fn draw_list_with_editor(
+fn draw_list_rows(
     ui: &mut egui::Ui,
     sk: &SketchFrame,
     frame: Rect,
     rows: &[StyleListRow<'_>],
     selected: Option<usize>,
-    key: &str,
-    is_edited: &dyn Fn(usize, &str) -> bool,
-    edit: &mut RenameEdit,
+    samples: bool,
+    mut editor: Option<ListEditor<'_>>,
     out: &mut StyleListResponse,
-    result: &mut EditResult,
-    message: &mut Option<(Rect, String)>,
 ) {
     let font = sk.font(20.0);
     let inner = Rect::from_min_max(
@@ -849,31 +880,41 @@ fn draw_list_with_editor(
             .id_salt("style_list_scroll")
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                let row_h = sk.len(24.2);
+                let row_h = sk.len(if samples {
+                    SAMPLE_ROW_HEIGHT
+                } else {
+                    ROW_HEIGHT
+                });
                 let width = ui.available_width();
                 for (index, row) in rows.iter().enumerate() {
                     let (rect, response) =
                         ui.allocate_exact_size(Vec2::new(width, row_h), Sense::click());
-                    let bar = rect.shrink2(Vec2::new(sk.len(2.0), 0.0));
-                    let editing_row = !found && is_edited(index, &edit.original);
-                    if editing_row {
-                        found = true;
-                        ui.painter().rect_filled(
-                            bar,
-                            CornerRadius::same(palette::CHIP_RADIUS),
-                            palette::SELECTED,
-                        );
-                        let field = Rect::from_min_max(
-                            Pos2::new(rect.left() + sk.len(6.0), rect.top() + 1.0),
-                            Pos2::new(rect.right() - sk.len(6.0), rect.bottom() - 1.0),
-                        );
-                        *result = rename_field(ui, sk, field, key, edit, false);
-                        if let Some(error) = &edit.error {
-                            *message = Some((field, error.clone()));
-                        }
+                    let visible = ui.is_rect_visible(rect);
+                    if samples && visible {
+                        let first = out.shown.map_or(index, |(first, _)| first);
+                        out.shown = Some((first, index));
+                    }
+                    let editing_row = !found
+                        && editor
+                            .as_ref()
+                            .is_some_and(|e| (e.is_edited)(index, &e.edit.original));
+                    // A row scrolled out of view costs nothing: no text and no
+                    // sample. (The edited row keeps its field alive.)
+                    if samples && !visible && !editing_row {
                         continue;
                     }
-                    if selected == Some(index) {
+                    let bar = rect.shrink2(Vec2::new(sk.len(2.0), 0.0));
+                    let sample = samples.then(|| {
+                        Rect::from_min_max(
+                            Pos2::new(
+                                rect.left() + rect.width() * SAMPLE_START,
+                                rect.top() + sk.len(4.0),
+                            ),
+                            Pos2::new(rect.right() - sk.len(14.0), rect.bottom() - sk.len(4.0)),
+                        )
+                    });
+                    let text_right = sample.map_or(rect.right(), |s| s.left());
+                    if selected == Some(index) || editing_row {
                         ui.painter().rect_filled(
                             bar,
                             CornerRadius::same(palette::CHIP_RADIUS),
@@ -886,9 +927,28 @@ fn draw_list_with_editor(
                             Color32::from_white_alpha(12),
                         );
                     }
+                    if let (Some(area), Some(paint)) = (sample, &row.thumbnail) {
+                        paint(ui, area);
+                    }
+                    if editing_row {
+                        found = true;
+                        let e = editor.as_mut().expect("this row is being edited");
+                        // Centred on the row at the plain row's height.
+                        let height = sk.len(ROW_HEIGHT) - 2.0;
+                        let field = Rect::from_min_max(
+                            Pos2::new(rect.left() + sk.len(6.0), rect.center().y - height / 2.0),
+                            Pos2::new(text_right - sk.len(6.0), rect.center().y + height / 2.0),
+                        );
+                        *e.result = rename_field(ui, sk, field, e.key, e.edit, false);
+                        if let Some(error) = &e.edit.error {
+                            *e.message = Some((field, error.clone()));
+                        }
+                        continue;
+                    }
                     let text_x = rect.left() + sk.len(10.0);
                     let shown =
-                        truncate_middle(ui, row.name, &font, rect.right() - text_x - sk.len(8.0));
+                        truncate_middle(ui, row.name, &font, text_right - text_x - sk.len(8.0));
+                    let truncated = shown != row.name;
                     let galley = ui
                         .painter()
                         .layout_job(egui::text::LayoutJob::single_section(
@@ -913,6 +973,9 @@ fn draw_list_with_editor(
                     }
                     if response.secondary_clicked() {
                         out.secondary_clicked = Some(index);
+                    }
+                    if samples && truncated {
+                        response.on_hover_text(row.name);
                     }
                 }
             });
