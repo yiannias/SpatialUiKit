@@ -493,6 +493,35 @@ pub struct ThemePalette {
     pub control: ControlTokens,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub interface: Option<InterfaceTokens>,
+    /// Colours this theme *suggests* for settings that belong to the user
+    /// (2026-11-27, Chris: "let the scheme suggest one, my setting wins, but
+    /// it should ask"). Optional, and written only when present; a file
+    /// without it loads unchanged. The host app decides what to do with a
+    /// suggestion; SDB asks once when it differs from the user's setting.
+    #[serde(default, skip_serializing_if = "ThemeSuggestions::is_empty")]
+    pub suggestions: ThemeSuggestions,
+}
+
+/// Colours a theme suggests for user settings. Each is optional.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[serde(default)]
+pub struct ThemeSuggestions {
+    /// The selection highlight (the dashed outline on selected objects).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_highlight: Option<ColorToken>,
+    /// The selection glow.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection_glow: Option<ColorToken>,
+    /// The interface highlight (armed tool, lit annunciators, prompt).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface_highlight: Option<ColorToken>,
+}
+
+impl ThemeSuggestions {
+    /// True when the theme suggests nothing.
+    pub fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
 }
 
 /// [`ThemePalette`]'s on-disk shape, where `interface` may be missing; the
@@ -506,6 +535,8 @@ struct ThemePaletteFile {
     control: ControlTokens,
     #[serde(default)]
     interface: Option<InterfaceTokens>,
+    #[serde(default)]
+    suggestions: ThemeSuggestions,
 }
 
 impl From<ThemePaletteFile> for ThemePalette {
@@ -518,6 +549,7 @@ impl From<ThemePaletteFile> for ThemePalette {
             surface: f.surface,
             control: f.control,
             interface,
+            suggestions: f.suggestions,
         }
     }
 }
@@ -616,6 +648,7 @@ impl ThemePalette {
                 cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(110, 110, 118)),
             },
             interface: default_interface(Theme::Dark),
+            suggestions: ThemeSuggestions::default(),
         }
     }
 
@@ -689,6 +722,7 @@ impl ThemePalette {
                 cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(120, 122, 130)),
             },
             interface: default_interface(Theme::Light),
+            suggestions: ThemeSuggestions::default(),
         }
     }
 }
@@ -751,6 +785,26 @@ mod theme_palette_tests {
             ThemePalette::dark().interface_colors(),
             Some(InterfaceColors::dark_default())
         );
+    }
+
+    /// 2026-11-27: suggestions are optional. A file without the section loads
+    /// with none, the built-ins carry none (so their files do not gain the
+    /// key), and a palette with some keeps them through JSON.
+    #[test]
+    fn theme_suggestions_are_optional_and_round_trip() {
+        let value = serde_json::to_value(ThemePalette::dark()).unwrap();
+        assert!(
+            value.get("suggestions").is_none(),
+            "empty suggestions are not written"
+        );
+        let loaded: ThemePalette = serde_json::from_value(value).unwrap();
+        assert!(loaded.suggestions.is_empty());
+        let mut palette = ThemePalette::dark();
+        palette.suggestions.selection_highlight =
+            Some(ColorToken::new(egui::Color32::from_rgb(1, 2, 3)));
+        let back: ThemePalette =
+            serde_json::from_str(&serde_json::to_string(&palette).unwrap()).unwrap();
+        assert_eq!(back, palette);
     }
 
     /// A Dark palette with edited interface tokens keeps them through JSON.
