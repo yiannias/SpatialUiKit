@@ -12,8 +12,8 @@
 //!
 //! Counted: `Color32::` constructors (`from_rgb`, `from_gray`, `from_rgba_*`,
 //! `from_black_alpha`, `from_white_alpha`) and named constants (`WHITE`,
-//! `BLACK`, `TRANSPARENT`, `RED`, ...; not `PLACEHOLDER`, which means "the
-//! style's own text colour"), outside `#[cfg(test)]` and comment
+//! `BLACK`, `RED`, ...; not `PLACEHOLDER`, "the style's own text colour",
+//! nor `TRANSPARENT`, "paint nothing"), outside `#[cfg(test)]` and comment
 //! lines. Test-only files (`tests.rs`, `*/tests.rs`) are skipped.
 
 use std::collections::BTreeMap;
@@ -22,28 +22,24 @@ use std::path::{Path, PathBuf};
 /// Literal colours per file, and why they are there.
 const ALLOWED: &[(&str, usize)] = &[
     // The tokens' own built-in values: these files *are* the theme.
-    ("theme.rs", 41), // Dark/Light palettes, ok/warning colours, section_label light grey
-    ("interface_tokens.rs", 19), // InterfaceColors::dark_default
+    ("interface_tokens.rs", 49), // InterfaceColors::DARK
+    ("theme.rs", 38), // Dark/Light palettes, ok/warning colours, section_label light grey
     ("tokens.rs", 1), // hex parsing builds the colour
-    // Data or measuring, not paint: caller-chosen colours, text measured
-    // for its width (the colour of a galley that is never drawn).
-    ("font_picker.rs", 1), // measuring
-    ("menu.rs", 3),        // MenuColor (caller-chosen) and measuring
-    ("search.rs", 2),      // black/white ink picked for contrast on a caller colour
-    ("os_style.rs", 6),    // accent-derived contrast ink, light hairlines
-    ("dropdown.rs", 7),    // 4 measuring, 2 transparent (no outline), opaque fallback
-    // Copies still to migrate (TASK-384 slices 3 and 5); each drops to its
-    // data-only number as it moves to tokens.
-    ("choice_toggle.rs", 8), // light-theme values, 1 measuring
-    ("sketch.rs", 24),
-    ("command_status_panel.rs", 16),
-    ("settings.rs", 10),
-    ("window_chrome.rs", 8),
-    ("idle_input.rs", 6),
-    ("ribbon.rs", 5),
-    ("dock.rs", 5),
-    ("style_list.rs", 4),
-    ("modal.rs", 2),
+    // Light-theme values. Light is the platform look and has no interface
+    // tokens yet (TASK-384 leaves that to the theming workshop).
+    ("choice_toggle.rs", 8), // 7 light, 1 measuring
+    ("settings.rs", 6),      // 4 light, 2 measuring
+    ("sketch.rs", 6),        // 4 light checkbox, 1 measuring, 1 lighten-toward-white
+    ("os_style.rs", 6), // platform hairlines (dark/light), contrast steps toward white/black, mixes
+    // Derived or measuring, not a chosen colour: a colour computed from a
+    // caller's (accent mixes, alpha), text measured for its width.
+    ("command_status_panel.rs", 9), // 4 derived; 5 SSP-only defaults (cockpit caps, legacy frame border)
+    ("dropdown.rs", 5),             // 4 measuring, opaque fallback
+    ("font_picker.rs", 1),          // measuring
+    ("menu.rs", 3),                 // MenuColor (caller-chosen) and measuring
+    ("search.rs", 2),               // black/white ink picked for contrast on a caller colour
+    // SSP's default ribbon style (SDB passes its palette's colours instead).
+    ("ribbon.rs", 3),
 ];
 
 const CONSTRUCTORS: &[&str] = &[
@@ -58,7 +54,6 @@ const CONSTRUCTORS: &[&str] = &[
 const NAMED: &[&str] = &[
     "WHITE",
     "BLACK",
-    "TRANSPARENT",
     "RED",
     "GREEN",
     "BLUE",
@@ -108,9 +103,46 @@ fn literals_in(line: &str) -> usize {
     n
 }
 
+/// `text` without its `#[cfg(test)]` items: from each attribute through the
+/// end of the item it marks (a braced block, or a `mod tests;` line). Only the
+/// marked item is skipped, not the rest of the file after it.
+fn without_test_items(text: &str) -> String {
+    let mut out = String::new();
+    let mut skipping = false;
+    let mut depth = 0i32;
+    let mut opened = false;
+    for line in text.lines() {
+        if !skipping && line.trim_start().starts_with("#[cfg(test)]") {
+            skipping = true;
+            depth = 0;
+            opened = false;
+            continue;
+        }
+        if skipping {
+            for ch in line.chars() {
+                match ch {
+                    '{' => {
+                        depth += 1;
+                        opened = true;
+                    }
+                    '}' => depth -= 1,
+                    _ => {}
+                }
+            }
+            if (opened && depth <= 0) || (!opened && line.trim_end().ends_with(';')) {
+                skipping = false;
+            }
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
 fn count(text: &str) -> usize {
-    let body = text.split("#[cfg(test)]").next().unwrap_or("");
-    body.lines()
+    without_test_items(text)
+        .lines()
         .filter(|l| !l.trim_start().starts_with("//"))
         .map(literals_in)
         .sum()
@@ -159,14 +191,17 @@ fn the_counter_sees_every_form() {
         literals_in("egui::Color32::WHITE, Color32::from_white_alpha(9)"),
         2
     );
-    assert_eq!(literals_in("Color32::TRANSPARENT"), 1);
+    assert_eq!(literals_in("Color32::TRANSPARENT"), 0);
     assert_eq!(
         literals_in("Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 9)"),
         1
     );
     assert_eq!(literals_in("fn f(c: Color32) -> Color32::Foo"), 0);
     assert_eq!(
-        count("Color32::WHITE\n// Color32::BLACK\n#[cfg(test)]\nColor32::RED"),
-        1
+        count("Color32::WHITE\n// Color32::BLACK\n#[cfg(test)]\nmod t;\nColor32::RED"),
+        2
     );
+    // Only the test item is skipped, not the code after it.
+    let file = "#[cfg(test)]\nfn t() {\n    Color32::RED;\n}\nfn f() {\n    Color32::BLUE;\n}\n";
+    assert_eq!(count(file), 1);
 }

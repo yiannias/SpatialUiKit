@@ -528,6 +528,11 @@ pub fn default_interface(base: Theme) -> Option<InterfaceTokens> {
     }
 }
 
+/// The built-in Dark palette's `surface.background` (`#1E1E23`), as a
+/// constant for the kit's older public colour constants
+/// (`sketch::palette::WINDOW_BG`).
+pub const DARK_SURFACE_BACKGROUND: egui::Color32 = egui::Color32::from_rgb(30, 30, 35);
+
 impl ThemePalette {
     /// The resolved interface colours, or `None` for the platform look.
     pub fn interface_colors(&self) -> Option<InterfaceColors> {
@@ -576,7 +581,7 @@ impl ThemePalette {
             // Chris's sketch spec (`#2B2C31`, ~0.031*H at H=56px -> ~1.7px)
             // -- previously `ribbon::FRAME_STROKE`'s `rgb(58,59,64)` at 1.0px.
             surface: SurfaceTokens {
-                background: ColorToken::new(egui::Color32::from_rgb(30, 30, 35)),
+                background: ColorToken::new(DARK_SURFACE_BACKGROUND),
                 // 2026-11-09 (Chris's panel-theming pass): thinner, slightly lighter.
                 // 2026-11-10 (Chris): a translucent white hairline, so the
                 // edge's brightness follows what is behind the card, plus a

@@ -8,42 +8,53 @@
 
 use egui::{Align2, Color32, CornerRadius, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
+/// The theme's interface colours, which the sketch-space widgets paint with
+/// (SDB TASK-384): the published theme's, or the built-in Dark ones.
+pub fn colors(ui: &egui::Ui) -> crate::interface_tokens::InterfaceColors {
+    crate::interface_tokens::interface_colors(ui.ctx())
+}
+
 /// Colors taken from the sketch's fills and borders. Color stays out of the
 /// chrome: only previews, color chips and the selection use it.
+///
+/// Since SDB TASK-384 these are the built-in Dark values of the theme's
+/// interface tokens, kept for source compatibility; the widgets here paint
+/// with [`colors`] (the theme in force) instead.
 pub mod palette {
+    use crate::interface_tokens::InterfaceColors;
     use egui::Color32;
     /// Window background (sketch `1E1E23`).
-    pub const WINDOW_BG: Color32 = Color32::from_rgb(0x1E, 0x1E, 0x23);
+    pub const WINDOW_BG: Color32 = crate::theme::DARK_SURFACE_BACKGROUND;
     /// Frame outlines (sketch `3C3C3D`).
-    pub const FRAME: Color32 = Color32::from_rgb(0x3C, 0x3C, 0x3D);
+    pub const FRAME: Color32 = InterfaceColors::DARK.frame;
     /// Headings and muted labels (`#8A8B93`, 2026-11-09 theming pass).
-    pub const MUTED: Color32 = Color32::from_rgb(0x8A, 0x8B, 0x93);
+    pub const MUTED: Color32 = InterfaceColors::DARK.text_muted;
     /// Values, style names and field text.
-    pub const BRIGHT: Color32 = Color32::from_rgb(0xE8, 0xE8, 0xEC);
+    pub const BRIGHT: Color32 = InterfaceColors::DARK.text_hover;
     /// Field outlines, the hairline grey `#4A4B52`.
-    pub const FIELD_BORDER: Color32 = Color32::from_rgb(0x4A, 0x4B, 0x52);
+    pub const FIELD_BORDER: Color32 = InterfaceColors::DARK.field_border;
     /// Secondary button chip fill (`#2E2F35`).
-    pub const BUTTON: Color32 = Color32::from_rgb(0x2E, 0x2F, 0x35);
+    pub const BUTTON: Color32 = InterfaceColors::DARK.chip;
     /// Hovered button chip.
-    pub const BUTTON_HOVER: Color32 = Color32::from_rgb(0x38, 0x39, 0x40);
+    pub const BUTTON_HOVER: Color32 = InterfaceColors::DARK.chip_hover;
     /// Pressed button chip.
-    pub const BUTTON_PRESSED: Color32 = Color32::from_rgb(0x26, 0x27, 0x2C);
+    pub const BUTTON_PRESSED: Color32 = InterfaceColors::DARK.chip_pressed;
     /// Text-entry field fill: lighter than the card.
-    pub const FIELD: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
+    pub const FIELD: Color32 = InterfaceColors::DARK.field;
     /// List selection bar: brightness, not the accent.
-    pub const SELECTED: Color32 = Color32::from_rgb(0x3A, 0x3B, 0x42);
+    pub const SELECTED: Color32 = InterfaceColors::DARK.dropdown_selected;
     /// Text of a destructive button (Delete).
-    pub const DANGER_TEXT: Color32 = Color32::from_rgb(0xE0, 0x70, 0x5F);
+    pub const DANGER_TEXT: Color32 = InterfaceColors::DARK.danger_text;
     /// Corner radius, in screen points, of chips, fields and the selection bar.
     pub const CHIP_RADIUS: u8 = 5;
     /// Primary button fill and the list selection bar (sketch `557EAF`).
-    pub const PRIMARY: Color32 = Color32::from_rgb(0x55, 0x7E, 0xAF);
+    pub const PRIMARY: Color32 = InterfaceColors::DARK.primary;
     /// The hover pill on a preview tile (sketch `6B6B6B`, near-black edge).
-    pub const PILL: Color32 = Color32::from_rgb(0x6B, 0x6B, 0x6B);
+    pub const PILL: Color32 = InterfaceColors::DARK.pill;
     /// Outline of the hover pill, near-black so it reads on the tile.
-    pub const PILL_EDGE: Color32 = Color32::from_rgb(0x05, 0x05, 0x05);
+    pub const PILL_EDGE: Color32 = InterfaceColors::DARK.pill_edge;
     /// Tile and field backgrounds.
-    pub const TILE_BG: Color32 = Color32::from_rgb(0x16, 0x16, 0x1A);
+    pub const TILE_BG: Color32 = InterfaceColors::DARK.tile;
 }
 
 /// The sketch's text sizes are 20 pt on a 1618-pt-wide window; drawn at full
@@ -110,7 +121,7 @@ pub fn framed_region(ui: &egui::Ui, sk: &SketchFrame, frame: Rect, heading: Opti
     painter.rect_stroke(
         frame,
         sk.radius(12.0),
-        Stroke::new(1.0, palette::FRAME),
+        Stroke::new(1.0, colors(ui).frame),
         StrokeKind::Inside,
     );
     if let Some(heading) = heading {
@@ -119,7 +130,7 @@ pub fn framed_region(ui: &egui::Ui, sk: &SketchFrame, frame: Rect, heading: Opti
             Align2::LEFT_BOTTOM,
             heading,
             sk.font(20.0),
-            palette::MUTED,
+            colors(ui).text_muted,
         );
     }
 }
@@ -265,9 +276,9 @@ pub fn view_mode_dropdown(
         StyleListMode::Thumbnails => "Thumbnails",
     };
     let color = if response.hovered() {
-        palette::BRIGHT
+        colors(ui).text_hover
     } else {
-        palette::MUTED
+        colors(ui).text_muted
     };
     let arrow_w = sk.len(12.0);
     painter.text(
@@ -291,7 +302,7 @@ pub fn view_mode_dropdown(
     painter.hline(
         rect.x_range(),
         rect.bottom(),
-        Stroke::new(1.0, palette::FRAME),
+        Stroke::new(1.0, colors(ui).frame),
     );
     egui::Popup::menu(&response).show(|ui| {
         ui.selectable_value(mode, StyleListMode::List, "List");
@@ -414,13 +425,13 @@ pub fn style_list(
                                 ui.painter().rect_filled(
                                     rect.shrink2(Vec2::new(sk.len(2.0), 0.0)),
                                     CornerRadius::same(palette::CHIP_RADIUS),
-                                    palette::SELECTED,
+                                    colors(ui).dropdown_selected,
                                 );
                             } else if response.hovered() {
                                 ui.painter().rect_filled(
                                     rect.shrink2(Vec2::new(sk.len(2.0), 0.0)),
                                     sk.radius(12.0),
-                                    Color32::from_white_alpha(12),
+                                    colors(ui).row_hover,
                                 );
                             }
                             let text_x = rect.left() + sk.len(10.0);
@@ -437,7 +448,7 @@ pub fn style_list(
                                             shown,
                                             egui::TextFormat {
                                                 font_id: font.clone(),
-                                                color: palette::BRIGHT,
+                                                color: colors(ui).text_hover,
                                                 italics: true,
                                                 ..Default::default()
                                             },
@@ -445,7 +456,7 @@ pub fn style_list(
                                 ui.painter().galley(
                                     Pos2::new(text_x, rect.center().y - galley.size().y / 2.0),
                                     galley,
-                                    palette::BRIGHT,
+                                    colors(ui).text_hover,
                                 );
                             } else {
                                 ui.painter().text(
@@ -453,7 +464,7 @@ pub fn style_list(
                                     Align2::LEFT_CENTER,
                                     shown,
                                     font.clone(),
-                                    palette::BRIGHT,
+                                    colors(ui).text_hover,
                                 );
                             }
                             if response.clicked() {
@@ -519,7 +530,7 @@ pub fn style_list(
                                     ui.painter().rect_filled(
                                         square,
                                         sk.radius(6.0),
-                                        palette::TILE_BG,
+                                        colors(ui).tile,
                                     );
                                     paint(ui, square);
                                 }
@@ -528,11 +539,11 @@ pub fn style_list(
                                     square,
                                     sk.radius(6.0),
                                     if is_selected {
-                                        Stroke::new(sk.len(3.0), palette::PRIMARY)
+                                        Stroke::new(sk.len(3.0), colors(ui).primary)
                                     } else if response.hovered() {
-                                        Stroke::new(1.0, palette::BRIGHT)
+                                        Stroke::new(1.0, colors(ui).text_hover)
                                     } else {
-                                        Stroke::new(1.0, palette::FIELD_BORDER)
+                                        Stroke::new(1.0, colors(ui).field_border)
                                     },
                                     StrokeKind::Inside,
                                 );
@@ -547,7 +558,7 @@ pub fn style_list(
                                     Align2::CENTER_TOP,
                                     shown,
                                     small.clone(),
-                                    palette::MUTED,
+                                    colors(ui).text_muted,
                                 );
                                 if response.clicked() {
                                     out.clicked = Some(index);
@@ -644,10 +655,10 @@ pub fn sketch_checkbox_labeled(
     let dark = ui.visuals().dark_mode;
     let (fill, border, hover_fill, ink) = if dark {
         (
-            palette::TILE_BG,
-            palette::FIELD_BORDER,
-            Color32::from_rgb(0x26, 0x26, 0x2C),
-            palette::BRIGHT,
+            colors(ui).tile,
+            colors(ui).field_border,
+            colors(ui).tile_hover,
+            colors(ui).text_hover,
         )
     } else {
         (
@@ -684,7 +695,7 @@ pub fn sketch_checkbox_labeled(
         painter.rect_stroke(
             rect.expand(2.0),
             5.0,
-            Stroke::new(2.0, palette::PRIMARY),
+            Stroke::new(2.0, colors(ui).primary),
             StrokeKind::Outside,
         );
     }
@@ -718,21 +729,21 @@ pub fn sketch_button(
     };
     let response = ui.interact(rect, ui.id().with(("sketch_button", label)), sense);
     let base = match kind {
-        ButtonKind::Normal | ButtonKind::Destructive => palette::BUTTON,
-        ButtonKind::Primary => palette::PRIMARY,
+        ButtonKind::Normal | ButtonKind::Destructive => colors(ui).chip,
+        ButtonKind::Primary => colors(ui).primary,
     };
     let chip = kind != ButtonKind::Primary;
     let fill = if !enabled {
         base.gamma_multiply(0.45)
     } else if response.is_pointer_button_down_on() {
         if chip {
-            palette::BUTTON_PRESSED
+            colors(ui).chip_pressed
         } else {
             base.gamma_multiply(0.8)
         }
     } else if response.hovered() {
         if chip {
-            palette::BUTTON_HOVER
+            colors(ui).chip_hover
         } else {
             base.lerp_to_gamma(Color32::WHITE, 0.12)
         }
@@ -751,14 +762,14 @@ pub fn sketch_button(
         ui.painter().rect_stroke(
             rect,
             radius,
-            Stroke::new(1.0, Color32::from_white_alpha(20)),
+            Stroke::new(1.0, colors(ui).outline),
             StrokeKind::Inside,
         );
     }
     let ink = if kind == ButtonKind::Destructive {
-        palette::DANGER_TEXT
+        colors(ui).danger_text
     } else {
-        palette::BRIGHT
+        colors(ui).text_hover
     };
     ui.painter().text(
         rect.center(),
@@ -811,7 +822,7 @@ pub fn composition_operator(ui: &egui::Ui, sk: &SketchFrame, rect: Rect, op: &st
         Align2::CENTER_CENTER,
         op,
         sk.font(48.0 / FONT_RATIO),
-        palette::BRIGHT,
+        colors(ui).text_hover,
     );
 }
 

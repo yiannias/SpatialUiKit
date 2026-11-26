@@ -20,6 +20,10 @@ use crate::tokens::{ColorToken, DimensionToken};
 /// of the "unveiling" read, this is a secondary cue, not the main motion.
 const CONTENT_SLIDE_PX: f32 = 10.0;
 
+/// The built-in Dark palette, the source of [`WindowChrome`]'s fallbacks.
+static DARK_WINDOW: std::sync::LazyLock<ThemePalette> =
+    std::sync::LazyLock::new(ThemePalette::dark);
+
 fn resolved_color(token: &ColorToken, fallback: egui::Color32) -> egui::Color32 {
     token.color32().unwrap_or(fallback)
 }
@@ -428,27 +432,25 @@ impl<'a> ThemedWindow<'a> {
     /// used to duplicate this resolution inline.
     fn resolve_chrome(&self) -> ResolvedChrome {
         let w = &self.palette.window;
-        let background = resolved_color(&w.background, egui::Color32::from_rgb(0x22, 0x22, 0x26));
+        // A token that fails to parse falls back to the built-in Dark
+        // palette's value for it (SDB TASK-384: the fallbacks were copies of
+        // those values).
+        let d = &DARK_WINDOW.window;
+        let color = |token: &ColorToken, fallback: &ColorToken| {
+            resolved_color(token, fallback.color32().unwrap_or_default())
+        };
+        let background = color(&w.background, &d.background);
         let corner_radius = resolved_px(&w.corner_radius, 12.0).round() as u8;
         let shadow_blur = resolved_px(&w.shadow_blur, 20.0).round() as u8;
-        let shadow_color = resolved_color(&w.shadow_color, egui::Color32::from_black_alpha(0x40));
+        let shadow_color = color(&w.shadow_color, &d.shadow_color);
         let border_width = resolved_px(&w.border_width, 0.0);
-        let border_color = resolved_color(&w.border_color, egui::Color32::TRANSPARENT);
-        let header_bg = resolved_color(
-            &w.header.background,
-            egui::Color32::from_rgb(0x2E, 0x2E, 0x32),
-        );
+        let border_color = color(&w.border_color, &d.border_color);
+        let header_bg = color(&w.header.background, &d.header.background);
         let header_h = resolved_px(&w.header.height, 32.0);
-        let header_border = resolved_color(
-            &w.header.border_bottom,
-            egui::Color32::from_rgba_unmultiplied(0xFF, 0xFF, 0xFF, 0x26),
-        );
-        let title_color = resolved_color(&w.header.title_color, egui::Color32::WHITE);
-        let button_hover_bg = resolved_color(
-            &w.button.hover_background,
-            egui::Color32::from_rgb(0x38, 0x38, 0x3C),
-        );
-        let button_icon_color = resolved_color(&w.button.icon_color, egui::Color32::WHITE);
+        let header_border = color(&w.header.border_bottom, &d.header.border_bottom);
+        let title_color = color(&w.header.title_color, &d.header.title_color);
+        let button_hover_bg = color(&w.button.hover_background, &d.button.hover_background);
+        let button_icon_color = color(&w.button.icon_color, &d.button.icon_color);
 
         let frame = egui::Frame::new()
             .fill(background)

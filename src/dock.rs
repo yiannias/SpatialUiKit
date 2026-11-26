@@ -319,18 +319,12 @@ pub fn draw_detach_ghost(ctx: &egui::Context, pos: egui::Pos2, title: &str) {
         egui::Id::new("tab_detach_ghost"),
     ));
     let rect = egui::Rect::from_min_size(pos + egui::vec2(14.0, 10.0), egui::vec2(180.0, 110.0));
-    painter.rect_filled(
-        rect,
-        4.0,
-        egui::Color32::from_rgba_unmultiplied(120, 160, 220, 20),
-    );
+    let colors = crate::interface_tokens::interface_colors(ctx);
+    painter.rect_filled(rect, 4.0, colors.drop_target);
     painter.rect_stroke(
         rect,
         4.0,
-        egui::Stroke::new(
-            1.0,
-            egui::Color32::from_rgba_unmultiplied(150, 180, 230, 200),
-        ),
+        egui::Stroke::new(1.0, colors.drop_target_border),
         egui::StrokeKind::Inside,
     );
     painter.text(
@@ -338,7 +332,7 @@ pub fn draw_detach_ghost(ctx: &egui::Context, pos: egui::Pos2, title: &str) {
         egui::Align2::LEFT_TOP,
         title,
         egui::FontId::proportional(12.0),
-        egui::Color32::from_rgba_unmultiplied(200, 215, 240, 230),
+        colors.drop_target_text,
     );
 }
 

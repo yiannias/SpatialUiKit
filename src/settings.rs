@@ -686,7 +686,7 @@ fn help_font_size(ui: &egui::Ui) -> f32 {
 /// mid-grey in light mode.
 fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(0x7F, 0x80, 0x88)
+        crate::interface_tokens::interface_colors(ui.ctx()).text_quiet
     } else {
         egui::Color32::from_rgb(0x5B, 0x5D, 0x66)
     }
@@ -698,7 +698,7 @@ fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
 /// has nothing to tell them apart with.
 fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(0x5A, 0x5B, 0x60)
+        crate::interface_tokens::interface_colors(ui.ctx()).text_disabled
     } else {
         egui::Color32::from_rgb(0xA8, 0xA9, 0xAE)
     }
@@ -712,7 +712,7 @@ fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
 /// nearly as bright).
 fn label_color(ui: &egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::Color32::WHITE
+        crate::interface_tokens::interface_colors(ui.ctx()).text_emphasis
     } else {
         egui::Color32::from_rgb(0x10, 0x10, 0x14)
     }
@@ -726,7 +726,7 @@ fn label_color(ui: &egui::Ui) -> egui::Color32 {
 /// step off that theme's surface tone.
 fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
     if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(0x26, 0x27, 0x2C)
+        crate::interface_tokens::interface_colors(ui.ctx()).row_rule
     } else {
         egui::Color32::from_rgb(0xE3, 0xE4, 0xE8)
     }

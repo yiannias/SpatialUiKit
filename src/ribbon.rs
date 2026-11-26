@@ -553,7 +553,7 @@ fn paint_flash(ui: &egui::Ui, rect: egui::Rect, flash_id: egui::Id) {
         let dt = ui.ctx().input(|i| i.time) - t0;
         if dt < FLASH_SECS {
             let a = (1.0 - dt / FLASH_SECS) as f32;
-            let amber = egui::Color32::from_rgb(255, 178, 82);
+            let amber = crate::interface_tokens::interface_colors(ui.ctx()).attention;
             ui.painter()
                 .rect_filled(rect, 6.0, amber.gamma_multiply(0.22 * a));
             ui.painter().rect_stroke(

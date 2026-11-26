@@ -271,19 +271,12 @@ pub fn capsule_styled(
         },
     };
 
+    let colors = crate::interface_tokens::interface_colors(ui.ctx());
     let (text, color): (&str, egui::Color32) = if flashing {
         let (name, _) = state.flash.as_ref().unwrap();
-        (
-            name.as_str(),
-            style
-                .color
-                .unwrap_or(egui::Color32::from_rgb(120, 230, 150)),
-        )
+        (name.as_str(), style.color.unwrap_or(colors.confirm))
     } else {
-        (
-            &state.buffer,
-            style.color.unwrap_or(egui::Color32::from_rgb(255, 178, 82)),
-        )
+        (&state.buffer, style.color.unwrap_or(colors.attention))
     };
 
     egui::Area::new(egui::Id::new("idle_input_capsule"))
@@ -293,7 +286,7 @@ pub fn capsule_styled(
         .interactable(false)
         .show(&ctx, |ui| {
             egui::Frame::new()
-                .fill(egui::Color32::from_rgba_unmultiplied(30, 30, 35, 235))
+                .fill(colors.capsule)
                 .stroke(egui::Stroke::new(2.0, color))
                 .corner_radius(20)
                 .inner_margin(egui::Margin::symmetric(
@@ -324,10 +317,11 @@ pub fn paint_capsule_preview(
     typing: bool,
     style: &CapsuleStyle,
 ) {
+    let colors = crate::interface_tokens::interface_colors(ui.ctx());
     let color = style.color.unwrap_or(if typing {
-        egui::Color32::from_rgb(255, 178, 82)
+        colors.attention
     } else {
-        egui::Color32::from_rgb(120, 230, 150)
+        colors.confirm
     });
     // The real capsule's 24 px margin and 28 pt text, scaled down to the
     // preview box so a Large pill still fits.
@@ -360,7 +354,7 @@ pub fn paint_capsule_preview(
     painter.rect(
         rect,
         20.0 * k,
-        egui::Color32::from_rgba_unmultiplied(30, 30, 35, 235),
+        colors.capsule,
         egui::Stroke::new(2.0 * k.max(0.5), color),
         egui::StrokeKind::Inside,
     );

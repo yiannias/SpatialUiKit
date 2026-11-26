@@ -24,7 +24,7 @@ use crate::sketch::{
     button_row, palette, style_list_thumbnail_cell, style_list_thumbnail_layout, truncate_middle,
     StyleListMode, StyleListResponse, StyleListRow, ThumbnailPaint,
 };
-use crate::sketch::{ButtonKind, SketchFrame};
+use crate::sketch::{colors, ButtonKind, SketchFrame};
 use egui::{Color32, CornerRadius, Pos2, Rect, Sense, Stroke, StrokeKind, Vec2};
 
 // ---------------------------------------------------------------------------
@@ -111,15 +111,19 @@ pub fn view_mode_switch(
         }
         let active = *mode == this;
         let color = if active {
-            palette::PRIMARY
+            colors(ui).primary
         } else if response.hovered() {
-            palette::BRIGHT
+            colors(ui).text_hover
         } else {
-            palette::MUTED
+            colors(ui).text_muted
         };
         let painter = ui.painter();
         if active {
-            painter.rect_filled(rect, sk.radius(4.0), palette::PRIMARY.gamma_multiply(0.22));
+            painter.rect_filled(
+                rect,
+                sk.radius(4.0),
+                colors(ui).primary.gamma_multiply(0.22),
+            );
         }
         paint_view_mode_glyph(painter, rect.shrink(rect.width() * 0.1), this, color);
     }
@@ -822,20 +826,21 @@ fn paint_error_bubble(ui: &egui::Ui, sk: &SketchFrame, edit_id: egui::Id, field:
     let painter = ui
         .ctx()
         .layer_painter(egui::LayerId::new(egui::Order::Tooltip, edit_id));
-    let galley = painter.layout_no_wrap(text.to_owned(), sk.font(16.0), Color32::LIGHT_RED);
+    let error = colors(ui).error_text;
+    let galley = painter.layout_no_wrap(text.to_owned(), sk.font(16.0), error);
     let pad = Vec2::new(sk.len(6.0), sk.len(3.0));
     let bubble = Rect::from_min_size(
         field.left_bottom() + Vec2::new(0.0, sk.len(3.0)),
         galley.size() + pad * 2.0,
     );
-    painter.rect_filled(bubble, sk.radius(6.0), palette::TILE_BG);
+    painter.rect_filled(bubble, sk.radius(6.0), colors(ui).tile);
     painter.rect_stroke(
         bubble,
         sk.radius(6.0),
-        Stroke::new(1.0, Color32::LIGHT_RED),
+        Stroke::new(1.0, error),
         StrokeKind::Inside,
     );
-    painter.galley(bubble.min + pad, galley, Color32::LIGHT_RED);
+    painter.galley(bubble.min + pad, galley, error);
 }
 
 /// Row height of the plain list and of [`StyleList::wide_samples`] rows, in
@@ -918,14 +923,11 @@ fn draw_list_rows(
                         ui.painter().rect_filled(
                             bar,
                             CornerRadius::same(palette::CHIP_RADIUS),
-                            palette::SELECTED,
+                            colors(ui).dropdown_selected,
                         );
                     } else if response.hovered() {
-                        ui.painter().rect_filled(
-                            bar,
-                            sk.radius(12.0),
-                            Color32::from_white_alpha(12),
-                        );
+                        ui.painter()
+                            .rect_filled(bar, sk.radius(12.0), colors(ui).row_hover);
                     }
                     if let (Some(area), Some(paint)) = (sample, &row.thumbnail) {
                         paint(ui, area);
@@ -955,7 +957,7 @@ fn draw_list_rows(
                             shown,
                             egui::TextFormat {
                                 font_id: font.clone(),
-                                color: palette::BRIGHT,
+                                color: colors(ui).text_hover,
                                 italics: row.italic,
                                 ..Default::default()
                             },
@@ -963,7 +965,7 @@ fn draw_list_rows(
                     ui.painter().galley(
                         Pos2::new(text_x, rect.center().y - galley.size().y / 2.0),
                         galley,
-                        palette::BRIGHT,
+                        colors(ui).text_hover,
                     );
                     if response.clicked() {
                         out.clicked = Some(index);
@@ -1038,7 +1040,7 @@ fn draw_thumbnails_with_editor(
                         );
                         if let Some(paint) = &row.thumbnail {
                             ui.painter()
-                                .rect_filled(square, sk.radius(6.0), palette::TILE_BG);
+                                .rect_filled(square, sk.radius(6.0), colors(ui).tile);
                             paint(ui, square);
                         }
                         let is_selected = selected == Some(index) || editing_row;
@@ -1046,11 +1048,11 @@ fn draw_thumbnails_with_editor(
                             square,
                             sk.radius(6.0),
                             if is_selected {
-                                Stroke::new(sk.len(3.0), palette::PRIMARY)
+                                Stroke::new(sk.len(3.0), colors(ui).primary)
                             } else if response.hovered() {
-                                Stroke::new(1.0, palette::BRIGHT)
+                                Stroke::new(1.0, colors(ui).text_hover)
                             } else {
-                                Stroke::new(1.0, palette::FIELD_BORDER)
+                                Stroke::new(1.0, colors(ui).field_border)
                             },
                             StrokeKind::Inside,
                         );
@@ -1076,7 +1078,7 @@ fn draw_thumbnails_with_editor(
                             egui::Align2::CENTER_TOP,
                             shown,
                             small.clone(),
-                            palette::MUTED,
+                            colors(ui).text_muted,
                         );
                         if response.clicked() {
                             out.clicked = Some(index);
@@ -1106,11 +1108,11 @@ fn rename_field(
 ) -> EditResult {
     let id = rename_edit_id(key).with("field");
     ui.painter()
-        .rect_filled(field, sk.radius(8.0), palette::TILE_BG);
+        .rect_filled(field, sk.radius(8.0), colors(ui).tile);
     ui.painter().rect_stroke(
         field,
         sk.radius(8.0),
-        Stroke::new(1.0, palette::BRIGHT),
+        Stroke::new(1.0, colors(ui).text_hover),
         StrokeKind::Inside,
     );
     if edit.fresh {
@@ -1136,7 +1138,7 @@ fn rename_field(
             let text = egui::TextEdit::singleline(&mut edit.text)
                 .id(id)
                 .font(sk.font(20.0))
-                .text_color(palette::BRIGHT)
+                .text_color(colors(ui).text_hover)
                 .frame(egui::Frame::NONE)
                 .desired_width(f32::INFINITY);
             response = Some(ui.add(if center {

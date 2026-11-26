@@ -16,6 +16,7 @@
 /// child is open.
 pub fn modal_scrim(ctx: &egui::Context, child_title: &str) {
     let rect = ctx.content_rect();
+    let colors = crate::interface_tokens::interface_colors(ctx);
     let area = egui::Area::new(egui::Id::new("spatial_ui_kit_modal_scrim"))
         .order(egui::Order::Foreground)
         .fixed_pos(rect.min)
@@ -23,14 +24,13 @@ pub fn modal_scrim(ctx: &egui::Context, child_title: &str) {
     let layer = area.layer();
     area.show(ctx, |ui| {
         let (rect, response) = ui.allocate_exact_size(rect.size(), egui::Sense::click_and_drag());
-        ui.painter()
-            .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(150));
+        ui.painter().rect_filled(rect, 0.0, colors.scrim);
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
             format!("Finish in the {child_title} window first"),
             egui::TextStyle::Heading.resolve(ui.style()),
-            egui::Color32::from_white_alpha(230),
+            colors.scrim_text,
         );
         response.on_hover_cursor(egui::CursorIcon::NotAllowed);
     });

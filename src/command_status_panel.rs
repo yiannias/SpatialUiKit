@@ -47,13 +47,24 @@ pub enum FeedKind {
     Echo,
 }
 
-/// Text color for a feed entry's `FeedKind`.
+/// Text color for a feed entry's `FeedKind`, in the built-in Dark theme's
+/// colours. The panel itself paints with [`feed_color_with`] and the theme
+/// in force.
 pub fn feed_color(kind: FeedKind) -> egui::Color32 {
+    feed_color_with(kind, &crate::interface_tokens::InterfaceColors::DARK)
+}
+
+/// Text color for a feed entry's `FeedKind` from a theme's interface colours
+/// (SDB TASK-384).
+pub fn feed_color_with(
+    kind: FeedKind,
+    c: &crate::interface_tokens::InterfaceColors,
+) -> egui::Color32 {
     match kind {
-        FeedKind::Info => egui::Color32::from_rgb(205, 205, 210),
-        FeedKind::Success => egui::Color32::from_rgb(150, 210, 150),
-        FeedKind::Error => egui::Color32::from_rgb(235, 130, 118),
-        FeedKind::Echo => egui::Color32::from_rgb(150, 175, 225),
+        FeedKind::Info => c.feed_info,
+        FeedKind::Success => c.feed_success,
+        FeedKind::Error => c.feed_error,
+        FeedKind::Echo => c.feed_echo,
     }
 }
 
@@ -550,7 +561,7 @@ pub fn annunciator(
 /// [`panel_frame_with_background`]'s new default) so the host app, which has no
 /// surface-color theming yet, is unaffected by the host app's own theming work.
 pub fn panel_frame(opacity: f32) -> egui::Frame {
-    panel_frame_themed(opacity, egui::Color32::from_rgb(30, 30, 35), 14)
+    panel_frame_themed(opacity, crate::theme::DARK_SURFACE_BACKGROUND, 14)
 }
 
 /// Same as [`panel_frame`], but with a caller-supplied base fill color
@@ -677,7 +688,8 @@ pub fn render_feed(
             .stick_to_bottom(true)
             .show(ui, |ui| {
                 for entry in feed {
-                    style_label(ui, &entry.text, feed_color(entry.kind));
+                    let c = crate::interface_tokens::interface_colors(ui.ctx());
+                    style_label(ui, &entry.text, feed_color_with(entry.kind, &c));
                 }
             });
         return;
@@ -711,7 +723,12 @@ pub fn render_feed(
                     if *a < 1.0 {
                         any_fading = true;
                     }
-                    style_label(ui, &entry.text, feed_color(entry.kind).gamma_multiply(*a));
+                    let c = crate::interface_tokens::interface_colors(ui.ctx());
+                    style_label(
+                        ui,
+                        &entry.text,
+                        feed_color_with(entry.kind, &c).gamma_multiply(*a),
+                    );
                 }
                 any_fading
             },
@@ -743,10 +760,11 @@ pub fn resize_grip(
         egui::vec2(16.0, 16.0),
     );
     let grip = ui.interact(grip_rect, ui.id().with("resize_grip"), egui::Sense::drag());
+    let c = crate::interface_tokens::interface_colors(ui.ctx());
     let grip_color = if grip.hovered() || grip.dragged() {
-        egui::Color32::from_rgb(180, 180, 190)
+        c.grip_hover
     } else {
-        egui::Color32::from_rgb(105, 105, 115)
+        c.grip
     };
     let painter = ui.painter();
     let c = grip_rect.min + egui::vec2(8.0, 8.0);
