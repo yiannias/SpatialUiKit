@@ -685,8 +685,8 @@ fn help_font_size(ui: &egui::Ui) -> f32 {
 /// secondary-text value in dark mode (`#7F8088`) and a comparably-toned
 /// mid-grey in light mode.
 fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_quiet
+    if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+        c.text_quiet
     } else {
         egui::Color32::from_rgb(0x5B, 0x5D, 0x66)
     }
@@ -697,8 +697,8 @@ fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
 /// and an enabled one with a hover hint look identically "quiet" and the eye
 /// has nothing to tell them apart with.
 fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_disabled
+    if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+        c.text_disabled
     } else {
         egui::Color32::from_rgb(0xA8, 0xA9, 0xAE)
     }
@@ -711,8 +711,8 @@ fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
 /// through (labels were reading as dim grey against help text that was
 /// nearly as bright).
 fn label_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_emphasis
+    if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+        c.text_emphasis
     } else {
         egui::Color32::from_rgb(0x10, 0x10, 0x14)
     }
@@ -725,8 +725,8 @@ fn label_color(ui: &egui::Ui) -> egui::Color32 {
 /// ribbon pods' `#1E1E23`-ish surface; light is the equivalent few-percent
 /// step off that theme's surface tone.
 fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
-    if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).row_rule
+    if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+        c.row_rule
     } else {
         egui::Color32::from_rgb(0xE3, 0xE4, 0xE8)
     }

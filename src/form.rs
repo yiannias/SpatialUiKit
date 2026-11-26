@@ -97,11 +97,8 @@ pub fn label_job(ui: &egui::Ui, label: &str, metrics: &FormMetrics) -> egui::tex
     // Quiet label grey in dark mode: the theme's `text_label` interface token
     // (TASK-384), the same colour `os_style` gives non-interactive text;
     // light keeps the ordinary text colour.
-    let color = if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_label
-    } else {
-        ui.visuals().text_color()
-    };
+    let color = crate::interface_tokens::theme_colors(ui)
+        .map_or_else(|| ui.visuals().text_color(), |c| c.text_label);
     let mut job = egui::text::LayoutJob::simple_singleline(label.to_owned(), font, color);
     // A bounded width inside the fixed column, rather than `f32::INFINITY`,
     // which is what the single-line constructor starts from.

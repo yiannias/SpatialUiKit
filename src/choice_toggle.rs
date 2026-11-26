@@ -63,34 +63,33 @@ pub fn choice_toggle<T: PartialEq + Clone>(
     options: &[(T, &str)],
 ) -> Response {
     let enabled = ui.is_enabled();
-    let dark = ui.visuals().dark_mode;
     let height = ui.spacing().interact_size.y;
     let font = egui::TextStyle::Button.resolve(ui.style());
 
     // Dark: the theme's interface tokens (SDB TASK-384). Light keeps the
     // platform look's own values (light has no interface tokens).
-    let (track_fill, chip_fill, chip_stroke, chosen_ink, idle_ink, hover_ink, ring) = if dark {
-        let c = crate::interface_tokens::interface_colors(ui.ctx());
-        (
-            c.well,
-            c.dropdown_selected,
-            Stroke::NONE,
-            c.text_strong,
-            c.text_label,
-            c.text_hover,
-            c.text_strong,
-        )
-    } else {
-        (
-            Color32::from_rgb(0xE2, 0xE3, 0xE8),
-            Color32::WHITE,
-            Stroke::new(1.0, Color32::from_black_alpha(24)),
-            Color32::from_rgb(0x20, 0x20, 0x24),
-            Color32::from_rgb(0x4A, 0x4C, 0x54),
-            Color32::from_rgb(0x20, 0x20, 0x24),
-            Color32::from_rgb(0x20, 0x20, 0x24),
-        )
-    };
+    let (track_fill, chip_fill, chip_stroke, chosen_ink, idle_ink, hover_ink, ring) =
+        if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+            (
+                c.well,
+                c.dropdown_selected,
+                Stroke::NONE,
+                c.text_strong,
+                c.text_label,
+                c.text_hover,
+                c.text_strong,
+            )
+        } else {
+            (
+                Color32::from_rgb(0xE2, 0xE3, 0xE8),
+                Color32::WHITE,
+                Stroke::new(1.0, Color32::from_black_alpha(24)),
+                Color32::from_rgb(0x20, 0x20, 0x24),
+                Color32::from_rgb(0x4A, 0x4C, 0x54),
+                Color32::from_rgb(0x20, 0x20, 0x24),
+                Color32::from_rgb(0x20, 0x20, 0x24),
+            )
+        };
 
     let widest = options
         .iter()

@@ -988,10 +988,9 @@ mod status_color_tests {
 /// current text scale, letter-spaced, muted grey, with 8 points above and 2
 /// below. Replaces oversized in-panel headings (Chris, 2026-11-09).
 pub fn section_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
-    let dark = ui.visuals().dark_mode;
     // Dark: the theme's muted text tier (SDB TASK-384).
-    let color = if dark {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_muted
+    let color = if let Some(c) = crate::interface_tokens::theme_colors(ui) {
+        c.text_muted
     } else {
         egui::Color32::from_rgb(0x6E, 0x70, 0x78)
     };

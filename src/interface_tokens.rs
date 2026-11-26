@@ -538,8 +538,23 @@ pub fn set_interface_colors(ctx: &egui::Context, colors: Option<InterfaceColors>
 /// The interface colours published with [`set_interface_colors`], or the dark
 /// default.
 pub fn interface_colors(ctx: &egui::Context) -> InterfaceColors {
+    published_interface_colors(ctx).unwrap_or(InterfaceColors::DARK)
+}
+
+/// The interface colours published with [`set_interface_colors`], if any.
+pub fn published_interface_colors(ctx: &egui::Context) -> Option<InterfaceColors> {
     ctx.data(|d| d.get_temp::<InterfaceColors>(store_id()))
-        .unwrap_or_else(InterfaceColors::dark_default)
+}
+
+/// The interface colours a widget drawn in `ui` should use, or `None` for the
+/// platform look: the published colours (any theme with an `interface`
+/// section, dark or light), else the built-in Dark ones on a dark `Ui`, else
+/// `None` -- the built-in Light theme, whose widgets keep their own light
+/// values. Widgets that have a separate light look ask this rather than
+/// checking `dark_mode`, so a light theme file can restyle them too.
+pub fn theme_colors(ui: &egui::Ui) -> Option<InterfaceColors> {
+    published_interface_colors(ui.ctx())
+        .or_else(|| ui.visuals().dark_mode.then_some(InterfaceColors::DARK))
 }
 
 #[cfg(test)]

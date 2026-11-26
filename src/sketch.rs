@@ -652,14 +652,9 @@ pub fn sketch_checkbox_labeled(
     response.widget_info(|| {
         egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, value, label)
     });
-    let dark = ui.visuals().dark_mode;
-    let (fill, border, hover_fill, ink) = if dark {
-        (
-            colors(ui).tile,
-            colors(ui).field_border,
-            colors(ui).tile_hover,
-            colors(ui).text_hover,
-        )
+    let (fill, border, hover_fill, ink) = if let Some(c) = crate::interface_tokens::theme_colors(ui)
+    {
+        (c.tile, c.field_border, c.tile_hover, c.text_hover)
     } else {
         (
             Color32::from_rgb(0xFA, 0xFA, 0xFC),

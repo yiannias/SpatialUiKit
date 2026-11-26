@@ -138,10 +138,9 @@ fn apply_interface_colors(visuals: &mut egui::Visuals, accent: egui::Color32, c:
 /// `widgets.hovered` fill paints the popup's hovered row and `#1A1A1F` on a
 /// `#141418` list would be invisible.
 pub fn dropdown_well_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
-    if !ui.visuals().dark_mode {
+    let Some(c) = crate::interface_tokens::theme_colors(ui) else {
         return add(ui);
-    }
-    let c = crate::interface_tokens::interface_colors(ui.ctx());
+    };
     ui.scope(|ui| {
         let v = ui.visuals_mut();
         let well = c.well;

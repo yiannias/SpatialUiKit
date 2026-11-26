@@ -223,9 +223,11 @@ impl DropdownStyle {
     /// everywhere means the theme decides, not the row it happens to sit in.
     pub fn for_ui(ui: &Ui) -> Self {
         let v = &ui.ctx().global_style().visuals;
-        let interface = v
-            .dark_mode
-            .then(|| crate::interface_tokens::interface_colors(ui.ctx()));
+        let interface =
+            crate::interface_tokens::published_interface_colors(ui.ctx()).or_else(|| {
+                v.dark_mode
+                    .then_some(crate::interface_tokens::InterfaceColors::DARK)
+            });
         Self::from_visuals_with(v, interface.as_ref())
     }
 
@@ -1510,9 +1512,5 @@ mod tests;
 
 /// The chevron colour: the theme's muted text tier on the dark well, else the text colour.
 fn arrow_color(ui: &Ui, text: Color32) -> Color32 {
-    if ui.visuals().dark_mode {
-        crate::interface_tokens::interface_colors(ui.ctx()).text_muted
-    } else {
-        text
-    }
+    crate::interface_tokens::theme_colors(ui).map_or(text, |c| c.text_muted)
 }
