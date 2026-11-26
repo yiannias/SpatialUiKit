@@ -20,6 +20,7 @@ pub mod mini_ribbon;
 pub mod modal;
 pub mod motion;
 pub mod navigation;
+pub mod off_on_switch;
 pub mod os_style;
 pub mod popup;
 pub mod regional_time;
