@@ -78,6 +78,24 @@ pub struct InterfaceTokens {
     pub drop_target_text: ColorToken,
     pub grip: ColorToken,
     pub grip_hover: ColorToken,
+    pub context_menu: ColorToken,
+    pub context_menu_border: ColorToken,
+    pub context_hover: ColorToken,
+    pub context_hover_border: ColorToken,
+    pub card_shadow: ColorToken,
+    pub dialog_scrim: ColorToken,
+    pub dialog_shadow: ColorToken,
+    pub prompt_scrim: ColorToken,
+    pub divider: ColorToken,
+    pub pill_wash: ColorToken,
+    pub status_text: ColorToken,
+    pub primary_button: ColorToken,
+    pub row_selected: ColorToken,
+    pub pill_active: ColorToken,
+    pub recovery_text: ColorToken,
+    pub recovery_fill: ColorToken,
+    pub close_hover: ColorToken,
+    pub close_hover_text: ColorToken,
     pub highlight: ColorToken,
     pub attention: ColorToken,
     pub confirm: ColorToken,
@@ -187,6 +205,44 @@ pub struct InterfaceColors {
     pub grip: egui::Color32,
     /// The resize grip hovered or dragged.
     pub grip_hover: egui::Color32,
+    // Host-app chrome (SDB's menu bar, Command & Status Panel, dialogs, cards).
+    /// A right-click menu: mostly transparent so the drawing shows through
+    /// (`18,18,22` at alpha 200).
+    pub context_menu: egui::Color32,
+    /// The right-click menu's hairline.
+    pub context_menu_border: egui::Color32,
+    /// A hovered right-click menu row's soft glow (`255,200,120` at alpha 28).
+    pub context_hover: egui::Color32,
+    /// That row's glow outline (`255,180,90` at alpha 110).
+    pub context_hover_border: egui::Color32,
+    /// The drop shadow under ribbon pods and docked cards.
+    pub card_shadow: egui::Color32,
+    /// The dimming behind an in-app dialog.
+    pub dialog_scrim: egui::Color32,
+    /// An in-app dialog's drop shadow.
+    pub dialog_shadow: egui::Color32,
+    /// The dimming behind a prompt window's card.
+    pub prompt_scrim: egui::Color32,
+    /// The Command & Status Panel's column divider (hovered: `grip_hover`).
+    pub divider: egui::Color32,
+    /// An unlit pill's faint wash (the Command & Status Panel's scale pill).
+    pub pill_wash: egui::Color32,
+    /// The pointer coordinates in the Command & Status Panel.
+    pub status_text: egui::Color32,
+    /// The one primary action of a host window (Open, Save, Print).
+    pub primary_button: egui::Color32,
+    /// A selected row in a host list (file windows).
+    pub row_selected: egui::Color32,
+    /// The active half of a two-state toggle (List / Thumbnails).
+    pub pill_active: egui::Color32,
+    /// The Recover badge's text in Open Recent.
+    pub recovery_text: egui::Color32,
+    /// The Recover badge's fill.
+    pub recovery_fill: egui::Color32,
+    /// The window close button hovered (Windows' own close red).
+    pub close_hover: egui::Color32,
+    /// The close glyph on `close_hover`.
+    pub close_hover_text: egui::Color32,
     // State (Chris's decision 3 may unify these; today each keeps its own value).
     /// The tool highlight: the armed tool, lit annunciators, the command
     /// prompt. The host app's own "interface highlight" setting, when the user
@@ -260,6 +316,24 @@ impl InterfaceColors {
             drop_target_text: Color32::from_rgba_premultiplied(180, 194, 216, 230),
             grip: Color32::from_rgb(105, 105, 115),
             grip_hover: Color32::from_rgb(180, 180, 190),
+            context_menu: Color32::from_rgba_premultiplied(14, 14, 17, 200),
+            context_menu_border: Color32::from_rgba_premultiplied(60, 60, 60, 60),
+            context_hover: Color32::from_rgba_premultiplied(28, 22, 13, 28),
+            context_hover_border: Color32::from_rgba_premultiplied(110, 78, 39, 110),
+            card_shadow: Color32::from_black_alpha(77),
+            dialog_scrim: Color32::from_black_alpha(140),
+            dialog_shadow: Color32::from_black_alpha(180),
+            prompt_scrim: Color32::from_black_alpha(90),
+            divider: Color32::from_rgb(78, 78, 86),
+            pill_wash: Color32::from_rgba_premultiplied(20, 20, 20, 20),
+            status_text: Color32::from_rgb(150, 150, 158),
+            primary_button: Color32::from_rgb(69, 128, 168),
+            row_selected: Color32::from_rgb(52, 74, 96),
+            pill_active: Color32::from_rgb(61, 103, 133),
+            recovery_text: Color32::from_rgb(115, 205, 145),
+            recovery_fill: Color32::from_rgb(30, 76, 48),
+            close_hover: Color32::from_rgb(0xC4, 0x2B, 0x1C),
+            close_hover_text: Color32::WHITE,
             highlight: Color32::from_rgb(104, 222, 158),
             attention: Color32::from_rgb(255, 178, 82),
             confirm: Color32::from_rgb(120, 230, 150),
@@ -333,6 +407,24 @@ impl InterfaceTokens {
             drop_target_text: t(c.drop_target_text),
             grip: t(c.grip),
             grip_hover: t(c.grip_hover),
+            context_menu: t(c.context_menu),
+            context_menu_border: t(c.context_menu_border),
+            context_hover: t(c.context_hover),
+            context_hover_border: t(c.context_hover_border),
+            card_shadow: t(c.card_shadow),
+            dialog_scrim: t(c.dialog_scrim),
+            dialog_shadow: t(c.dialog_shadow),
+            prompt_scrim: t(c.prompt_scrim),
+            divider: t(c.divider),
+            pill_wash: t(c.pill_wash),
+            status_text: t(c.status_text),
+            primary_button: t(c.primary_button),
+            row_selected: t(c.row_selected),
+            pill_active: t(c.pill_active),
+            recovery_text: t(c.recovery_text),
+            recovery_fill: t(c.recovery_fill),
+            close_hover: t(c.close_hover),
+            close_hover_text: t(c.close_hover_text),
             highlight: t(c.highlight),
             attention: t(c.attention),
             confirm: t(c.confirm),
@@ -391,6 +483,24 @@ impl InterfaceTokens {
             drop_target_text: c(&self.drop_target_text, d.drop_target_text),
             grip: c(&self.grip, d.grip),
             grip_hover: c(&self.grip_hover, d.grip_hover),
+            context_menu: c(&self.context_menu, d.context_menu),
+            context_menu_border: c(&self.context_menu_border, d.context_menu_border),
+            context_hover: c(&self.context_hover, d.context_hover),
+            context_hover_border: c(&self.context_hover_border, d.context_hover_border),
+            card_shadow: c(&self.card_shadow, d.card_shadow),
+            dialog_scrim: c(&self.dialog_scrim, d.dialog_scrim),
+            dialog_shadow: c(&self.dialog_shadow, d.dialog_shadow),
+            prompt_scrim: c(&self.prompt_scrim, d.prompt_scrim),
+            divider: c(&self.divider, d.divider),
+            pill_wash: c(&self.pill_wash, d.pill_wash),
+            status_text: c(&self.status_text, d.status_text),
+            primary_button: c(&self.primary_button, d.primary_button),
+            row_selected: c(&self.row_selected, d.row_selected),
+            pill_active: c(&self.pill_active, d.pill_active),
+            recovery_text: c(&self.recovery_text, d.recovery_text),
+            recovery_fill: c(&self.recovery_fill, d.recovery_fill),
+            close_hover: c(&self.close_hover, d.close_hover),
+            close_hover_text: c(&self.close_hover_text, d.close_hover_text),
             highlight: c(&self.highlight, d.highlight),
             attention: c(&self.attention, d.attention),
             confirm: c(&self.confirm, d.confirm),
@@ -461,6 +571,26 @@ mod tests {
             Color32::from_rgba_unmultiplied(200, 215, 240, 230)
         );
         assert_eq!(d.error_text, Color32::LIGHT_RED);
+        assert_eq!(
+            d.context_menu,
+            Color32::from_rgba_unmultiplied(18, 18, 22, 200)
+        );
+        assert_eq!(
+            d.context_menu_border,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 60)
+        );
+        assert_eq!(
+            d.context_hover,
+            Color32::from_rgba_unmultiplied(255, 200, 120, 28)
+        );
+        assert_eq!(
+            d.context_hover_border,
+            Color32::from_rgba_unmultiplied(255, 180, 90, 110)
+        );
+        assert_eq!(
+            d.pill_wash,
+            Color32::from_rgba_unmultiplied(255, 255, 255, 20)
+        );
     }
 
     #[test]
