@@ -43,71 +43,48 @@ use serde::{Deserialize, Serialize};
 pub struct InterfaceTokens {
     pub menu_bar: ColorToken,
     pub popup_background: ColorToken,
-    pub popup_border: ColorToken,
     pub well: ColorToken,
     pub well_hover: ColorToken,
     pub field: ColorToken,
-    pub tile: ColorToken,
-    pub tile_hover: ColorToken,
     pub capsule: ColorToken,
     pub scrim: ColorToken,
+    pub prompt_scrim: ColorToken,
+    pub card_shadow: ColorToken,
+    pub dialog_shadow: ColorToken,
     pub chip: ColorToken,
     pub chip_hover: ColorToken,
     pub chip_pressed: ColorToken,
-    pub dropdown_selected: ColorToken,
     pub row_hover: ColorToken,
     pub selection: ColorToken,
-    pub selection_text: ColorToken,
     pub primary: ColorToken,
+    pub row_selected: ColorToken,
+    pub pill_active: ColorToken,
     pub pill: ColorToken,
     pub pill_edge: ColorToken,
     pub outline: ColorToken,
     pub outline_hover: ColorToken,
-    pub separator: ColorToken,
     pub frame: ColorToken,
     pub field_border: ColorToken,
-    pub row_rule: ColorToken,
+    pub grip: ColorToken,
     pub text: ColorToken,
     pub text_strong: ColorToken,
-    pub text_hover: ColorToken,
-    pub text_emphasis: ColorToken,
     pub text_label: ColorToken,
     pub text_muted: ColorToken,
-    pub text_quiet: ColorToken,
     pub text_disabled: ColorToken,
     pub scrim_text: ColorToken,
     pub drop_target: ColorToken,
     pub drop_target_border: ColorToken,
     pub drop_target_text: ColorToken,
-    pub grip: ColorToken,
-    pub grip_hover: ColorToken,
     pub context_menu: ColorToken,
     pub context_menu_border: ColorToken,
     pub context_hover: ColorToken,
     pub context_hover_border: ColorToken,
-    pub card_shadow: ColorToken,
-    pub dialog_scrim: ColorToken,
-    pub dialog_shadow: ColorToken,
-    pub prompt_scrim: ColorToken,
-    pub divider: ColorToken,
-    pub pill_wash: ColorToken,
-    pub status_text: ColorToken,
-    pub primary_button: ColorToken,
-    pub row_selected: ColorToken,
-    pub pill_active: ColorToken,
-    pub recovery_text: ColorToken,
-    pub recovery_fill: ColorToken,
     pub close_hover: ColorToken,
-    pub close_hover_text: ColorToken,
     pub highlight: ColorToken,
     pub attention: ColorToken,
-    pub confirm: ColorToken,
-    pub feed_info: ColorToken,
-    pub feed_success: ColorToken,
-    pub feed_error: ColorToken,
+    pub recovery_fill: ColorToken,
     pub feed_echo: ColorToken,
-    pub error_text: ColorToken,
-    pub danger_text: ColorToken,
+    pub error: ColorToken,
 }
 
 /// [`InterfaceTokens`] resolved to colours: what the paint path reads.
@@ -118,80 +95,70 @@ pub struct InterfaceColors {
     /// that row.
     pub menu_bar: egui::Color32,
     /// Menus, submenus, dropdown lists, tooltips and other popups (egui
-    /// `window_fill`). One step of elevation above the surfaces, which is the
-    /// point: without its own token a lighter surface made every menu look
-    /// sunk. Default: egui's dark `window_fill`.
+    /// `window_fill`). One step of elevation above the surfaces.
     pub popup_background: egui::Color32,
-    /// The popups' 1px outline (egui `window_stroke`).
-    pub popup_border: egui::Color32,
-    /// Recessed wells: dropdowns, toggle tracks, egui's `extreme_bg_color`.
+    /// Recessed wells: dropdowns, toggle tracks, preview tiles, sketch
+    /// checkboxes, egui's `extreme_bg_color`.
     pub well: egui::Color32,
     /// A hovered closed dropdown (a well brightening one step).
     pub well_hover: egui::Color32,
     /// Text-entry fields.
     pub field: egui::Color32,
-    /// Preview tiles, sketch-checkbox boxes and error bubbles in the
-    /// sketch-space manager windows.
-    pub tile: egui::Color32,
-    /// A hovered sketch checkbox box.
-    pub tile_hover: egui::Color32,
     /// The idle-input capsule over the canvas (`30,30,35` at alpha 235).
     pub capsule: egui::Color32,
-    /// The dimming laid over a window that waits on a child window.
+    /// The dimming behind a dialog, or over a window waiting on a child window.
     pub scrim: egui::Color32,
+    /// The lighter dimming behind a prompt window's card.
+    pub prompt_scrim: egui::Color32,
+    /// The drop shadow under ribbon pods and docked cards.
+    pub card_shadow: egui::Color32,
+    /// An in-app dialog's drop shadow.
+    pub dialog_shadow: egui::Color32,
     // Control states.
     /// A resting button chip.
     pub chip: egui::Color32,
-    /// A hovered button chip.
+    /// A hovered chip, and a selected row in a dropdown or style list.
     pub chip_hover: egui::Color32,
-    /// A pressed button chip.
+    /// A pressed chip, a hovered sketch checkbox, and the faint rule
+    /// between Settings rows.
     pub chip_pressed: egui::Color32,
-    /// The selected row of an open dropdown list or a style list, and the
-    /// chosen segment of a choice toggle.
-    pub dropdown_selected: egui::Color32,
     /// A hovered list row (a faint white wash).
     pub row_hover: egui::Color32,
-    /// The selected-text highlight.
+    /// The selected-text highlight (its text is `text_strong`).
     pub selection: egui::Color32,
-    /// The text drawn on the selection, also a text field's focus ring.
-    pub selection_text: egui::Color32,
-    /// A primary (default-action) button in the sketch-space windows, and a
+    /// A window's one primary action (Open, Save, Print, Apply), and a
     /// selected preview tile's ring.
     pub primary: egui::Color32,
+    /// A selected row in a host list (file windows).
+    pub row_selected: egui::Color32,
+    /// The active half of a two-state toggle (List / Thumbnails).
+    pub pill_active: egui::Color32,
     /// The hover-action pill on a preview tile.
     pub pill: egui::Color32,
     /// The pill's near-black outline.
     pub pill_edge: egui::Color32,
     // Outlines.
-    /// Control outlines at rest.
+    /// Control outlines at rest, separators, and an unlit pill's wash.
     pub outline: egui::Color32,
     /// Control outlines hovered or open.
     pub outline_hover: egui::Color32,
-    /// Separators and the outline of non-interactive frames.
-    pub separator: egui::Color32,
-    /// Framed-region outlines in the sketch-space windows.
+    /// Popup outlines (egui `window_stroke`) and framed regions.
     pub frame: egui::Color32,
-    /// Field and tile outlines in the sketch-space windows.
+    /// Field and tile outlines, and the Command & Status Panel's divider.
     pub field_border: egui::Color32,
-    /// The faint rule between Settings rows.
-    pub row_rule: egui::Color32,
+    /// A resize grip (hovered: `text_label`).
+    pub grip: egui::Color32,
     // Text.
-    /// Body text.
+    /// Body text, and ordinary feed lines.
     pub text: egui::Color32,
-    /// Hovered body text, chosen choice-toggle text.
+    /// Strong text: hovered text, values, headings, field labels, text on the
+    /// selection and the close glyph.
     pub text_strong: egui::Color32,
-    /// Values and names in the sketch-space windows, and a hovered unchosen
-    /// choice-toggle segment.
-    pub text_hover: egui::Color32,
-    /// Settings field labels: the panel's brightest text.
-    pub text_emphasis: egui::Color32,
-    /// Quiet labels (form labels, non-interactive text).
+    /// Quiet labels (form labels, non-interactive text), a hovered grip.
     pub text_label: egui::Color32,
-    /// Muted text: section labels, headings in the sketch-space windows, a
-    /// dropdown's chevron.
+    /// Muted text: section labels, help text, pod labels' tier, a dropdown's
+    /// chevron, the pointer coordinates.
     pub text_muted: egui::Color32,
-    /// Settings help text (the ribbon pod-label grey).
-    pub text_quiet: egui::Color32,
     /// A disabled Settings row's hint.
     pub text_disabled: egui::Color32,
     /// Text on the scrim.
@@ -203,12 +170,7 @@ pub struct InterfaceColors {
     pub drop_target_border: egui::Color32,
     /// The ghost's title (`200,215,240` at alpha 230).
     pub drop_target_text: egui::Color32,
-    // Command & Status Panel.
-    /// The resize grip.
-    pub grip: egui::Color32,
-    /// The resize grip hovered or dragged.
-    pub grip_hover: egui::Color32,
-    // Host-app chrome (SDB's menu bar, Command & Status Panel, dialogs, cards).
+    // Right-click menu.
     /// A right-click menu: mostly transparent so the drawing shows through
     /// (`18,18,22` at alpha 200).
     pub context_menu: egui::Color32,
@@ -218,57 +180,24 @@ pub struct InterfaceColors {
     pub context_hover: egui::Color32,
     /// That row's glow outline (`255,180,90` at alpha 110).
     pub context_hover_border: egui::Color32,
-    /// The drop shadow under ribbon pods and docked cards.
-    pub card_shadow: egui::Color32,
-    /// The dimming behind an in-app dialog.
-    pub dialog_scrim: egui::Color32,
-    /// An in-app dialog's drop shadow.
-    pub dialog_shadow: egui::Color32,
-    /// The dimming behind a prompt window's card.
-    pub prompt_scrim: egui::Color32,
-    /// The Command & Status Panel's column divider (hovered: `grip_hover`).
-    pub divider: egui::Color32,
-    /// An unlit pill's faint wash (the Command & Status Panel's scale pill).
-    pub pill_wash: egui::Color32,
-    /// The pointer coordinates in the Command & Status Panel.
-    pub status_text: egui::Color32,
-    /// The one primary action of a host window (Open, Save, Print).
-    pub primary_button: egui::Color32,
-    /// A selected row in a host list (file windows).
-    pub row_selected: egui::Color32,
-    /// The active half of a two-state toggle (List / Thumbnails).
-    pub pill_active: egui::Color32,
-    /// The Recover badge's text in Open Recent.
-    pub recovery_text: egui::Color32,
-    /// The Recover badge's fill.
-    pub recovery_fill: egui::Color32,
     /// The window close button hovered (Windows' own close red).
     pub close_hover: egui::Color32,
-    /// The close glyph on `close_hover`.
-    pub close_hover_text: egui::Color32,
-    // State (Chris's decision 3 may unify these; today each keeps its own value).
-    /// The tool highlight: the armed tool, lit annunciators, the command
-    /// prompt. The host app's own "interface highlight" setting, when the user
-    /// has picked one, overrides it.
+    // State (Chris 2026-11-27: one mint for done/on, one amber for attention).
+    /// Done / on: the armed tool, lit annunciators, the command prompt, success
+    /// lines, the idle-input flash, the Recover badge. The host app's own
+    /// "interface highlight" setting, when the user has picked one, overrides it.
     pub highlight: egui::Color32,
-    /// Attention amber: a ribbon button's flash, the idle-input capsule while
-    /// typing.
+    /// Attention: a ribbon button's flash, the idle-input capsule while typing,
+    /// warnings.
     pub attention: egui::Color32,
-    /// The idle-input capsule's flash when a typed command runs.
-    pub confirm: egui::Color32,
-    /// Command & Status Panel feed: an ordinary line.
-    pub feed_info: egui::Color32,
-    /// Feed: a success line.
-    pub feed_success: egui::Color32,
-    /// Feed: an error line.
-    pub feed_error: egui::Color32,
-    /// Feed: the echo of a typed command.
+    /// The Recover badge's fill.
+    pub recovery_fill: egui::Color32,
+    /// The echo of a typed command in the Command & Status Panel feed.
     pub feed_echo: egui::Color32,
-    /// An inline field error (the sketch-space error bubble; egui's
-    /// `LIGHT_RED`).
-    pub error_text: egui::Color32,
-    /// The label of a destructive button (Delete).
-    pub danger_text: egui::Color32,
+    /// Errors: error feed lines (marked ✕ as well, so they never rely on
+    /// colour), inline field errors, a destructive button's label. The hue is
+    /// still to be re-picked away from red (Chris).
+    pub error: egui::Color32,
 }
 
 impl InterfaceColors {
@@ -281,71 +210,48 @@ impl InterfaceColors {
         InterfaceColors {
             menu_bar: Color32::from_rgb(0x20, 0x20, 0x20),
             popup_background: Color32::from_gray(27),
-            popup_border: Color32::from_gray(60),
             well: Color32::from_rgb(0x14, 0x14, 0x18),
             well_hover: Color32::from_rgb(0x1A, 0x1A, 0x1F),
             field: Color32::from_rgb(0x2A, 0x2B, 0x30),
-            tile: Color32::from_rgb(0x16, 0x16, 0x1A),
-            tile_hover: Color32::from_rgb(0x26, 0x26, 0x2C),
             capsule: Color32::from_rgba_premultiplied(28, 28, 32, 235),
             scrim: Color32::from_black_alpha(150),
+            prompt_scrim: Color32::from_black_alpha(90),
+            card_shadow: Color32::from_black_alpha(77),
+            dialog_shadow: Color32::from_black_alpha(180),
             chip: Color32::from_rgb(0x2E, 0x2F, 0x35),
             chip_hover: Color32::from_rgb(0x38, 0x39, 0x40),
             chip_pressed: Color32::from_rgb(0x26, 0x27, 0x2C),
-            dropdown_selected: Color32::from_rgb(0x3A, 0x3B, 0x42),
             row_hover: Color32::from_rgba_premultiplied(12, 12, 12, 12),
             selection: Color32::from_rgb(0x44, 0x46, 0x4F),
-            selection_text: Color32::from_rgb(0xF0, 0xF0, 0xF2),
             primary: Color32::from_rgb(0x55, 0x7E, 0xAF),
+            row_selected: Color32::from_rgb(52, 74, 96),
+            pill_active: Color32::from_rgb(61, 103, 133),
             pill: Color32::from_rgb(0x6B, 0x6B, 0x6B),
             pill_edge: Color32::from_rgb(0x05, 0x05, 0x05),
             outline: Color32::from_rgba_premultiplied(20, 20, 20, 20),
             outline_hover: Color32::from_rgba_premultiplied(36, 36, 36, 36),
-            separator: Color32::from_rgba_premultiplied(18, 18, 18, 18),
-            frame: Color32::from_rgb(0x3C, 0x3C, 0x3D),
+            frame: Color32::from_gray(60),
             field_border: Color32::from_rgb(0x4A, 0x4B, 0x52),
-            row_rule: Color32::from_rgb(0x26, 0x27, 0x2C),
+            grip: Color32::from_rgb(105, 105, 115),
             text: Color32::from_rgb(0xDC, 0xDC, 0xE0),
             text_strong: Color32::from_rgb(0xF0, 0xF0, 0xF2),
-            text_hover: Color32::from_rgb(0xE8, 0xE8, 0xEC),
-            text_emphasis: Color32::WHITE,
             text_label: Color32::from_rgb(0xB4, 0xB5, 0xBC),
             text_muted: Color32::from_rgb(0x8A, 0x8B, 0x93),
-            text_quiet: Color32::from_rgb(0x7F, 0x80, 0x88),
             text_disabled: Color32::from_rgb(0x5A, 0x5B, 0x60),
             scrim_text: Color32::from_rgba_premultiplied(230, 230, 230, 230),
             drop_target: Color32::from_rgba_premultiplied(9, 13, 17, 20),
             drop_target_border: Color32::from_rgba_premultiplied(118, 141, 180, 200),
             drop_target_text: Color32::from_rgba_premultiplied(180, 194, 216, 230),
-            grip: Color32::from_rgb(105, 105, 115),
-            grip_hover: Color32::from_rgb(180, 180, 190),
             context_menu: Color32::from_rgba_premultiplied(14, 14, 17, 200),
             context_menu_border: Color32::from_rgba_premultiplied(60, 60, 60, 60),
             context_hover: Color32::from_rgba_premultiplied(28, 22, 13, 28),
             context_hover_border: Color32::from_rgba_premultiplied(110, 78, 39, 110),
-            card_shadow: Color32::from_black_alpha(77),
-            dialog_scrim: Color32::from_black_alpha(140),
-            dialog_shadow: Color32::from_black_alpha(180),
-            prompt_scrim: Color32::from_black_alpha(90),
-            divider: Color32::from_rgb(78, 78, 86),
-            pill_wash: Color32::from_rgba_premultiplied(20, 20, 20, 20),
-            status_text: Color32::from_rgb(150, 150, 158),
-            primary_button: Color32::from_rgb(69, 128, 168),
-            row_selected: Color32::from_rgb(52, 74, 96),
-            pill_active: Color32::from_rgb(61, 103, 133),
-            recovery_text: Color32::from_rgb(115, 205, 145),
-            recovery_fill: Color32::from_rgb(30, 76, 48),
             close_hover: Color32::from_rgb(0xC4, 0x2B, 0x1C),
-            close_hover_text: Color32::WHITE,
             highlight: Color32::from_rgb(104, 222, 158),
             attention: Color32::from_rgb(255, 178, 82),
-            confirm: Color32::from_rgb(120, 230, 150),
-            feed_info: Color32::from_rgb(205, 205, 210),
-            feed_success: Color32::from_rgb(150, 210, 150),
-            feed_error: Color32::from_rgb(235, 130, 118),
+            recovery_fill: Color32::from_rgb(30, 76, 48),
             feed_echo: Color32::from_rgb(150, 175, 225),
-            error_text: Color32::from_rgb(255, 128, 128),
-            danger_text: Color32::from_rgb(0xE0, 0x70, 0x5F),
+            error: Color32::from_rgb(235, 130, 118),
         }
     };
 
@@ -372,71 +278,48 @@ impl InterfaceTokens {
         Self {
             menu_bar: t(c.menu_bar),
             popup_background: t(c.popup_background),
-            popup_border: t(c.popup_border),
             well: t(c.well),
             well_hover: t(c.well_hover),
             field: t(c.field),
-            tile: t(c.tile),
-            tile_hover: t(c.tile_hover),
             capsule: t(c.capsule),
             scrim: t(c.scrim),
+            prompt_scrim: t(c.prompt_scrim),
+            card_shadow: t(c.card_shadow),
+            dialog_shadow: t(c.dialog_shadow),
             chip: t(c.chip),
             chip_hover: t(c.chip_hover),
             chip_pressed: t(c.chip_pressed),
-            dropdown_selected: t(c.dropdown_selected),
             row_hover: t(c.row_hover),
             selection: t(c.selection),
-            selection_text: t(c.selection_text),
             primary: t(c.primary),
+            row_selected: t(c.row_selected),
+            pill_active: t(c.pill_active),
             pill: t(c.pill),
             pill_edge: t(c.pill_edge),
             outline: t(c.outline),
             outline_hover: t(c.outline_hover),
-            separator: t(c.separator),
             frame: t(c.frame),
             field_border: t(c.field_border),
-            row_rule: t(c.row_rule),
+            grip: t(c.grip),
             text: t(c.text),
             text_strong: t(c.text_strong),
-            text_hover: t(c.text_hover),
-            text_emphasis: t(c.text_emphasis),
             text_label: t(c.text_label),
             text_muted: t(c.text_muted),
-            text_quiet: t(c.text_quiet),
             text_disabled: t(c.text_disabled),
             scrim_text: t(c.scrim_text),
             drop_target: t(c.drop_target),
             drop_target_border: t(c.drop_target_border),
             drop_target_text: t(c.drop_target_text),
-            grip: t(c.grip),
-            grip_hover: t(c.grip_hover),
             context_menu: t(c.context_menu),
             context_menu_border: t(c.context_menu_border),
             context_hover: t(c.context_hover),
             context_hover_border: t(c.context_hover_border),
-            card_shadow: t(c.card_shadow),
-            dialog_scrim: t(c.dialog_scrim),
-            dialog_shadow: t(c.dialog_shadow),
-            prompt_scrim: t(c.prompt_scrim),
-            divider: t(c.divider),
-            pill_wash: t(c.pill_wash),
-            status_text: t(c.status_text),
-            primary_button: t(c.primary_button),
-            row_selected: t(c.row_selected),
-            pill_active: t(c.pill_active),
-            recovery_text: t(c.recovery_text),
-            recovery_fill: t(c.recovery_fill),
             close_hover: t(c.close_hover),
-            close_hover_text: t(c.close_hover_text),
             highlight: t(c.highlight),
             attention: t(c.attention),
-            confirm: t(c.confirm),
-            feed_info: t(c.feed_info),
-            feed_success: t(c.feed_success),
-            feed_error: t(c.feed_error),
+            recovery_fill: t(c.recovery_fill),
             feed_echo: t(c.feed_echo),
-            error_text: t(c.error_text),
-            danger_text: t(c.danger_text),
+            error: t(c.error),
         }
     }
 
@@ -448,71 +331,48 @@ impl InterfaceTokens {
         InterfaceColors {
             menu_bar: c(&self.menu_bar, d.menu_bar),
             popup_background: c(&self.popup_background, d.popup_background),
-            popup_border: c(&self.popup_border, d.popup_border),
             well: c(&self.well, d.well),
             well_hover: c(&self.well_hover, d.well_hover),
             field: c(&self.field, d.field),
-            tile: c(&self.tile, d.tile),
-            tile_hover: c(&self.tile_hover, d.tile_hover),
             capsule: c(&self.capsule, d.capsule),
             scrim: c(&self.scrim, d.scrim),
+            prompt_scrim: c(&self.prompt_scrim, d.prompt_scrim),
+            card_shadow: c(&self.card_shadow, d.card_shadow),
+            dialog_shadow: c(&self.dialog_shadow, d.dialog_shadow),
             chip: c(&self.chip, d.chip),
             chip_hover: c(&self.chip_hover, d.chip_hover),
             chip_pressed: c(&self.chip_pressed, d.chip_pressed),
-            dropdown_selected: c(&self.dropdown_selected, d.dropdown_selected),
             row_hover: c(&self.row_hover, d.row_hover),
             selection: c(&self.selection, d.selection),
-            selection_text: c(&self.selection_text, d.selection_text),
             primary: c(&self.primary, d.primary),
+            row_selected: c(&self.row_selected, d.row_selected),
+            pill_active: c(&self.pill_active, d.pill_active),
             pill: c(&self.pill, d.pill),
             pill_edge: c(&self.pill_edge, d.pill_edge),
             outline: c(&self.outline, d.outline),
             outline_hover: c(&self.outline_hover, d.outline_hover),
-            separator: c(&self.separator, d.separator),
             frame: c(&self.frame, d.frame),
             field_border: c(&self.field_border, d.field_border),
-            row_rule: c(&self.row_rule, d.row_rule),
+            grip: c(&self.grip, d.grip),
             text: c(&self.text, d.text),
             text_strong: c(&self.text_strong, d.text_strong),
-            text_hover: c(&self.text_hover, d.text_hover),
-            text_emphasis: c(&self.text_emphasis, d.text_emphasis),
             text_label: c(&self.text_label, d.text_label),
             text_muted: c(&self.text_muted, d.text_muted),
-            text_quiet: c(&self.text_quiet, d.text_quiet),
             text_disabled: c(&self.text_disabled, d.text_disabled),
             scrim_text: c(&self.scrim_text, d.scrim_text),
             drop_target: c(&self.drop_target, d.drop_target),
             drop_target_border: c(&self.drop_target_border, d.drop_target_border),
             drop_target_text: c(&self.drop_target_text, d.drop_target_text),
-            grip: c(&self.grip, d.grip),
-            grip_hover: c(&self.grip_hover, d.grip_hover),
             context_menu: c(&self.context_menu, d.context_menu),
             context_menu_border: c(&self.context_menu_border, d.context_menu_border),
             context_hover: c(&self.context_hover, d.context_hover),
             context_hover_border: c(&self.context_hover_border, d.context_hover_border),
-            card_shadow: c(&self.card_shadow, d.card_shadow),
-            dialog_scrim: c(&self.dialog_scrim, d.dialog_scrim),
-            dialog_shadow: c(&self.dialog_shadow, d.dialog_shadow),
-            prompt_scrim: c(&self.prompt_scrim, d.prompt_scrim),
-            divider: c(&self.divider, d.divider),
-            pill_wash: c(&self.pill_wash, d.pill_wash),
-            status_text: c(&self.status_text, d.status_text),
-            primary_button: c(&self.primary_button, d.primary_button),
-            row_selected: c(&self.row_selected, d.row_selected),
-            pill_active: c(&self.pill_active, d.pill_active),
-            recovery_text: c(&self.recovery_text, d.recovery_text),
-            recovery_fill: c(&self.recovery_fill, d.recovery_fill),
             close_hover: c(&self.close_hover, d.close_hover),
-            close_hover_text: c(&self.close_hover_text, d.close_hover_text),
             highlight: c(&self.highlight, d.highlight),
             attention: c(&self.attention, d.attention),
-            confirm: c(&self.confirm, d.confirm),
-            feed_info: c(&self.feed_info, d.feed_info),
-            feed_success: c(&self.feed_success, d.feed_success),
-            feed_error: c(&self.feed_error, d.feed_error),
+            recovery_fill: c(&self.recovery_fill, d.recovery_fill),
             feed_echo: c(&self.feed_echo, d.feed_echo),
-            error_text: c(&self.error_text, d.error_text),
-            danger_text: c(&self.danger_text, d.danger_text),
+            error: c(&self.error, d.error),
         }
     }
 }
@@ -569,10 +429,9 @@ mod tests {
         let d = InterfaceColors::DARK;
         let v = egui::Visuals::dark();
         assert_eq!(d.popup_background, v.window_fill);
-        assert_eq!(d.popup_border, v.window_stroke.color);
+        assert_eq!(d.frame, v.window_stroke.color);
         assert_eq!(d.outline, Color32::from_white_alpha(20));
         assert_eq!(d.outline_hover, Color32::from_white_alpha(36));
-        assert_eq!(d.separator, Color32::from_white_alpha(18));
         assert_eq!(d.row_hover, Color32::from_white_alpha(12));
         assert_eq!(d.scrim_text, Color32::from_white_alpha(230));
         assert_eq!(d.capsule, Color32::from_rgba_unmultiplied(30, 30, 35, 235));
@@ -588,7 +447,6 @@ mod tests {
             d.drop_target_text,
             Color32::from_rgba_unmultiplied(200, 215, 240, 230)
         );
-        assert_eq!(d.error_text, Color32::LIGHT_RED);
         assert_eq!(
             d.context_menu,
             Color32::from_rgba_unmultiplied(18, 18, 22, 200)
@@ -605,10 +463,34 @@ mod tests {
             d.context_hover_border,
             Color32::from_rgba_unmultiplied(255, 180, 90, 110)
         );
+        // The unlit pill's wash was `rgba_unmultiplied(255,255,255,20)`;
+        // merged into `outline` (slice 7), which is the same colour.
         assert_eq!(
-            d.pill_wash,
+            d.outline,
             Color32::from_rgba_unmultiplied(255, 255, 255, 20)
         );
+    }
+
+    /// A theme file saved before slice 7 (2026-11-27) carries tokens that were
+    /// merged away (`text_quiet`, `separator`, `feed_success`, ...). They are
+    /// ignored, and the file still loads.
+    #[test]
+    fn a_file_with_merged_away_tokens_still_loads() {
+        let mut value = serde_json::to_value(InterfaceTokens::dark()).unwrap();
+        let map = value.as_object_mut().unwrap();
+        for old in [
+            "text_quiet",
+            "separator",
+            "feed_success",
+            "dropdown_selected",
+        ] {
+            map.insert(
+                old.into(),
+                serde_json::json!({"$type": "color", "$value": "#010203FF"}),
+            );
+        }
+        let loaded: InterfaceTokens = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded.resolve(), InterfaceColors::DARK);
     }
 
     #[test]

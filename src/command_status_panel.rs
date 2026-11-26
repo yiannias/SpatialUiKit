@@ -47,6 +47,26 @@ pub enum FeedKind {
     Echo,
 }
 
+/// The mark drawn before a feed line: success and error differ by **form**,
+/// not by colour alone (Chris, 2026-11-27).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FeedMark {
+    /// A check (success).
+    Check,
+    /// A cross (error).
+    Cross,
+}
+
+/// The mark drawn before a feed line of `kind`: a check for success, a cross
+/// for an error, none otherwise.
+pub fn feed_mark(kind: FeedKind) -> Option<FeedMark> {
+    match kind {
+        FeedKind::Success => Some(FeedMark::Check),
+        FeedKind::Error => Some(FeedMark::Cross),
+        FeedKind::Info | FeedKind::Echo => None,
+    }
+}
+
 /// Text color for a feed entry's `FeedKind`, in the built-in Dark theme's
 /// colours. The panel itself paints with [`feed_color_with`] and the theme
 /// in force.
@@ -61,9 +81,9 @@ pub fn feed_color_with(
     c: &crate::interface_tokens::InterfaceColors,
 ) -> egui::Color32 {
     match kind {
-        FeedKind::Info => c.feed_info,
-        FeedKind::Success => c.feed_success,
-        FeedKind::Error => c.feed_error,
+        FeedKind::Info => c.text,
+        FeedKind::Success => c.highlight,
+        FeedKind::Error => c.error,
         FeedKind::Echo => c.feed_echo,
     }
 }
@@ -665,14 +685,43 @@ pub fn render_feed(
     feed_h: f32,
     monospace: bool,
 ) {
-    let style_label = |ui: &mut egui::Ui, text: &str, color: egui::Color32| {
-        let mut rt = egui::RichText::new(text).color(color).size(
-            crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui),
-        );
+    let style_label = |ui: &mut egui::Ui, entry: &FeedEntry, color: egui::Color32| {
+        let size =
+            crate::theme::COMMAND_STATUS_PANEL_TEXT_SIZE * crate::theme::current_text_scale(ui);
+        // A marked line starts at its mark: leading spaces some messages
+        // carry for alignment would open a gap after it.
+        let text = if feed_mark(entry.kind).is_some() {
+            entry.text.trim_start()
+        } else {
+            entry.text.as_str()
+        };
+        let mut rt = egui::RichText::new(text).color(color).size(size);
         if monospace {
             rt = rt.monospace();
         }
-        ui.label(rt);
+        match feed_mark(entry.kind) {
+            Some(mark) => {
+                // A drawn mark, not a font glyph: the feed's monospace font
+                // has no check or cross, and a missing glyph renders as a box.
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = size * 0.6;
+                    let (rect, _) =
+                        ui.allocate_exact_size(egui::vec2(size * 0.7, size), egui::Sense::hover());
+                    let mark_rect = egui::Rect::from_center_size(
+                        rect.center(),
+                        egui::vec2(size * 0.6, size * 0.6),
+                    );
+                    match mark {
+                        FeedMark::Check => crate::glyphs::check(ui.painter(), mark_rect, color),
+                        FeedMark::Cross => crate::glyphs::close_x(ui.painter(), mark_rect, color),
+                    }
+                    ui.label(rt);
+                });
+            }
+            None => {
+                ui.label(rt);
+            }
+        }
     };
 
     if show_history {
@@ -689,7 +738,7 @@ pub fn render_feed(
             .show(ui, |ui| {
                 for entry in feed {
                     let c = crate::interface_tokens::interface_colors(ui.ctx());
-                    style_label(ui, &entry.text, feed_color_with(entry.kind, &c));
+                    style_label(ui, entry, feed_color_with(entry.kind, &c));
                 }
             });
         return;
@@ -726,7 +775,7 @@ pub fn render_feed(
                     let c = crate::interface_tokens::interface_colors(ui.ctx());
                     style_label(
                         ui,
-                        &entry.text,
+                        entry,
                         feed_color_with(entry.kind, &c).gamma_multiply(*a),
                     );
                 }
@@ -762,7 +811,7 @@ pub fn resize_grip(
     let grip = ui.interact(grip_rect, ui.id().with("resize_grip"), egui::Sense::drag());
     let c = crate::interface_tokens::interface_colors(ui.ctx());
     let grip_color = if grip.hovered() || grip.dragged() {
-        c.grip_hover
+        c.text_label
     } else {
         c.grip
     };

@@ -118,13 +118,13 @@ fn apply_interface_colors(visuals: &mut egui::Visuals, accent: egui::Color32, c:
     w.open.bg_fill = c.well;
     w.open.bg_stroke = line(c.outline_hover);
     w.noninteractive.fg_stroke = line(c.text_label);
-    w.noninteractive.bg_stroke = line(c.separator);
+    w.noninteractive.bg_stroke = line(c.outline);
     visuals.extreme_bg_color = c.well;
     visuals.text_edit_bg_color = Some(c.field);
     visuals.selection.bg_fill = c.selection;
-    visuals.selection.stroke = line(c.selection_text);
+    visuals.selection.stroke = line(c.text_strong);
     visuals.window_fill = c.popup_background;
-    visuals.window_stroke.color = c.popup_border;
+    visuals.window_stroke.color = c.frame;
 }
 
 /// Runs `add` with dark-well dropdown styling, so a stock `egui::ComboBox`
@@ -157,7 +157,7 @@ pub fn dropdown_well_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)
         v.widgets.open.bg_stroke = egui::Stroke::new(1.0, c.outline_hover);
         v.extreme_bg_color = well;
         v.window_fill = well;
-        v.selection.bg_fill = c.dropdown_selected;
+        v.selection.bg_fill = c.chip_hover;
         add(ui)
     })
     .inner
@@ -327,7 +327,8 @@ mod tests {
         assert_eq!(v.widgets.inactive.bg_fill, rgb(0x2E, 0x2F, 0x35));
         assert_eq!(v.widgets.inactive.bg_stroke.color, w(20));
         assert_eq!(v.widgets.hovered.bg_stroke.color, w(36));
-        assert_eq!(v.widgets.noninteractive.bg_stroke.color, w(18));
+        // Separators merged into the control outline (white 18 -> 20, 2026-11-27).
+        assert_eq!(v.widgets.noninteractive.bg_stroke.color, w(20));
         assert_eq!(v.extreme_bg_color, rgb(0x14, 0x14, 0x18));
         assert_eq!(v.text_edit_bg_color, Some(rgb(0x2A, 0x2B, 0x30)));
         assert_eq!(v.window_fill, egui::Visuals::dark().window_fill);

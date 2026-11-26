@@ -216,19 +216,21 @@ impl<'de> Deserialize<'de> for InterfaceScale {
 /// Colour for a positive state ("Saved", success), beside [`warning_color`]
 /// ("Unsaved changes"). Dark and light variants, picked from `visuals`; both
 /// read on their theme's window fill. Use these rather than hardcoding a green.
+/// Dark is the one "done / on" mint, the interface `highlight` (Chris,
+/// 2026-11-27: one set of state colours).
 pub fn ok_color(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
-        egui::Color32::from_rgb(110, 200, 120)
+        crate::interface_tokens::InterfaceColors::DARK.highlight
     } else {
         egui::Color32::from_rgb(22, 128, 56)
     }
 }
 
-/// Colour for a cautionary state ("Unsaved changes"); the orange the apps
-/// already used, with a darker light-theme variant.
+/// Colour for a cautionary state ("Unsaved changes"): dark is the one
+/// "attention" amber (2026-11-27), light a darker variant.
 pub fn warning_color(visuals: &egui::Visuals) -> egui::Color32 {
     if visuals.dark_mode {
-        egui::Color32::from_rgb(240, 180, 70)
+        crate::interface_tokens::InterfaceColors::DARK.attention
     } else {
         egui::Color32::from_rgb(176, 104, 0)
     }
@@ -555,13 +557,16 @@ impl ThemePalette {
                 header: HeaderTokens {
                     background: ColorToken::new(egui::Color32::from_rgb(0x2E, 0x2E, 0x32)),
                     height: DimensionToken::new(32.0),
+                    // White 38 merged into the hover outline, white 36
+                    // (2026-11-27).
                     border_bottom: ColorToken::new(egui::Color32::from_rgba_unmultiplied(
-                        0xFF, 0xFF, 0xFF, 0x26,
+                        0xFF, 0xFF, 0xFF, 36,
                     )),
                     title_color: ColorToken::new(egui::Color32::WHITE),
                 },
                 button: ButtonTokens {
-                    hover_background: ColorToken::new(egui::Color32::from_rgb(0x38, 0x38, 0x3C)),
+                    // `#38383C` merged into chip hover `#383940` (2026-11-27).
+                    hover_background: ColorToken::new(egui::Color32::from_rgb(0x38, 0x39, 0x40)),
                     icon_color: ColorToken::new(egui::Color32::WHITE),
                 },
             },
@@ -602,7 +607,9 @@ impl ThemePalette {
             control: ControlTokens {
                 accent: ColorToken::new(egui::Color32::from_rgb(255, 178, 82)),
                 label_background: ColorToken::new(egui::Color32::from_rgb(0x2B, 0x2C, 0x31)),
-                label_foreground: ColorToken::new(egui::Color32::from_rgb(0x7F, 0x80, 0x88)),
+                // Pod labels: `#7F8088` merged into muted text `#8A8B93`
+                // (2026-11-27).
+                label_foreground: ColorToken::new(egui::Color32::from_rgb(0x8A, 0x8B, 0x93)),
                 cap_background: ColorToken::new(egui::Color32::from_rgb(24, 24, 27)),
                 cap_foreground: ColorToken::new(egui::Color32::from_rgb(104, 104, 112)),
                 cap_border: ColorToken::new(egui::Color32::from_rgb(58, 58, 64)),
@@ -807,7 +814,7 @@ mod theme_palette_tests {
         );
         assert_eq!(
             d.control.label_foreground.color32().unwrap(),
-            egui::Color32::from_rgb(0x7F, 0x80, 0x88)
+            egui::Color32::from_rgb(0x8A, 0x8B, 0x93)
         );
         // `annunciator_response_sized`'s unlit cap fill, dim glyph color and
         // its two border colors.

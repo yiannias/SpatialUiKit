@@ -72,11 +72,11 @@ pub fn choice_toggle<T: PartialEq + Clone>(
         if let Some(c) = crate::interface_tokens::theme_colors(ui) {
             (
                 c.well,
-                c.dropdown_selected,
+                c.chip_hover,
                 Stroke::NONE,
                 c.text_strong,
                 c.text_label,
-                c.text_hover,
+                c.text_strong,
                 c.text_strong,
             )
         } else {

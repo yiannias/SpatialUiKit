@@ -686,7 +686,7 @@ fn help_font_size(ui: &egui::Ui) -> f32 {
 /// mid-grey in light mode.
 fn help_text_color(ui: &egui::Ui) -> egui::Color32 {
     if let Some(c) = crate::interface_tokens::theme_colors(ui) {
-        c.text_quiet
+        c.text_muted
     } else {
         egui::Color32::from_rgb(0x5B, 0x5D, 0x66)
     }
@@ -712,7 +712,7 @@ fn disabled_hint_color(ui: &egui::Ui) -> egui::Color32 {
 /// nearly as bright).
 fn label_color(ui: &egui::Ui) -> egui::Color32 {
     if let Some(c) = crate::interface_tokens::theme_colors(ui) {
-        c.text_emphasis
+        c.text_strong
     } else {
         egui::Color32::from_rgb(0x10, 0x10, 0x14)
     }
@@ -726,7 +726,7 @@ fn label_color(ui: &egui::Ui) -> egui::Color32 {
 /// step off that theme's surface tone.
 fn row_rule_color(ui: &egui::Ui) -> egui::Color32 {
     if let Some(c) = crate::interface_tokens::theme_colors(ui) {
-        c.row_rule
+        c.chip_pressed
     } else {
         egui::Color32::from_rgb(0xE3, 0xE4, 0xE8)
     }

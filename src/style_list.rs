@@ -113,7 +113,7 @@ pub fn view_mode_switch(
         let color = if active {
             colors(ui).primary
         } else if response.hovered() {
-            colors(ui).text_hover
+            colors(ui).text_strong
         } else {
             colors(ui).text_muted
         };
@@ -826,14 +826,14 @@ fn paint_error_bubble(ui: &egui::Ui, sk: &SketchFrame, edit_id: egui::Id, field:
     let painter = ui
         .ctx()
         .layer_painter(egui::LayerId::new(egui::Order::Tooltip, edit_id));
-    let error = colors(ui).error_text;
+    let error = colors(ui).error;
     let galley = painter.layout_no_wrap(text.to_owned(), sk.font(16.0), error);
     let pad = Vec2::new(sk.len(6.0), sk.len(3.0));
     let bubble = Rect::from_min_size(
         field.left_bottom() + Vec2::new(0.0, sk.len(3.0)),
         galley.size() + pad * 2.0,
     );
-    painter.rect_filled(bubble, sk.radius(6.0), colors(ui).tile);
+    painter.rect_filled(bubble, sk.radius(6.0), colors(ui).well);
     painter.rect_stroke(
         bubble,
         sk.radius(6.0),
@@ -923,7 +923,7 @@ fn draw_list_rows(
                         ui.painter().rect_filled(
                             bar,
                             CornerRadius::same(palette::CHIP_RADIUS),
-                            colors(ui).dropdown_selected,
+                            colors(ui).chip_hover,
                         );
                     } else if response.hovered() {
                         ui.painter()
@@ -957,7 +957,7 @@ fn draw_list_rows(
                             shown,
                             egui::TextFormat {
                                 font_id: font.clone(),
-                                color: colors(ui).text_hover,
+                                color: colors(ui).text_strong,
                                 italics: row.italic,
                                 ..Default::default()
                             },
@@ -965,7 +965,7 @@ fn draw_list_rows(
                     ui.painter().galley(
                         Pos2::new(text_x, rect.center().y - galley.size().y / 2.0),
                         galley,
-                        colors(ui).text_hover,
+                        colors(ui).text_strong,
                     );
                     if response.clicked() {
                         out.clicked = Some(index);
@@ -1040,7 +1040,7 @@ fn draw_thumbnails_with_editor(
                         );
                         if let Some(paint) = &row.thumbnail {
                             ui.painter()
-                                .rect_filled(square, sk.radius(6.0), colors(ui).tile);
+                                .rect_filled(square, sk.radius(6.0), colors(ui).well);
                             paint(ui, square);
                         }
                         let is_selected = selected == Some(index) || editing_row;
@@ -1050,7 +1050,7 @@ fn draw_thumbnails_with_editor(
                             if is_selected {
                                 Stroke::new(sk.len(3.0), colors(ui).primary)
                             } else if response.hovered() {
-                                Stroke::new(1.0, colors(ui).text_hover)
+                                Stroke::new(1.0, colors(ui).text_strong)
                             } else {
                                 Stroke::new(1.0, colors(ui).field_border)
                             },
@@ -1108,11 +1108,11 @@ fn rename_field(
 ) -> EditResult {
     let id = rename_edit_id(key).with("field");
     ui.painter()
-        .rect_filled(field, sk.radius(8.0), colors(ui).tile);
+        .rect_filled(field, sk.radius(8.0), colors(ui).well);
     ui.painter().rect_stroke(
         field,
         sk.radius(8.0),
-        Stroke::new(1.0, colors(ui).text_hover),
+        Stroke::new(1.0, colors(ui).text_strong),
         StrokeKind::Inside,
     );
     if edit.fresh {
@@ -1138,7 +1138,7 @@ fn rename_field(
             let text = egui::TextEdit::singleline(&mut edit.text)
                 .id(id)
                 .font(sk.font(20.0))
-                .text_color(colors(ui).text_hover)
+                .text_color(colors(ui).text_strong)
                 .frame(egui::Frame::NONE)
                 .desired_width(f32::INFINITY);
             response = Some(ui.add(if center {

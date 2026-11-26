@@ -117,6 +117,12 @@ pub fn close_x(painter: &Painter, rect: Rect, color: Color32) {
     f.line((100.0, 0.0), (0.0, 100.0), color);
 }
 
+/// A check mark filling `rect` (success; the counterpart of [`close_x`]).
+pub fn check(painter: &Painter, rect: Rect, color: Color32) {
+    let f = Frame::new(painter, rect);
+    f.path(&[(4.0, 54.0), (36.0, 86.0), (96.0, 14.0)], color);
+}
+
 /// The unit-space vertices of a chevron pointing `dir`: the standard 28 x 56
 /// open "V" centred in the box (the icon library's `nav.*` keys).
 pub fn chevron_points(dir: Dir) -> [(f32, f32); 3] {

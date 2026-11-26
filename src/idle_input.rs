@@ -274,7 +274,7 @@ pub fn capsule_styled(
     let colors = crate::interface_tokens::interface_colors(ui.ctx());
     let (text, color): (&str, egui::Color32) = if flashing {
         let (name, _) = state.flash.as_ref().unwrap();
-        (name.as_str(), style.color.unwrap_or(colors.confirm))
+        (name.as_str(), style.color.unwrap_or(colors.highlight))
     } else {
         (&state.buffer, style.color.unwrap_or(colors.attention))
     };
@@ -321,7 +321,7 @@ pub fn paint_capsule_preview(
     let color = style.color.unwrap_or(if typing {
         colors.attention
     } else {
-        colors.confirm
+        colors.highlight
     });
     // The real capsule's 24 px margin and 28 pt text, scaled down to the
     // preview box so a Large pill still fits.
