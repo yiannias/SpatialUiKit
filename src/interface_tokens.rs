@@ -198,6 +198,60 @@ pub struct InterfaceColors {
     /// colour), inline field errors, a destructive button's label. The hue is
     /// still to be re-picked away from red (Chris).
     pub error: egui::Color32,
+
+    // Merged-away names (slice 7, 2026-11-27). Not theme tokens and never in
+    // a file: each always holds the colour of the token it was merged into
+    // ([`InterfaceColors::with_aliases`]). They exist only so code written
+    // against the 67-token set keeps compiling while hosts move to the merged
+    // names; they will be removed once no caller uses them.
+    /// Alias of `text_muted` (merged 2026-11-27); kept so older callers build.
+    pub text_quiet: egui::Color32,
+    /// Alias of `text_strong` (merged 2026-11-27); kept so older callers build.
+    pub text_hover: egui::Color32,
+    /// Alias of `outline` (merged 2026-11-27); kept so older callers build.
+    pub separator: egui::Color32,
+    /// Alias of `text_strong` (merged 2026-11-27); kept so older callers build.
+    pub selection_text: egui::Color32,
+    /// Alias of `text_strong` (merged 2026-11-27); kept so older callers build.
+    pub close_hover_text: egui::Color32,
+    /// Alias of `outline` (merged 2026-11-27); kept so older callers build.
+    pub pill_wash: egui::Color32,
+    /// Alias of `well` (merged 2026-11-27); kept so older callers build.
+    pub tile: egui::Color32,
+    /// Alias of `chip_pressed` (merged 2026-11-27); kept so older callers build.
+    pub tile_hover: egui::Color32,
+    /// Alias of `frame` (merged 2026-11-27); kept so older callers build.
+    pub popup_border: egui::Color32,
+    /// Alias of `chip_hover` (merged 2026-11-27); kept so older callers build.
+    pub dropdown_selected: egui::Color32,
+    /// Alias of `chip_pressed` (merged 2026-11-27); kept so older callers build.
+    pub row_rule: egui::Color32,
+    /// Alias of `text_muted` (merged 2026-11-27); kept so older callers build.
+    pub status_text: egui::Color32,
+    /// Alias of `text_label` (merged 2026-11-27); kept so older callers build.
+    pub grip_hover: egui::Color32,
+    /// Alias of `field_border` (merged 2026-11-27); kept so older callers build.
+    pub divider: egui::Color32,
+    /// Alias of `scrim` (merged 2026-11-27); kept so older callers build.
+    pub dialog_scrim: egui::Color32,
+    /// Alias of `highlight` (merged 2026-11-27); kept so older callers build.
+    pub confirm: egui::Color32,
+    /// Alias of `highlight` (merged 2026-11-27); kept so older callers build.
+    pub feed_success: egui::Color32,
+    /// Alias of `highlight` (merged 2026-11-27); kept so older callers build.
+    pub recovery_text: egui::Color32,
+    /// Alias of `text` (merged 2026-11-27); kept so older callers build.
+    pub feed_info: egui::Color32,
+    /// Alias of `error` (merged 2026-11-27); kept so older callers build.
+    pub error_text: egui::Color32,
+    /// Alias of `error` (merged 2026-11-27); kept so older callers build.
+    pub danger_text: egui::Color32,
+    /// Alias of `error` (merged 2026-11-27); kept so older callers build.
+    pub feed_error: egui::Color32,
+    /// Alias of `text_strong` (merged 2026-11-27); kept so older callers build.
+    pub text_emphasis: egui::Color32,
+    /// Alias of `primary` (merged 2026-11-27); kept so older callers build.
+    pub primary_button: egui::Color32,
 }
 
 impl InterfaceColors {
@@ -252,8 +306,64 @@ impl InterfaceColors {
             recovery_fill: Color32::from_rgb(30, 76, 48),
             feed_echo: Color32::from_rgb(150, 175, 225),
             error: Color32::from_rgb(235, 130, 118),
+            text_quiet: Color32::TRANSPARENT,
+            text_hover: Color32::TRANSPARENT,
+            separator: Color32::TRANSPARENT,
+            selection_text: Color32::TRANSPARENT,
+            close_hover_text: Color32::TRANSPARENT,
+            pill_wash: Color32::TRANSPARENT,
+            tile: Color32::TRANSPARENT,
+            tile_hover: Color32::TRANSPARENT,
+            popup_border: Color32::TRANSPARENT,
+            dropdown_selected: Color32::TRANSPARENT,
+            row_rule: Color32::TRANSPARENT,
+            status_text: Color32::TRANSPARENT,
+            grip_hover: Color32::TRANSPARENT,
+            divider: Color32::TRANSPARENT,
+            dialog_scrim: Color32::TRANSPARENT,
+            confirm: Color32::TRANSPARENT,
+            feed_success: Color32::TRANSPARENT,
+            recovery_text: Color32::TRANSPARENT,
+            feed_info: Color32::TRANSPARENT,
+            error_text: Color32::TRANSPARENT,
+            danger_text: Color32::TRANSPARENT,
+            feed_error: Color32::TRANSPARENT,
+            text_emphasis: Color32::TRANSPARENT,
+            primary_button: Color32::TRANSPARENT,
         }
+        .with_aliases()
     };
+
+    /// Sets every merged-away alias field to its merged token's colour.
+    pub const fn with_aliases(self) -> Self {
+        Self {
+            text_quiet: self.text_muted,
+            text_hover: self.text_strong,
+            separator: self.outline,
+            selection_text: self.text_strong,
+            close_hover_text: self.text_strong,
+            pill_wash: self.outline,
+            tile: self.well,
+            tile_hover: self.chip_pressed,
+            popup_border: self.frame,
+            dropdown_selected: self.chip_hover,
+            row_rule: self.chip_pressed,
+            status_text: self.text_muted,
+            grip_hover: self.text_label,
+            divider: self.field_border,
+            dialog_scrim: self.scrim,
+            confirm: self.highlight,
+            feed_success: self.highlight,
+            recovery_text: self.highlight,
+            feed_info: self.text,
+            error_text: self.error,
+            danger_text: self.error,
+            feed_error: self.error,
+            text_emphasis: self.text_strong,
+            primary_button: self.primary,
+            ..self
+        }
+    }
 
     /// [`Self::DARK`].
     pub fn dark_default() -> Self {
@@ -373,7 +483,32 @@ impl InterfaceTokens {
             recovery_fill: c(&self.recovery_fill, d.recovery_fill),
             feed_echo: c(&self.feed_echo, d.feed_echo),
             error: c(&self.error, d.error),
+            text_quiet: d.text_quiet,
+            text_hover: d.text_hover,
+            separator: d.separator,
+            selection_text: d.selection_text,
+            close_hover_text: d.close_hover_text,
+            pill_wash: d.pill_wash,
+            tile: d.tile,
+            tile_hover: d.tile_hover,
+            popup_border: d.popup_border,
+            dropdown_selected: d.dropdown_selected,
+            row_rule: d.row_rule,
+            status_text: d.status_text,
+            grip_hover: d.grip_hover,
+            divider: d.divider,
+            dialog_scrim: d.dialog_scrim,
+            confirm: d.confirm,
+            feed_success: d.feed_success,
+            recovery_text: d.recovery_text,
+            feed_info: d.feed_info,
+            error_text: d.error_text,
+            danger_text: d.danger_text,
+            feed_error: d.feed_error,
+            text_emphasis: d.text_emphasis,
+            primary_button: d.primary_button,
         }
+        .with_aliases()
     }
 }
 
