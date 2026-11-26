@@ -1,0 +1,172 @@
+//! Kit colour guard (SDB TASK-384, 2026-11-26). Every colour the kit paints
+//! comes from a theme token: `ThemePalette` (`theme.rs`), the interface
+//! tokens (`interface_tokens.rs`), or the locked canvas tokens. A literal
+//! `Color32` is allowed only where it *is* a token's built-in value, where it
+//! is data (a caller-chosen colour, a picker), or where the file is on the
+//! list of copies still to migrate.
+//!
+//! This is a ratchet, the same shape as SDB's `colour_guard`: each file may
+//! keep exactly the literals listed here, and a new file gets none. A file
+//! that drops below its number fails too, so the list is lowered in the same
+//! commit that migrates a copy and never silently allows the copy back.
+//!
+//! Counted: `Color32::` constructors (`from_rgb`, `from_gray`, `from_rgba_*`,
+//! `from_black_alpha`, `from_white_alpha`) and named constants (`WHITE`,
+//! `BLACK`, `TRANSPARENT`, `RED`, ...; not `PLACEHOLDER`, which means "the
+//! style's own text colour"), outside `#[cfg(test)]` and comment
+//! lines. Test-only files (`tests.rs`, `*/tests.rs`) are skipped.
+
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+
+/// Literal colours per file, and why they are there.
+const ALLOWED: &[(&str, usize)] = &[
+    // The tokens' own built-in values: these files *are* the theme.
+    ("theme.rs", 41), // Dark/Light palettes, ok/warning colours, section_label light grey
+    ("interface_tokens.rs", 19), // InterfaceColors::dark_default
+    ("tokens.rs", 1), // hex parsing builds the colour
+    // Data or measuring, not paint: caller-chosen colours, text measured
+    // for its width (the colour of a galley that is never drawn).
+    ("font_picker.rs", 1), // measuring
+    ("menu.rs", 3),        // MenuColor (caller-chosen) and measuring
+    ("search.rs", 2),      // black/white ink picked for contrast on a caller colour
+    ("os_style.rs", 6),    // accent-derived contrast ink, light hairlines
+    ("dropdown.rs", 7),    // 4 measuring, 2 transparent (no outline), opaque fallback
+    // Copies still to migrate (TASK-384 slices 3 and 5); each drops to its
+    // data-only number as it moves to tokens.
+    ("choice_toggle.rs", 8), // light-theme values, 1 measuring
+    ("sketch.rs", 24),
+    ("command_status_panel.rs", 16),
+    ("settings.rs", 10),
+    ("window_chrome.rs", 8),
+    ("idle_input.rs", 6),
+    ("ribbon.rs", 5),
+    ("dock.rs", 5),
+    ("style_list.rs", 4),
+    ("modal.rs", 2),
+];
+
+const CONSTRUCTORS: &[&str] = &[
+    "from_rgb(",
+    "from_gray(",
+    "from_rgba_unmultiplied(",
+    "from_rgba_premultiplied(",
+    "from_black_alpha(",
+    "from_white_alpha(",
+];
+
+const NAMED: &[&str] = &[
+    "WHITE",
+    "BLACK",
+    "TRANSPARENT",
+    "RED",
+    "GREEN",
+    "BLUE",
+    "YELLOW",
+    "GOLD",
+    "GRAY",
+    "DARK_GRAY",
+    "LIGHT_GRAY",
+    "LIGHT_RED",
+    "LIGHT_GREEN",
+    "LIGHT_BLUE",
+    "LIGHT_YELLOW",
+    "DARK_RED",
+    "DARK_GREEN",
+    "DARK_BLUE",
+    "BROWN",
+    "KHAKI",
+    "ORANGE",
+    "DEBUG_COLOR",
+];
+
+fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            rust_files(&path, out);
+        } else if path.extension().is_some_and(|e| e == "rs") {
+            out.push(path);
+        }
+    }
+}
+
+/// Literal colours on one line.
+fn literals_in(line: &str) -> usize {
+    let mut n = 0;
+    let mut rest = line;
+    while let Some(i) = rest.find("Color32::") {
+        rest = &rest[i + "Color32::".len()..];
+        let ident: String = rest
+            .chars()
+            .take_while(|c| c.is_ascii_alphanumeric() || *c == '_' || *c == '(')
+            .collect();
+        if CONSTRUCTORS.iter().any(|c| ident.starts_with(c)) || NAMED.iter().any(|c| ident == *c) {
+            n += 1;
+        }
+    }
+    n
+}
+
+fn count(text: &str) -> usize {
+    let body = text.split("#[cfg(test)]").next().unwrap_or("");
+    body.lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .map(literals_in)
+        .sum()
+}
+
+#[test]
+fn kit_files_do_not_add_literal_colours() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut files = Vec::new();
+    rust_files(&root, &mut files);
+    let allowed: BTreeMap<&str, usize> = ALLOWED.iter().copied().collect();
+    let mut problems = Vec::new();
+    let mut seen = Vec::new();
+    for path in files {
+        let name = path
+            .strip_prefix(&root)
+            .unwrap()
+            .to_string_lossy()
+            .replace(std::path::MAIN_SEPARATOR, "/");
+        if name == "tests.rs" || name.ends_with("/tests.rs") || name.contains("/tests/") {
+            continue;
+        }
+        let n = count(&std::fs::read_to_string(&path).unwrap());
+        let limit = allowed.get(name.as_str()).copied().unwrap_or(0);
+        if n != limit {
+            problems.push(format!("{name}: {n} literal colours, listed {limit}"));
+        }
+        seen.push(name);
+    }
+    for name in allowed.keys() {
+        if !seen.iter().any(|s| s == name) {
+            problems.push(format!("{name}: listed but no such file"));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "take colours from a theme token; if a copy was migrated, lower its \
+         number in tests/colour_guard.rs (SDB TASK-384): {problems:#?}"
+    );
+}
+
+#[test]
+fn the_counter_sees_every_form() {
+    assert_eq!(literals_in("let a = Color32::from_rgb(1, 2, 3);"), 1);
+    assert_eq!(
+        literals_in("egui::Color32::WHITE, Color32::from_white_alpha(9)"),
+        2
+    );
+    assert_eq!(literals_in("Color32::TRANSPARENT"), 1);
+    assert_eq!(
+        literals_in("Color32::from_rgba_unmultiplied(c.r(), c.g(), c.b(), 9)"),
+        1
+    );
+    assert_eq!(literals_in("fn f(c: Color32) -> Color32::Foo"), 0);
+    assert_eq!(
+        count("Color32::WHITE\n// Color32::BLACK\n#[cfg(test)]\nColor32::RED"),
+        1
+    );
+}
