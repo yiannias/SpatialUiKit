@@ -1,5 +1,11 @@
 //! Shared tree rows for navigators whose contents come from app-owned data.
 //!
+//! The look follows Chris's Symbol Editor mock-up (2026-11-17, chosen for
+//! every tree on 2026-11-27, SDB TASK-409): only the groups leading to the open
+//! item start expanded, thin guide lines join each row to its parent, the open
+//! item is underlined in the accent, and a dot after a name marks an unapplied
+//! change. Colours come from the theme (`interface_tokens`), never literals.
+//!
 //! Settings has a domain-specific declarative tree in [`crate::settings`],
 //! while editors often build trees from live project data. This small renderer
 //! shares the indentation, counts, selection rows, and row context menus
@@ -26,6 +32,8 @@ pub struct NavigationNode<K> {
     key: Option<K>,
     enabled: bool,
     selected: bool,
+    /// The item has unapplied changes: a dot after its name.
+    modified: bool,
     context_actions: Vec<ContextAction>,
     children: Vec<Self>,
 }
@@ -64,6 +72,7 @@ impl<K> NavigationNode<K> {
             key: None,
             enabled: false,
             selected: false,
+            modified: false,
             context_actions: Vec::new(),
             children,
         }
@@ -78,6 +87,7 @@ impl<K> NavigationNode<K> {
             key: None,
             enabled: false,
             selected: false,
+            modified: false,
             context_actions: Vec::new(),
             children,
         }
@@ -93,6 +103,7 @@ impl<K> NavigationNode<K> {
             key: Some(key),
             enabled,
             selected,
+            modified: false,
             context_actions: Vec::new(),
             children: Vec::new(),
         }
@@ -108,9 +119,22 @@ impl<K> NavigationNode<K> {
             key: None,
             enabled: false,
             selected: false,
+            modified: false,
             context_actions: Vec::new(),
             children: Vec::new(),
         }
+    }
+
+    /// Marks an item as having unapplied changes: a dot after its name (and
+    /// ", unapplied changes" for screen readers).
+    pub fn modified(mut self, modified: bool) -> Self {
+        self.modified = modified;
+        self
+    }
+
+    /// Whether this row is, or contains, the selected item.
+    fn holds_selection(&self) -> bool {
+        self.selected || self.children.iter().any(Self::holds_selection)
     }
 
     /// Adds an item context-menu command. The returned event carries this
@@ -130,7 +154,8 @@ pub fn render_tree<K: Clone>(
 ) -> Option<NavigationEvent<K>> {
     let mut event = None;
     let mut rows = Vec::new();
-    render_nodes(ui, nodes, &mut event, &mut rows);
+    let any_selected = nodes.iter().any(NavigationNode::holds_selection);
+    render_nodes(ui, nodes, any_selected, &mut event, &mut rows);
     // Arrow keys (TASK-168 row 1): with one of the tree's rows focused,
     // Up / Down / PageUp / PageDown / Home / End move the selection through
     // the enabled item rows, and focus follows it.
@@ -208,14 +233,14 @@ struct ItemRow<K> {
 }
 
 /// The chevron-and-label heading of a branch or group. Returns whether the
-/// user asked to toggle it.
+/// user asked to toggle it, and the row's rect (for the guide lines).
 fn disclosure_row(
     ui: &mut egui::Ui,
     label: egui::RichText,
     count: Option<usize>,
     open: bool,
     boxed: bool,
-) -> bool {
+) -> (bool, egui::Rect) {
     let draw = |ui: &mut egui::Ui| {
         ui.horizontal(|ui| {
             let side = ui.spacing().interact_size.y;
@@ -250,28 +275,75 @@ fn disclosure_row(
             }
             toggled
         })
-        .inner
     };
     if boxed {
-        egui::Frame::new()
+        let shown = egui::Frame::new()
             .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
             .corner_radius(6.0)
             .inner_margin(egui::Margin::symmetric(4, 2))
-            .show(ui, draw)
-            .inner
+            .show(ui, draw);
+        (shown.inner.inner, shown.response.rect)
     } else {
-        draw(ui)
+        let row = draw(ui);
+        (row.inner, row.response.rect)
     }
 }
 
+/// The colour of the guide lines: the theme's frame grey, or the plain
+/// non-interactive outline for the built-in Light look.
+fn guide_color(ui: &egui::Ui) -> egui::Color32 {
+    crate::interface_tokens::theme_colors(ui)
+        .map_or(ui.visuals().widgets.noninteractive.bg_stroke.color, |c| {
+            c.frame
+        })
+}
+
+/// The accent the open item is drawn in: the theme's highlight (the host
+/// publishes the user's own interface highlight into it), or the platform
+/// link colour for the built-in Light look.
+fn accent_color(ui: &egui::Ui) -> egui::Color32 {
+    crate::interface_tokens::theme_colors(ui).map_or(ui.visuals().hyperlink_color, |c| c.highlight)
+}
+
+/// Draws the guides from a heading to its open children: one vertical line
+/// down from under the heading's chevron, and a short tick into each child.
+fn paint_guides(ui: &egui::Ui, heading: egui::Rect, children: &[egui::Rect]) {
+    let Some(last) = children.last() else {
+        return;
+    };
+    let side = ui.spacing().interact_size.y;
+    let x = (heading.left() + side / 2.0).round() + 0.5;
+    let stroke = egui::Stroke::new(1.0, guide_color(ui));
+    let painter = ui.painter();
+    painter.line_segment(
+        [
+            egui::pos2(x, heading.bottom()),
+            egui::pos2(x, last.center().y),
+        ],
+        stroke,
+    );
+    for child in children {
+        let y = child.center().y.round() + 0.5;
+        painter.line_segment(
+            [egui::pos2(x, y), egui::pos2(child.left() - 2.0, y)],
+            stroke,
+        );
+    }
+}
+
+/// Draws `nodes` and returns each one's row rect, for the parent's guides.
+/// `any_selected` is whether the whole tree has a selected item: with none,
+/// the first top-level row opens so the tree is never all folded.
 fn render_nodes<K: Clone>(
     ui: &mut egui::Ui,
     nodes: &[NavigationNode<K>],
+    any_selected: bool,
     event: &mut Option<NavigationEvent<K>>,
     rows: &mut Vec<ItemRow<K>>,
-) {
+) -> Vec<egui::Rect> {
+    let mut rects = Vec::new();
     for (index, node) in nodes.iter().enumerate() {
-        ui.push_id(index, |ui| match node.kind {
+        let rect = ui.push_id(index, |ui| match node.kind {
             RowKind::Root | RowKind::Branch | RowKind::Group => {
                 let label = match node.kind {
                     RowKind::Root | RowKind::Branch => {
@@ -282,10 +354,15 @@ fn render_nodes<K: Clone>(
                 // A disclosure row: chevron + label. Click, Enter or Space
                 // toggles; Left folds and Right opens while it has focus.
                 let open_id = ui.id().with("sdb_nav_open");
+                // Only the groups leading to the open item start expanded
+                // (Chris's Symbol Editor mock-up); the user's own toggles are
+                // remembered over that.
+                let default_open = node.holds_selection()
+                    || (!any_selected && index == 0 && matches!(node.kind, RowKind::Root));
                 let mut open = ui
                     .memory(|m| m.data.get_temp::<bool>(open_id))
-                    .unwrap_or(true);
-                let toggled = disclosure_row(
+                    .unwrap_or(default_open);
+                let (toggled, heading) = disclosure_row(
                     ui,
                     label,
                     node.count,
@@ -297,19 +374,60 @@ fn render_nodes<K: Clone>(
                     ui.memory_mut(|m| m.data.insert_temp(open_id, open));
                 }
                 if open {
-                    ui.indent(&node.label, |ui| {
-                        render_nodes(ui, &node.children, event, rows)
-                    });
+                    let children = ui
+                        .indent(&node.label, |ui| {
+                            render_nodes(ui, &node.children, any_selected, event, rows)
+                        })
+                        .inner;
+                    paint_guides(ui, heading, &children);
                 }
+                heading
             }
             RowKind::Item => {
                 let Some(key) = node.key.as_ref() else {
-                    return;
+                    return egui::Rect::NOTHING;
                 };
-                let response = ui.add_enabled(
-                    node.enabled,
-                    egui::Button::selectable(node.selected, &node.label).frame_when_inactive(false),
-                );
+                // The open item reads by its accent colour *and* an
+                // underline (not colour alone); there is no fill.
+                let text = if node.selected {
+                    egui::RichText::new(&node.label)
+                        .color(accent_color(ui))
+                        .underline()
+                } else {
+                    egui::RichText::new(&node.label)
+                };
+                let row = ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    let response = ui.add_enabled(
+                        node.enabled,
+                        egui::Button::selectable(false, text).frame_when_inactive(false),
+                    );
+                    if node.modified {
+                        let side = ui.text_style_height(&egui::TextStyle::Body);
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(side * 0.7, side),
+                            egui::Sense::hover(),
+                        );
+                        crate::glyphs::dot(ui.painter(), rect, ui.visuals().text_color());
+                    }
+                    response
+                });
+                let response = row.inner;
+                let spoken = if node.modified {
+                    format!("{}, unapplied changes", node.label)
+                } else {
+                    node.label.clone()
+                };
+                let selected = node.selected;
+                let enabled = node.enabled;
+                response.widget_info(|| {
+                    egui::WidgetInfo::selected(
+                        egui::WidgetType::SelectableLabel,
+                        enabled,
+                        selected,
+                        spoken.clone(),
+                    )
+                });
                 rows.push(ItemRow {
                     key: key.clone(),
                     id: response.id,
@@ -335,12 +453,13 @@ fn render_nodes<K: Clone>(
                 if response.clicked() && !node.selected {
                     *event = Some(NavigationEvent::Select(key.clone()));
                 }
+                row.response.rect
             }
-            RowKind::Hint => {
-                ui.weak(&node.label);
-            }
+            RowKind::Hint => ui.weak(&node.label).rect,
         });
+        rects.push(rect.inner);
     }
+    rects
 }
 
 #[cfg(test)]
@@ -503,10 +622,12 @@ mod tests {
     #[test]
     fn a_branch_folds_and_opens() {
         let ctx = egui::Context::default();
+        // Selected, so the branch starts open (TASK-409: only the path to the
+        // open item starts expanded).
         let tree = vec![NavigationNode::branch(
             "Marks",
             1,
-            vec![NavigationNode::item(1, "Closed arrow", false, true)],
+            vec![NavigationNode::item(1, "Closed arrow", true, true)],
         )];
         let frame = |time: f64, events: Vec<egui::Event>| -> f32 {
             let mut height = 0.0;
@@ -539,5 +660,62 @@ mod tests {
             (reopened - open).abs() < 1.0,
             "reopened {reopened} vs {open}"
         );
+    }
+
+    /// TASK-409: only the groups leading to the open item start expanded; a
+    /// tree with nothing selected opens its first top-level row only.
+    #[test]
+    fn only_the_path_to_the_open_item_starts_expanded() {
+        let texts = |tree: &[NavigationNode<u32>]| {
+            let ctx = egui::Context::default();
+            let out = ctx.run_ui(Default::default(), |ui| {
+                let _ = render_tree(ui, tree);
+            });
+            let mut text = String::new();
+            for clipped in &out.shapes {
+                collect_text(&clipped.shape, &mut text);
+            }
+            text
+        };
+        let tree = |selected: bool| {
+            vec![NavigationNode::root(
+                "This drawing",
+                3,
+                vec![
+                    NavigationNode::group(
+                        "Leader heads",
+                        2,
+                        vec![
+                            NavigationNode::item(1, "Closed arrow", selected, true),
+                            NavigationNode::item(2, "Open arrow", false, true).modified(true),
+                        ],
+                    ),
+                    NavigationNode::group(
+                        "Dimension ticks",
+                        1,
+                        vec![NavigationNode::item(3, "Oblique", false, true)],
+                    ),
+                ],
+            )]
+        };
+        let shown = texts(&tree(true));
+        assert!(shown.contains("Closed arrow") && shown.contains("Open arrow"));
+        assert!(
+            !shown.contains("Oblique"),
+            "an unrelated group stays folded: {shown}"
+        );
+        let shown = texts(&tree(false));
+        assert!(shown.contains("Leader heads") && !shown.contains("Closed arrow"));
+    }
+
+    fn collect_text(shape: &egui::Shape, out: &mut String) {
+        match shape {
+            egui::Shape::Text(t) => {
+                out.push_str(t.galley.text());
+                out.push('\n');
+            }
+            egui::Shape::Vec(v) => v.iter().for_each(|s| collect_text(s, out)),
+            _ => {}
+        }
     }
 }

@@ -117,6 +117,12 @@ pub fn close_x(painter: &Painter, rect: Rect, color: Color32) {
     f.line((100.0, 0.0), (0.0, 100.0), color);
 }
 
+/// A small filled dot centred in `rect` (an unapplied change after a tree
+/// row's name; TASK-409). A drawn mark, not a font pictogram.
+pub fn dot(painter: &Painter, rect: Rect, color: Color32) {
+    painter.circle_filled(rect.center(), rect.width().min(rect.height()) * 0.22, color);
+}
+
 /// A check mark filling `rect` (success; the counterpart of [`close_x`]).
 pub fn check(painter: &Painter, rect: Rect, color: Color32) {
     let f = Frame::new(painter, rect);
