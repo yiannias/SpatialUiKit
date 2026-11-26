@@ -6,6 +6,7 @@
 //! app owns persistence (its own `ApplicationSettings`-equivalent) and
 //! applies `visuals()` to its `egui::Context` on change.
 
+use crate::interface_tokens::{InterfaceColors, InterfaceTokens};
 use crate::tokens::{ColorToken, DimensionToken};
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -474,13 +475,64 @@ pub struct ControlTokens {
 /// tokenize from (text selection color, hyperlink color, etc.) --
 /// see docs/design/2026-08-30_theme-system-spec.md's "Scope boundary"
 /// section for why this doesn't yet cover every `Visuals` field.
+///
+/// `interface` (2026-11-26, SDB TASK-384) is the one section a theme file may
+/// omit: a file saved before it existed loads with its base's built-in value
+/// (Dark: [`InterfaceTokens::dark`], today's look; Light: `None`, the
+/// platform look). Every other section stays required, so a partial file is
+/// still a hard error. See [`crate::interface_tokens`].
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
+#[serde(from = "ThemePaletteFile")]
 pub struct ThemePalette {
     pub name: String,
     pub base: Theme,
     pub window: WindowChromeTokens,
     pub surface: SurfaceTokens,
     pub control: ControlTokens,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub interface: Option<InterfaceTokens>,
+}
+
+/// [`ThemePalette`]'s on-disk shape, where `interface` may be missing; the
+/// `From` below fills it in from `base`.
+#[derive(Deserialize)]
+struct ThemePaletteFile {
+    name: String,
+    base: Theme,
+    window: WindowChromeTokens,
+    surface: SurfaceTokens,
+    control: ControlTokens,
+    #[serde(default)]
+    interface: Option<InterfaceTokens>,
+}
+
+impl From<ThemePaletteFile> for ThemePalette {
+    fn from(f: ThemePaletteFile) -> Self {
+        let interface = f.interface.or_else(|| default_interface(f.base));
+        Self {
+            name: f.name,
+            base: f.base,
+            window: f.window,
+            surface: f.surface,
+            control: f.control,
+            interface,
+        }
+    }
+}
+
+/// The interface tokens a palette of `base` gets when it does not set any.
+pub fn default_interface(base: Theme) -> Option<InterfaceTokens> {
+    match base {
+        Theme::Dark => Some(InterfaceTokens::dark()),
+        Theme::Light => None,
+    }
+}
+
+impl ThemePalette {
+    /// The resolved interface colours, or `None` for the platform look.
+    pub fn interface_colors(&self) -> Option<InterfaceColors> {
+        self.interface.as_ref().map(InterfaceTokens::resolve)
+    }
 }
 
 impl ThemePalette {
@@ -551,6 +603,7 @@ impl ThemePalette {
                 cap_border: ColorToken::new(egui::Color32::from_rgb(58, 58, 64)),
                 cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(110, 110, 118)),
             },
+            interface: default_interface(Theme::Dark),
         }
     }
 
@@ -623,6 +676,7 @@ impl ThemePalette {
                 cap_border: ColorToken::new(egui::Color32::from_rgb(190, 191, 198)),
                 cap_border_hovered: ColorToken::new(egui::Color32::from_rgb(120, 122, 130)),
             },
+            interface: default_interface(Theme::Light),
         }
     }
 }
@@ -666,6 +720,37 @@ mod theme_palette_tests {
             egui::Color32::TRANSPARENT
         );
         assert_eq!(loaded.border_width.px().unwrap(), 1.0);
+    }
+
+    /// 2026-11-26 (TASK-384): a theme file saved before the `interface`
+    /// section existed still loads -- a Dark one with today's interface
+    /// colours, a Light one with none (the platform look) -- and so equals the
+    /// built-in palette it was exported from.
+    #[test]
+    fn palettes_saved_without_the_interface_section_still_load() {
+        for palette in [ThemePalette::dark(), ThemePalette::light()] {
+            let mut value = serde_json::to_value(&palette).unwrap();
+            value.as_object_mut().unwrap().remove("interface");
+            let loaded: ThemePalette = serde_json::from_value(value).unwrap();
+            assert_eq!(loaded, palette);
+        }
+        assert!(ThemePalette::light().interface.is_none());
+        assert_eq!(
+            ThemePalette::dark().interface_colors(),
+            Some(InterfaceColors::dark_default())
+        );
+    }
+
+    /// A Dark palette with edited interface tokens keeps them through JSON.
+    #[test]
+    fn edited_interface_tokens_round_trip() {
+        let mut palette = ThemePalette::dark();
+        let mut colors = InterfaceColors::dark_default();
+        colors.popup_background = egui::Color32::from_rgb(1, 2, 3);
+        palette.interface = Some(InterfaceTokens::from_colors(&colors));
+        let back: ThemePalette =
+            serde_json::from_str(&serde_json::to_string(&palette).unwrap()).unwrap();
+        assert_eq!(back, palette);
     }
 
     #[test]
@@ -899,8 +984,9 @@ mod status_color_tests {
 /// below. Replaces oversized in-panel headings (Chris, 2026-11-09).
 pub fn section_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
     let dark = ui.visuals().dark_mode;
+    // Dark: the theme's muted text tier (SDB TASK-384).
     let color = if dark {
-        egui::Color32::from_rgb(0x8A, 0x8B, 0x93)
+        crate::interface_tokens::interface_colors(ui.ctx()).text_muted
     } else {
         egui::Color32::from_rgb(0x6E, 0x70, 0x78)
     };

@@ -591,6 +591,25 @@ fn style_derives_monochrome_colours_from_visuals_and_palette() {
     assert_eq!(s2.border, p.control.cap_border.color32().unwrap());
 }
 
+/// SDB TASK-384: the dark well look now comes from the interface tokens;
+/// the built-in dark tokens give exactly the old hard-coded values.
+#[test]
+fn dark_well_style_from_the_default_tokens_is_unchanged() {
+    let v = egui::Visuals::dark();
+    let s = DropdownStyle::from_visuals(&v);
+    assert_eq!(s.control_fill, Color32::from_rgb(0x14, 0x14, 0x18));
+    assert_eq!(s.control_fill_hovered, Color32::from_rgb(0x1A, 0x1A, 0x1F));
+    assert_eq!(s.border_strong, Color32::from_white_alpha(36));
+    assert_eq!(s.text, Color32::from_rgb(0xDC, 0xDC, 0xE0));
+    let d = crate::interface_tokens::InterfaceColors::dark_default();
+    assert_eq!(DropdownStyle::from_visuals_with(&v, Some(&d)), s);
+    let light = egui::Visuals::light();
+    assert_eq!(
+        DropdownStyle::from_visuals(&light),
+        DropdownStyle::from_visuals_with(&light, None)
+    );
+}
+
 /// Every filled rect in the frame, in paint order, with its layer.
 fn filled_rects(out: &egui::FullOutput) -> Vec<(Rect, Color32)> {
     fn walk(shape: &egui::Shape, out: &mut Vec<(Rect, Color32)>) {

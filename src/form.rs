@@ -94,11 +94,11 @@ pub fn label_job(ui: &egui::Ui, label: &str, metrics: &FormMetrics) -> egui::tex
     // The Body *font size*, not `text_style_height` (the row height, which is
     // larger), so labels are never bigger than the values beside them.
     let font = egui::FontId::proportional(egui::TextStyle::Body.resolve(ui.style()).size);
-    // Quiet label grey in dark mode. This is the same value as `os_style`'s
-    // private `grey::TEXT_LABEL`, which cannot be reached without making that
-    // module public; light keeps the ordinary text colour.
+    // Quiet label grey in dark mode: the theme's `text_label` interface token
+    // (TASK-384), the same colour `os_style` gives non-interactive text;
+    // light keeps the ordinary text colour.
     let color = if ui.visuals().dark_mode {
-        egui::Color32::from_rgb(0xB4, 0xB5, 0xBC)
+        crate::interface_tokens::interface_colors(ui.ctx()).text_label
     } else {
         ui.visuals().text_color()
     };

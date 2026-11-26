@@ -67,15 +67,18 @@ pub fn choice_toggle<T: PartialEq + Clone>(
     let height = ui.spacing().interact_size.y;
     let font = egui::TextStyle::Button.resolve(ui.style());
 
+    // Dark: the theme's interface tokens (SDB TASK-384). Light keeps the
+    // platform look's own values (light has no interface tokens).
     let (track_fill, chip_fill, chip_stroke, chosen_ink, idle_ink, hover_ink, ring) = if dark {
+        let c = crate::interface_tokens::interface_colors(ui.ctx());
         (
-            Color32::from_rgb(0x14, 0x14, 0x18),
-            Color32::from_rgb(0x3A, 0x3B, 0x42),
+            c.well,
+            c.dropdown_selected,
             Stroke::NONE,
-            Color32::from_rgb(0xF0, 0xF0, 0xF2),
-            Color32::from_rgb(0xB4, 0xB5, 0xBC),
-            Color32::from_rgb(0xE8, 0xE8, 0xEC),
-            Color32::from_rgb(0xF0, 0xF0, 0xF2),
+            c.text_strong,
+            c.text_label,
+            c.text_hover,
+            c.text_strong,
         )
     } else {
         (

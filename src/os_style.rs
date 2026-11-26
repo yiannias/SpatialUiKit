@@ -15,6 +15,7 @@
 //! custom-painted WinUI3 widget set, trading fidelity for touching one
 //! central style object instead of every widget call site app-wide.
 
+use crate::interface_tokens::InterfaceColors;
 use crate::theme::Theme;
 
 /// Small-control corner radius (5, Chris's 2026-11-09 panel-theming pass; WinUI3's is 4). Buttons, checkboxes,
@@ -37,6 +38,20 @@ const SURFACE_CORNER_RADIUS: u8 = 8;
 /// when that read fails, or on a future non-Windows target, is the
 /// caller's call, not this function's).
 pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
+    let interface = (base == Theme::Dark).then(InterfaceColors::dark_default);
+    windows11_visuals_with(base, accent, interface.as_ref())
+}
+
+/// [`windows11_visuals`] with a theme's interface colours (TASK-384).
+/// `interface` is `None` for the platform look (the light theme); `Some`
+/// applies the chip/well/field/text/selection/popup colours. With
+/// [`InterfaceColors::dark_default`] this is exactly [`windows11_visuals`]
+/// for the dark theme.
+pub fn windows11_visuals_with(
+    base: Theme,
+    accent: egui::Color32,
+    interface: Option<&InterfaceColors>,
+) -> egui::Visuals {
     let mut visuals = base.visuals();
 
     visuals.window_corner_radius = SURFACE_CORNER_RADIUS.into();
@@ -70,59 +85,46 @@ pub fn windows11_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
     visuals.selection.stroke = egui::Stroke::new(1.0, accent);
     visuals.hyperlink_color = accent;
 
-    if base == Theme::Dark {
-        apply_dark_chips(&mut visuals, accent);
+    if let Some(colors) = interface {
+        apply_interface_colors(&mut visuals, accent, colors);
     }
 
     ensure_readable_text_selection(&mut visuals);
     visuals
 }
 
-/// Dark-theme greys of the 2026-11-09 panel-theming pass (card is `#1E1E23`).
-mod grey {
-    use egui::Color32;
-    /// Recessed wells: dropdowns, toggle tracks, extreme background.
-    pub const WELL: Color32 = Color32::from_rgb(0x14, 0x14, 0x18);
-    /// Resting button chip.
-    pub const CHIP: Color32 = Color32::from_rgb(0x2E, 0x2F, 0x35);
-    /// Hovered chip.
-    pub const CHIP_HOVER: Color32 = Color32::from_rgb(0x38, 0x39, 0x40);
-    /// Pressed chip.
-    pub const CHIP_PRESSED: Color32 = Color32::from_rgb(0x26, 0x27, 0x2C);
-    /// Text-entry fields: lighter than the card.
-    pub const FIELD: Color32 = Color32::from_rgb(0x2A, 0x2B, 0x30);
-    /// Default body text.
-    pub const TEXT: Color32 = Color32::from_rgb(0xDC, 0xDC, 0xE0);
-    /// Quiet label text.
-    pub const TEXT_LABEL: Color32 = Color32::from_rgb(0xB4, 0xB5, 0xBC);
-}
-
-/// Dark-only chip/well/field look. Selection is shown by brightness rather
-/// than the accent so a design tool's chrome never competes with the drawing
-/// (Chris, 2026-11-09); the accent survives on the pressed outline and links.
-fn apply_dark_chips(visuals: &mut egui::Visuals, accent: egui::Color32) {
-    let white = |a: u8| egui::Stroke::new(1.0, egui::Color32::from_white_alpha(a));
+/// The chip/well/field look of the 2026-11-09 panel-theming pass, from a
+/// theme's interface colours (TASK-384; the greys were constants here
+/// before, now [`InterfaceColors::dark_default`]). Selection is shown by
+/// brightness rather than the accent so a design tool's chrome never competes
+/// with the drawing (Chris, 2026-11-09); the accent survives on the pressed
+/// outline and links. Also sets the popup fill and outline (menus, dropdown
+/// lists, tooltips).
+fn apply_interface_colors(visuals: &mut egui::Visuals, accent: egui::Color32, c: &InterfaceColors) {
+    let line = |color: egui::Color32| egui::Stroke::new(1.0, color);
     let w = &mut visuals.widgets;
-    w.inactive.weak_bg_fill = grey::CHIP;
-    w.inactive.bg_fill = grey::CHIP;
-    w.inactive.bg_stroke = white(20);
-    w.inactive.fg_stroke = egui::Stroke::new(1.0, grey::TEXT);
-    w.hovered.weak_bg_fill = grey::CHIP_HOVER;
-    w.hovered.bg_fill = grey::CHIP_HOVER;
-    w.hovered.bg_stroke = white(36);
-    w.hovered.fg_stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0xF0, 0xF0, 0xF2));
-    w.active.weak_bg_fill = grey::CHIP_PRESSED;
-    w.active.bg_fill = grey::CHIP_PRESSED;
-    w.active.bg_stroke = egui::Stroke::new(1.0, accent);
-    w.open.weak_bg_fill = grey::WELL;
-    w.open.bg_fill = grey::WELL;
-    w.open.bg_stroke = white(36);
-    w.noninteractive.fg_stroke = egui::Stroke::new(1.0, grey::TEXT_LABEL);
-    w.noninteractive.bg_stroke = white(18);
-    visuals.extreme_bg_color = grey::WELL;
-    visuals.text_edit_bg_color = Some(grey::FIELD);
-    visuals.selection.bg_fill = egui::Color32::from_rgb(0x44, 0x46, 0x4F);
-    visuals.selection.stroke = egui::Stroke::new(1.0, egui::Color32::from_rgb(0xF0, 0xF0, 0xF2));
+    w.inactive.weak_bg_fill = c.chip;
+    w.inactive.bg_fill = c.chip;
+    w.inactive.bg_stroke = line(c.outline);
+    w.inactive.fg_stroke = line(c.text);
+    w.hovered.weak_bg_fill = c.chip_hover;
+    w.hovered.bg_fill = c.chip_hover;
+    w.hovered.bg_stroke = line(c.outline_hover);
+    w.hovered.fg_stroke = line(c.text_strong);
+    w.active.weak_bg_fill = c.chip_pressed;
+    w.active.bg_fill = c.chip_pressed;
+    w.active.bg_stroke = line(accent);
+    w.open.weak_bg_fill = c.well;
+    w.open.bg_fill = c.well;
+    w.open.bg_stroke = line(c.outline_hover);
+    w.noninteractive.fg_stroke = line(c.text_label);
+    w.noninteractive.bg_stroke = line(c.separator);
+    visuals.extreme_bg_color = c.well;
+    visuals.text_edit_bg_color = Some(c.field);
+    visuals.selection.bg_fill = c.selection;
+    visuals.selection.stroke = line(c.selection_text);
+    visuals.window_fill = c.popup_background;
+    visuals.window_stroke.color = c.popup_border;
 }
 
 /// Runs `add` with dark-well dropdown styling, so a stock `egui::ComboBox`
@@ -139,23 +141,24 @@ pub fn dropdown_well_scope<R>(ui: &mut egui::Ui, add: impl FnOnce(&mut egui::Ui)
     if !ui.visuals().dark_mode {
         return add(ui);
     }
+    let c = crate::interface_tokens::interface_colors(ui.ctx());
     ui.scope(|ui| {
         let v = ui.visuals_mut();
-        let well = grey::WELL;
-        let muted = egui::Color32::from_rgb(0x8A, 0x8B, 0x93);
+        let well = c.well;
+        let muted = c.text_muted;
         v.widgets.inactive.weak_bg_fill = well;
         v.widgets.inactive.bg_fill = well;
         v.widgets.inactive.bg_stroke = egui::Stroke::NONE;
         v.widgets.inactive.fg_stroke = egui::Stroke::new(1.0, muted);
-        v.widgets.hovered.weak_bg_fill = grey::CHIP;
-        v.widgets.hovered.bg_fill = grey::CHIP;
+        v.widgets.hovered.weak_bg_fill = c.chip;
+        v.widgets.hovered.bg_fill = c.chip;
         v.widgets.hovered.bg_stroke = egui::Stroke::NONE;
         v.widgets.open.weak_bg_fill = well;
         v.widgets.open.bg_fill = well;
-        v.widgets.open.bg_stroke = egui::Stroke::new(1.0, egui::Color32::from_white_alpha(36));
+        v.widgets.open.bg_stroke = egui::Stroke::new(1.0, c.outline_hover);
         v.extreme_bg_color = well;
         v.window_fill = well;
-        v.selection.bg_fill = egui::Color32::from_rgb(0x3A, 0x3B, 0x42);
+        v.selection.bg_fill = c.dropdown_selected;
         add(ui)
     })
     .inner
@@ -284,9 +287,64 @@ pub fn platform_visuals(base: Theme, accent: egui::Color32) -> egui::Visuals {
     }
 }
 
+/// [`platform_visuals`] with a theme's interface colours (TASK-384). On
+/// Windows this is [`windows11_visuals_with`]; elsewhere the interface colours
+/// are applied over the plain base visuals only when they differ from the dark
+/// default, so the built-in themes keep their current non-Windows look.
+pub fn platform_visuals_with(
+    base: Theme,
+    accent: egui::Color32,
+    interface: Option<&InterfaceColors>,
+) -> egui::Visuals {
+    #[cfg(target_os = "windows")]
+    {
+        windows11_visuals_with(base, accent, interface)
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let mut visuals = base.visuals();
+        if let Some(colors) = interface.filter(|c| **c != InterfaceColors::dark_default()) {
+            apply_interface_colors(&mut visuals, accent, colors);
+        }
+        ensure_readable_text_selection(&mut visuals);
+        visuals
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TASK-384: the dark default interface colours reproduce the visuals
+    /// the hard-coded greys produced, field for field.
+    #[test]
+    fn dark_default_interface_reproduces_the_old_visuals() {
+        let accent = egui::Color32::from_rgb(0, 120, 215);
+        let d = InterfaceColors::dark_default();
+        let v = windows11_visuals_with(Theme::Dark, accent, Some(&d));
+        assert_eq!(v, windows11_visuals(Theme::Dark, accent));
+        let w = egui::Color32::from_white_alpha;
+        let rgb = egui::Color32::from_rgb;
+        assert_eq!(v.widgets.inactive.bg_fill, rgb(0x2E, 0x2F, 0x35));
+        assert_eq!(v.widgets.inactive.bg_stroke.color, w(20));
+        assert_eq!(v.widgets.hovered.bg_stroke.color, w(36));
+        assert_eq!(v.widgets.noninteractive.bg_stroke.color, w(18));
+        assert_eq!(v.extreme_bg_color, rgb(0x14, 0x14, 0x18));
+        assert_eq!(v.text_edit_bg_color, Some(rgb(0x2A, 0x2B, 0x30)));
+        assert_eq!(v.window_fill, egui::Visuals::dark().window_fill);
+        assert_eq!(v.window_stroke, egui::Visuals::dark().window_stroke);
+        // The resolved-from-JSON path agrees with the constructed one.
+        let resolved = crate::interface_tokens::InterfaceTokens::dark().resolve();
+        assert_eq!(
+            windows11_visuals_with(Theme::Dark, accent, Some(&resolved)),
+            v
+        );
+        // Light stays the platform look.
+        assert_eq!(
+            windows11_visuals_with(Theme::Light, accent, None),
+            windows11_visuals(Theme::Light, accent)
+        );
+    }
 
     #[test]
     fn control_and_surface_radii_differ() {

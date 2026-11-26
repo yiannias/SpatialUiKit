@@ -13,6 +13,7 @@ pub mod fonts;
 pub mod form;
 pub mod glyphs;
 pub mod idle_input;
+pub mod interface_tokens;
 pub mod list_nav;
 pub mod menu;
 pub mod mini_ribbon;

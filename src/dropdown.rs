@@ -162,8 +162,23 @@ pub struct DropdownStyle {
 }
 
 impl DropdownStyle {
-    /// Derives the style from egui visuals, which already carry the theme.
+    /// Derives the style from egui visuals, which already carry the theme,
+    /// with the built-in dark interface colours on a dark theme. Prefer
+    /// [`Self::for_ui`] (the published theme's colours) where a `Ui` is at hand.
     pub fn from_visuals(v: &egui::Visuals) -> Self {
+        let dark = v
+            .dark_mode
+            .then(crate::interface_tokens::InterfaceColors::dark_default);
+        Self::from_visuals_with(v, dark.as_ref())
+    }
+
+    /// [`Self::from_visuals`] with a theme's interface colours (SDB TASK-384):
+    /// `Some` gives the dark-well look in those colours, `None` the plain
+    /// look derived from `v` (the light theme).
+    pub fn from_visuals_with(
+        v: &egui::Visuals,
+        interface: Option<&crate::interface_tokens::InterfaceColors>,
+    ) -> Self {
         let text = v.widgets.inactive.fg_stroke.color;
         let box_fill = v.extreme_bg_color;
         let r = v.widgets.inactive.corner_radius.nw.max(3);
@@ -180,18 +195,18 @@ impl DropdownStyle {
             focus: v.selection.stroke,
             corner_radius: r,
         };
-        if v.dark_mode {
+        if let Some(c) = interface {
             // Chris, 2026-11-09 theming pass: a closed dropdown is a dark
             // well with no outline (it is a different kind of control from a
             // button chip), brightening a step on hover; only the open box
             // gets a hairline.
-            s.control_fill = Color32::from_rgb(0x14, 0x14, 0x18);
-            s.control_fill_hovered = Color32::from_rgb(0x1A, 0x1A, 0x1F);
+            s.control_fill = c.well;
+            s.control_fill_hovered = c.well_hover;
             s.border = Color32::TRANSPARENT;
             s.border_hover = Color32::TRANSPARENT;
-            s.border_strong = Color32::from_white_alpha(36);
+            s.border_strong = c.outline_hover;
             s.corner_radius = 5;
-            s.text = Color32::from_rgb(0xDC, 0xDC, 0xE0);
+            s.text = c.text;
         }
         s
     }
@@ -207,7 +222,11 @@ impl DropdownStyle {
     /// 2026-10-19 review) and the closed control lost its box. One dropdown style
     /// everywhere means the theme decides, not the row it happens to sit in.
     pub fn for_ui(ui: &Ui) -> Self {
-        Self::from_visuals(&ui.ctx().global_style().visuals)
+        let v = &ui.ctx().global_style().visuals;
+        let interface = v
+            .dark_mode
+            .then(|| crate::interface_tokens::interface_colors(ui.ctx()));
+        Self::from_visuals_with(v, interface.as_ref())
     }
 
     /// This style with a fully opaque box fill. The open list is a popup over
@@ -1489,10 +1508,10 @@ fn layout(
 #[cfg(test)]
 mod tests;
 
-/// The chevron colour: `TEXT_MUTED` on the dark well, else the text colour.
+/// The chevron colour: the theme's muted text tier on the dark well, else the text colour.
 fn arrow_color(ui: &Ui, text: Color32) -> Color32 {
     if ui.visuals().dark_mode {
-        Color32::from_rgb(0x8A, 0x8B, 0x93)
+        crate::interface_tokens::interface_colors(ui.ctx()).text_muted
     } else {
         text
     }
