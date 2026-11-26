@@ -6,7 +6,7 @@
 //! [`InterfaceTokens`] is the serialized (DTCG) form stored in
 //! [`crate::theme::ThemePalette::interface`]; [`InterfaceColors`] is the
 //! resolved, `Copy` form the paint path reads, so nothing parses hex strings
-//! per frame. [`InterfaceColors::dark_default`] is exactly the set of literals
+//! per frame. [`InterfaceColors::DARK`] is exactly the set of literals
 //! these tokens replaced, so the built-in Dark theme draws pixel-for-pixel as
 //! before.
 //!
@@ -18,9 +18,12 @@
 //! A Dark-based file saved before them gets [`InterfaceTokens::dark`], i.e.
 //! today's look (see `ThemePalette`'s deserializer).
 //!
-//! The canvas backdrop (egui `panel_fill`) is deliberately **not** a token: it
-//! is the drawing's background, and decorative colour must never change how
-//! the designer perceives the drawing.
+//! The canvas is deliberately **not** here: its backdrop (egui `panel_fill`,
+//! which these tokens never touch) and the instruments drawn on it (snap
+//! marks, axes, grips, previews) are the drawing's, and decorative colour must
+//! never change how the designer perceives the drawing. The host app names
+//! those as *locked* canvas tokens -- built-in only, never in a theme file
+//! (Chris, 2026-11-27; SDB's `canvas_tokens`).
 
 use crate::tokens::ColorToken;
 use serde::{Deserialize, Serialize};
