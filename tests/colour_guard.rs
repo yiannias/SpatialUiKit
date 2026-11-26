@@ -46,6 +46,7 @@ const CONSTRUCTORS: &[&str] = &[
     "from_rgb(",
     "from_gray(",
     "from_rgba_unmultiplied(",
+    "from_rgba_unmultiplied_const(",
     "from_rgba_premultiplied(",
     "from_black_alpha(",
     "from_white_alpha(",
