@@ -48,11 +48,13 @@ fn palette(ui: &Ui) -> Palette {
         None => {
             let v = ui.visuals();
             Palette {
-                track: v.extreme_bg_color,
+                // The inactive control grey: the light look's text-field
+                // white would leave the track invisible on a light panel.
+                track: v.widgets.inactive.weak_bg_fill,
                 track_stroke: v.widgets.inactive.bg_stroke,
                 on_fill: v.selection.bg_fill,
                 on_ink: v.strong_text_color(),
-                off_fill: v.widgets.hovered.weak_bg_fill,
+                off_fill: v.extreme_bg_color,
                 off_ink: v.strong_text_color(),
                 idle_ink: v.weak_text_color(),
                 focus: v.strong_text_color(),
