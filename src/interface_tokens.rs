@@ -369,7 +369,31 @@ impl InterfaceColors {
     pub fn dark_default() -> Self {
         Self::DARK
     }
+
+    /// These colours with `error` (and its merged aliases `error_text`,
+    /// `danger_text`, `feed_error`) set to `error`. For a host adopting a
+    /// different error hue, such as [`ERROR_ROSE`].
+    pub const fn with_error(self, error: egui::Color32) -> Self {
+        Self {
+            error,
+            error_text: error,
+            danger_text: error,
+            feed_error: error,
+            ..self
+        }
+    }
 }
+
+/// The error hue Chris approved for SDB on 2026-11-27: rose, soft and clearly
+/// neither red nor green, so it never relies on a red/green distinction (the
+/// error mark is a drawn ✕ as well). Opt-in: [`InterfaceColors::DARK`] keeps
+/// its salmon for hosts that have not chosen; adopt it with
+/// [`InterfaceColors::with_error`].
+pub const ERROR_ROSE: egui::Color32 = egui::Color32::from_rgb(0xEC, 0x96, 0xC4);
+
+/// [`ERROR_ROSE`] darkened to read on light surfaces (about 8:1 on white):
+/// the same hue, for light themes.
+pub const ERROR_ROSE_ON_LIGHT: egui::Color32 = egui::Color32::from_rgb(0x96, 0x2C, 0x63);
 
 impl Default for InterfaceTokens {
     fn default() -> Self {
@@ -660,5 +684,24 @@ mod tests {
         let back: InterfaceTokens =
             serde_json::from_str(&serde_json::to_string(&t).unwrap()).unwrap();
         assert_eq!(t, back);
+    }
+
+    #[test]
+    fn with_error_sets_the_error_and_its_aliases_only() {
+        let rose = InterfaceColors::DARK.with_error(ERROR_ROSE);
+        assert_eq!(
+            [
+                rose.error,
+                rose.error_text,
+                rose.danger_text,
+                rose.feed_error
+            ],
+            [ERROR_ROSE; 4]
+        );
+        assert_eq!(
+            rose.with_error(InterfaceColors::DARK.error),
+            InterfaceColors::DARK
+        );
+        assert_eq!(rose.highlight, InterfaceColors::DARK.highlight);
     }
 }

@@ -402,6 +402,13 @@ pub trait SettingsHost {
     /// called while [`Self::label_menu_enabled`] is true.
     fn label_context_menu(&self, _ui: &mut egui::Ui, _field_id: &'static str) {}
 
+    /// Whether on/off ([`FieldControl::Toggle`]) rows draw the compact
+    /// Off | On switch ([`crate::off_on_switch`]) instead of a checkbox.
+    /// Default: checkbox, as always (SDB TASK-418 opts in).
+    fn toggles_as_switches(&self) -> bool {
+        false
+    }
+
     /// A fixed label-column width, in body-text heights, shared by every tier
     /// (default: `None`, each tier sizes the column to its widest label).
     /// With `Some`, the column does not change width when the reader moves
@@ -1229,7 +1236,12 @@ fn render_field_row<A: Clone, Ctx>(
                 match &field.control {
                     FieldControl::Toggle { value, on_change } => {
                         let mut val = value(ctx);
-                        if ui.checkbox(&mut val, "").changed() {
+                        let changed = if host.toggles_as_switches() {
+                            crate::off_on_switch::off_on_switch(ui, &mut val, field.label).changed()
+                        } else {
+                            ui.checkbox(&mut val, "").changed()
+                        };
+                        if changed {
                             actions.push(on_change(val));
                         }
                     }
