@@ -293,6 +293,19 @@ pub fn apply_text_scale(ctx: &egui::Context, scale: TextScale) {
 /// `PASSIVE_PANEL_TEXT_SIZE` alias this const briefly kept is gone.
 pub const COMMAND_STATUS_PANEL_TEXT_SIZE: f32 = 10.0;
 
+/// The one visible gap between floating surfaces (ribbon pods, cards, the
+/// Command & Status Panel) and between a surface and the window edge, measured
+/// outer line to outer line (SDB TASK-427, Chris 2026-11-27: 6, the gap the
+/// ribbon pods already showed). Opt-in: hosts that adopt it lay out with
+/// [`SURFACE_GAP`] plus the rims ([`SURFACE_RIM`]) the surfaces paint outside
+/// their rectangles; [`crate::ribbon::GAP`] is unchanged for hosts that do not.
+pub const SURFACE_GAP: f32 = 6.0;
+
+/// Width of the dark rim [`paint_edge`] draws *outside* a surface's
+/// rectangle in every shipped theme (`rim_width`). Layout adds it to
+/// [`SURFACE_GAP`] once per rim so the visible gap stays [`SURFACE_GAP`].
+pub const SURFACE_RIM: f32 = 1.0;
+
 /// Header bar tokens for a themed in-app `egui::Window` (see
 /// `crate::window_chrome`). Docs/design/2026-08-30_theme-system-spec.md
 /// (the host app repo) is the source spec; values below come from the Lunacy mockup

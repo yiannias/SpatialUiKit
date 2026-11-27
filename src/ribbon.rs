@@ -190,6 +190,15 @@ pub trait RibbonHost {
         ModuleFrameStyle::default()
     }
 
+    /// Empty space the row leaves before its first pod and after its last.
+    /// Defaults to [`GAP`], as always. A host that already insets the whole
+    /// ribbon from the window itself returns `0.0`, so the window-to-pod gap
+    /// is its inset alone instead of the inset plus `GAP` (SDB TASK-427:
+    /// the "double inset" that made 15 px where every other gap was 6).
+    fn row_end_gap(&self) -> f32 {
+        GAP
+    }
+
     /// The icon's own sub-rect within a button's full `button_rect` --
     /// used to place the "hold for more" hover-hint triangle
     /// ([`button_with_flyout`]) at its lower-right corner, above any
@@ -1705,7 +1714,8 @@ pub fn ribbon_panel_modules<A: Clone>(
 
     // Pack target `(x, outer_w)` left to right at natural size -- the
     // layout every pod's spring is chasing this frame.
-    let mut cursor = GAP;
+    let end_gap = host.row_end_gap();
+    let mut cursor = end_gap;
     let mut targets: Vec<(f32, f32)> = Vec::with_capacity(placed.len());
     for (i, p) in placed.iter().enumerate() {
         if i > 0 {
@@ -1715,7 +1725,7 @@ pub fn ribbon_panel_modules<A: Clone>(
         targets.push((cursor, outer_w));
         cursor += outer_w;
     }
-    let total_w = cursor + GAP;
+    let total_w = cursor + end_gap;
 
     let anim_key = row_id.with("spatial_ui_kit::ribbon::row_anim");
     let mut anim: RibbonRowAnim = ctx.data(|d| d.get_temp(anim_key)).unwrap_or_default();

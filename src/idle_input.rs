@@ -226,6 +226,19 @@ pub fn capsule_styled(
     state: &IdleInputState,
     style: &CapsuleStyle,
 ) {
+    capsule_styled_with_margin(ui, viewport_rect, state, style, egui::vec2(24.0, 24.0));
+}
+
+/// [`capsule_styled`] with the distance from the viewport's edges chosen by
+/// the host (the default is 24). Added for SDB TASK-427, where every floating
+/// readout keeps the one surface gap from the window edge.
+pub fn capsule_styled_with_margin(
+    ui: &mut egui::Ui,
+    viewport_rect: egui::Rect,
+    state: &IdleInputState,
+    style: &CapsuleStyle,
+    margin: egui::Vec2,
+) {
     let flashing = state
         .flash
         .as_ref()
@@ -235,7 +248,6 @@ pub fn capsule_styled(
     }
     let ctx = ui.ctx().clone();
 
-    let margin = egui::vec2(24.0, 24.0);
     let rect = if viewport_rect.width() > 1.0 && viewport_rect.height() > 1.0 {
         viewport_rect
     } else {
