@@ -271,6 +271,41 @@ impl Default for ModuleFrameStyle {
     }
 }
 
+/// Per-pod exceptions to the row's shared look, passed to
+/// [`ribbon_panel_modules_styled`] keyed by the pod's label. Every field
+/// defaults to "as the row draws it", so a pod with no entry, and every host
+/// that keeps calling [`ribbon_panel_modules`], renders exactly as before.
+///
+/// Added 2026-11-27 for SDB TASK-406 (Chris's ribbon round 2 and 3 answers):
+/// the pods that belong to the selection get their frame in the interface
+/// highlight colour, wrapping the vertical tag as well, and a pod may be
+/// taller than its row (a double-height Text pod).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PodStyle {
+    /// The pod's own outer height. `None`, or anything shorter than the row,
+    /// is the row's height. A taller pod keeps its top on the row and hangs
+    /// below it: the row still allocates only its ordinary height, so
+    /// whatever the host lays out under the ribbon does not move.
+    pub height: Option<f32>,
+    /// Frame colour for this pod, in place of [`ModuleFrameStyle::border`].
+    /// When set, the frame is painted over the tag too, so it wraps the
+    /// whole pod instead of stopping at the tag's edge.
+    pub border: Option<egui::Color32>,
+    /// Tag fill for this pod, in place of
+    /// [`ModuleFrameStyle::label_background`] (a dimmed highlight, say).
+    pub label_background: Option<egui::Color32>,
+    /// Tag text colour for this pod, in place of
+    /// [`ModuleFrameStyle::label_foreground`].
+    pub label_foreground: Option<egui::Color32>,
+}
+
+impl PodStyle {
+    /// This pod's outer height in a row `row_h` tall.
+    fn outer_height(&self, row_h: f32) -> f32 {
+        self.height.map_or(row_h, |h| h.max(row_h))
+    }
+}
+
 /// How long the clicked-button flash lasts, seconds.
 const FLASH_SECS: f64 = 0.28;
 
@@ -450,7 +485,16 @@ fn module_frame(
 ) -> egui::Ui {
     let outer_size = egui::vec2(LABEL_STRIP_W + GAP + content_w + GAP, row_h);
     let (outer_rect, _) = ui.allocate_exact_size(outer_size, egui::Sense::hover());
-    module_frame_at(ui, outer_rect, label, content_w, row_h, style, 1.0)
+    module_frame_at(
+        ui,
+        outer_rect,
+        label,
+        content_w,
+        row_h,
+        style,
+        PodStyle::default(),
+        1.0,
+    )
 }
 
 /// As [`module_frame`], but painted at a caller-given `outer_rect` instead
@@ -462,6 +506,11 @@ fn module_frame(
 /// (`Ui::set_opacity`) as well as the frame/border paint, for a pod
 /// fading in its content (a morph target) or as a whole (a fully-transparent
 /// caller could fade the frame too, though no current caller does).
+///
+/// `outer_rect` may be taller than `row_h` (a [`PodStyle::height`] pod): the
+/// tag and the content area then run the pod's full height, while the corner
+/// radius stays the row's, so a tall pod's corners match its neighbours'.
+#[allow(clippy::too_many_arguments)]
 fn module_frame_at(
     ui: &mut egui::Ui,
     outer_rect: egui::Rect,
@@ -469,14 +518,27 @@ fn module_frame_at(
     content_w: f32,
     row_h: f32,
     style: ModuleFrameStyle,
+    pod: PodStyle,
     content_opacity: f32,
 ) -> egui::Ui {
+    let pod_h = outer_rect.height().max(row_h);
     // Clamp the label strip to the pod's own current width so a pod mid-
     // shrink (or a brand-new one still growing from near-zero) never draws
     // a label wider than the capsule it's supposed to sit inside.
     let label_w = LABEL_STRIP_W.min(outer_rect.width().max(0.0));
-    let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(label_w, row_h));
+    let label_rect = egui::Rect::from_min_size(outer_rect.min, egui::vec2(label_w, pod_h));
     let frame_radius = pod_corner_radius(row_h);
+    if pod_h > row_h + 0.5 && outer_rect.width() > 0.5 {
+        // The part of a tall pod below the row is outside whatever the host
+        // allocated for the ribbon, so nothing there would stop a click from
+        // reaching what lies underneath. Claim the pod's own rect; the
+        // controls drawn into it afterwards sit on top and still get theirs.
+        ui.interact(
+            outer_rect,
+            ui.id().with(("spatial_ui_kit::ribbon::tall_pod", label)),
+            egui::Sense::click_and_drag(),
+        );
+    }
     // Remembered for this frame so a flyout on the pod's first/last button
     // can sit flush with the pod's *outer* edge, not the button's (the pod
     // has end padding past its last button).
@@ -507,13 +569,21 @@ fn module_frame_at(
                 .add(shadow.as_shape(outer_rect, frame_radius));
         }
         ui.painter().rect_filled(outer_rect, frame_radius, pod_fill);
-        crate::theme::paint_edge(
-            ui.painter(),
-            outer_rect,
-            frame_radius,
-            (style.border_width, style.border),
-            style.rim.unwrap_or((0.0, egui::Color32::TRANSPARENT)),
-        );
+        let paint_frame = |ui: &egui::Ui| {
+            crate::theme::paint_edge(
+                ui.painter(),
+                outer_rect,
+                frame_radius,
+                (style.border_width, pod.border.unwrap_or(style.border)),
+                style.rim.unwrap_or((0.0, egui::Color32::TRANSPARENT)),
+            );
+        };
+        // The ordinary frame is painted under the tag, as it always was. A
+        // pod with its own frame colour paints it after the tag instead, so
+        // the colour runs round the whole pod, tag included.
+        if pod.border.is_none() {
+            paint_frame(ui);
+        }
         if label_w > 4.0 {
             let radius = frame_radius.round().clamp(0.0, u8::MAX as f32) as u8;
             let pill_radius = egui::CornerRadius {
@@ -526,10 +596,13 @@ fn module_frame_at(
                 ui,
                 label_rect,
                 &label.to_uppercase(),
-                style.label_foreground,
-                style.label_background,
+                pod.label_foreground.unwrap_or(style.label_foreground),
+                pod.label_background.unwrap_or(style.label_background),
                 pill_radius,
             );
+        }
+        if pod.border.is_some() {
+            paint_frame(ui);
         }
     }
     let content_left = (outer_rect.min.x + label_w + GAP).min(outer_rect.max.x);
@@ -539,7 +612,7 @@ fn module_frame_at(
             (outer_rect.max.x - content_left)
                 .max(0.0)
                 .min(content_w.max(0.0)),
-            row_h,
+            pod_h,
         ),
     );
     let mut child = ui.new_child(
@@ -1609,6 +1682,9 @@ struct PodAnim {
     /// used for the content cross-fade opacity; position/width are the
     /// springs above.
     content_started: f64,
+    /// The pod's own look as last drawn, so a pod on its way out keeps its
+    /// height and frame colour while it collapses.
+    style: PodStyle,
 }
 
 /// Per-row animation state, keyed by [`ribbon_panel_modules`]'s `row_id` in
@@ -1668,6 +1744,32 @@ pub fn ribbon_panel_modules<A: Clone>(
     morphs: &[(&'static str, &'static str)],
     host: &impl RibbonHost,
 ) -> Vec<A> {
+    ribbon_panel_modules_styled(ui, row_id, modules, morphs, &[], host)
+}
+
+/// [`ribbon_panel_modules`] with per-pod looks: `pod_styles` pairs a pod's
+/// label with the [`PodStyle`] it is drawn in. A pod with no entry is drawn
+/// as the row draws every pod, so `&[]` is exactly [`ribbon_panel_modules`].
+///
+/// A pod whose style is taller than the row hangs below it. The row
+/// allocates its ordinary height regardless, so the caller's layout under
+/// the ribbon is unchanged; the caller must leave the row unclipped below
+/// (a floating `Area` does) for the overhang to show.
+pub fn ribbon_panel_modules_styled<A: Clone>(
+    ui: &mut egui::Ui,
+    row_id: egui::Id,
+    modules: Vec<RibbonModule<A>>,
+    morphs: &[(&'static str, &'static str)],
+    pod_styles: &[(&'static str, PodStyle)],
+    host: &impl RibbonHost,
+) -> Vec<A> {
+    let style_of = |label: &str| -> PodStyle {
+        pod_styles
+            .iter()
+            .find(|(l, _)| *l == label)
+            .map(|(_, s)| *s)
+            .unwrap_or_default()
+    };
     let mut actions: Vec<A> = Vec::new();
     let button_size = host.button_size();
     let row_h = button_size.y + GAP * 2.0;
@@ -1752,16 +1854,19 @@ pub fn ribbon_panel_modules<A: Clone>(
                     x: seed.x,
                     w: seed.w,
                     content_started: now,
+                    style: PodStyle::default(),
                 }
             } else {
                 PodAnim {
                     x: crate::motion::SpringTween::new(*tx),
                     w: crate::motion::SpringTween::new(0.0),
                     content_started: now,
+                    style: PodStyle::default(),
                 }
             }
         });
         let pod = anim.pods.get_mut(p.label).expect("just inserted above");
+        pod.style = style_of(p.label);
         if reduce {
             pod.x.snap(*tx);
             pod.w.snap(*tw);
@@ -1817,10 +1922,21 @@ pub fn ribbon_panel_modules<A: Clone>(
             continue;
         }
         let x = pod.x.value(now);
-        let outer =
-            egui::Rect::from_min_size(row_origin + egui::vec2(x, 0.0), egui::vec2(w, row_h));
+        let outer = egui::Rect::from_min_size(
+            row_origin + egui::vec2(x, 0.0),
+            egui::vec2(w, pod.style.outer_height(row_h)),
+        );
         let content_w = (w - LABEL_STRIP_W - 2.0 * GAP).max(0.0);
-        module_frame_at(ui, outer, label, content_w, row_h, frame_style, 1.0);
+        module_frame_at(
+            ui,
+            outer,
+            label,
+            content_w,
+            row_h,
+            frame_style,
+            pod.style,
+            1.0,
+        );
     }
 
     for (p, (tx, tw)) in placed.into_iter().zip(targets.iter()) {
@@ -1835,8 +1951,10 @@ pub fn ribbon_panel_modules<A: Clone>(
         animating_any |= pod.w.is_animating(now) || pod.x.is_animating(now);
         let x = pod.x.value(now);
         let w = pod.w.value(now).max(0.0);
-        let outer =
-            egui::Rect::from_min_size(row_origin + egui::vec2(x, 0.0), egui::vec2(w, row_h));
+        let outer = egui::Rect::from_min_size(
+            row_origin + egui::vec2(x, 0.0),
+            egui::vec2(w, pod.style.outer_height(row_h)),
+        );
         let content_w = (w - LABEL_STRIP_W - 2.0 * GAP).max(0.0);
 
         let since_content = (now - pod.content_started).max(0.0);
@@ -1856,6 +1974,7 @@ pub fn ribbon_panel_modules<A: Clone>(
             content_w,
             row_h,
             frame_style,
+            pod.style,
             content_opacity,
         );
         match p.module {
@@ -1877,6 +1996,203 @@ pub fn ribbon_panel_modules<A: Clone>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// One frame of a two-pod row in a floating `Area` at the origin, with
+    /// `pod_styles` applied. Returns the Area's rect and the paint shapes.
+    fn styled_row_frame(
+        ctx: &egui::Context,
+        pod_styles: &[(&'static str, PodStyle)],
+        events: Vec<egui::Event>,
+        under_clicked: &mut bool,
+    ) -> (egui::Rect, Vec<egui::epaint::ClippedShape>) {
+        let mut area_rect = egui::Rect::NOTHING;
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 400.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                // Something clickable under the whole window, as a canvas is.
+                let under = ui.interact(
+                    ui.ctx().content_rect(),
+                    egui::Id::new("under"),
+                    egui::Sense::click(),
+                );
+                *under_clicked |= under.clicked();
+                area_rect = egui::Area::new(egui::Id::new("row"))
+                    .fixed_pos(egui::Pos2::ZERO)
+                    .show(ui.ctx(), |ui| {
+                        let modules: Vec<RibbonModule<i32>> = vec![
+                            RibbonModule::Custom {
+                                label: "Tall",
+                                width: 100.0,
+                                render: Box::new(|_| Vec::new()),
+                            },
+                            RibbonModule::Custom {
+                                label: "Plain",
+                                width: 100.0,
+                                render: Box::new(|_| Vec::new()),
+                            },
+                        ];
+                        ribbon_panel_modules_styled(
+                            ui,
+                            egui::Id::new("row_anim"),
+                            modules,
+                            &[],
+                            pod_styles,
+                            &TestHost,
+                        );
+                    })
+                    .response
+                    .rect;
+            },
+        );
+        (area_rect, output.shapes)
+    }
+
+    fn settle(ctx: &egui::Context, pod_styles: &[(&'static str, PodStyle)]) -> egui::Rect {
+        crate::motion::set_reduce_motion(ctx, true);
+        let mut rect = egui::Rect::NOTHING;
+        for _ in 0..3 {
+            rect = styled_row_frame(ctx, pod_styles, Vec::new(), &mut false).0;
+        }
+        rect
+    }
+
+    const TALL: PodStyle = PodStyle {
+        height: Some(104.0),
+        border: None,
+        label_background: None,
+        label_foreground: None,
+    };
+
+    #[test]
+    fn a_tall_pod_does_not_grow_the_row() {
+        let plain = settle(&egui::Context::default(), &[]);
+        let tall = settle(&egui::Context::default(), &[("Tall", TALL)]);
+        assert_eq!(plain.height(), 56.0, "row is one button plus two gaps");
+        assert_eq!(
+            tall, plain,
+            "a taller pod must leave the row's allocation alone"
+        );
+    }
+
+    #[test]
+    fn a_tall_pod_paints_below_the_row_and_its_neighbour_does_not() {
+        let ctx = egui::Context::default();
+        settle(&ctx, &[("Tall", TALL)]);
+        let (_, shapes) = styled_row_frame(&ctx, &[("Tall", TALL)], Vec::new(), &mut false);
+        let mut bottoms: Vec<f32> = Vec::new();
+        for clipped in &shapes {
+            if let egui::Shape::Rect(r) = &clipped.shape {
+                bottoms.push(r.rect.bottom());
+            }
+        }
+        assert!(
+            bottoms.iter().any(|b| (*b - 104.0).abs() < 0.01),
+            "the tall pod's capsule ends at its own height: {bottoms:?}"
+        );
+        assert!(
+            bottoms.iter().any(|b| (*b - 56.0).abs() < 0.01),
+            "the other pod keeps the row's height: {bottoms:?}"
+        );
+    }
+
+    #[test]
+    fn a_click_on_a_tall_pods_overhang_does_not_reach_what_is_under_it() {
+        let click = |pos: egui::Pos2| {
+            vec![
+                egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos,
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]
+        };
+        // Inside the tall pod, below the row.
+        let ctx = egui::Context::default();
+        settle(&ctx, &[("Tall", TALL)]);
+        let mut under = false;
+        styled_row_frame(
+            &ctx,
+            &[("Tall", TALL)],
+            click(egui::pos2(60.0, 90.0)),
+            &mut under,
+        );
+        styled_row_frame(&ctx, &[("Tall", TALL)], Vec::new(), &mut under);
+        assert!(!under, "the overhang must take the click");
+
+        // The same point with no tall pod is open canvas.
+        let ctx = egui::Context::default();
+        settle(&ctx, &[]);
+        let mut under = false;
+        styled_row_frame(&ctx, &[], click(egui::pos2(60.0, 90.0)), &mut under);
+        styled_row_frame(&ctx, &[], Vec::new(), &mut under);
+        assert!(
+            under,
+            "control: without the tall pod the click goes through"
+        );
+    }
+
+    #[test]
+    fn a_pods_own_frame_colour_is_painted_after_its_tag() {
+        // A frame is the stroked rect over a pod's whole width; a tag is the
+        // filled rect one label strip wide. (Colours are not compared: the
+        // test Area is still fading in, which scales every alpha.)
+        let order = |pod_styles: &[(&'static str, PodStyle)]| -> Vec<(usize, usize)> {
+            let ctx = egui::Context::default();
+            settle(&ctx, pod_styles);
+            let (_, shapes) = styled_row_frame(&ctx, pod_styles, Vec::new(), &mut false);
+            let rects: Vec<(usize, &egui::epaint::RectShape)> = shapes
+                .iter()
+                .enumerate()
+                .filter_map(|(i, c)| match &c.shape {
+                    egui::Shape::Rect(r) => Some((i, r)),
+                    _ => None,
+                })
+                .collect();
+            let mut pods = Vec::new();
+            for (tag_at, tag) in rects
+                .iter()
+                .filter(|(_, r)| (r.rect.width() - LABEL_STRIP_W).abs() < 0.01)
+            {
+                let frame_at = rects
+                    .iter()
+                    .find(|(_, r)| {
+                        r.stroke.color != egui::Color32::TRANSPARENT
+                            && r.rect.left() == tag.rect.left()
+                    })
+                    .map(|(i, _)| *i)
+                    .expect("every pod has a frame");
+                pods.push((*tag_at, frame_at));
+            }
+            pods
+        };
+        let style = PodStyle {
+            border: Some(egui::Color32::from_rgb(1, 200, 3)),
+            label_background: Some(egui::Color32::from_rgb(4, 60, 5)),
+            ..PodStyle::default()
+        };
+        let pods = order(&[("Tall", style)]);
+        assert_eq!(pods.len(), 2);
+        assert!(pods[0].1 > pods[0].0, "a styled frame wraps its tag");
+        assert!(
+            pods[1].1 < pods[1].0,
+            "an unstyled pod is painted as before"
+        );
+    }
 
     /// A minimal `RibbonHost` for headless testing -- a fixed 40x40 button,
     /// same as `RibbonHost::button_size`'s own default, and no theming
