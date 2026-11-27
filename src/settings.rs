@@ -409,6 +409,14 @@ pub trait SettingsHost {
         false
     }
 
+    /// One value column for the whole page (default: off, each tier sizes its
+    /// own). On, every tier's controls start at the same x, wide enough for the
+    /// widest label actually drawn last frame as well as the measured one, so a
+    /// label never pushes its own run's column out of line (SDB TASK-453).
+    fn one_value_column(&self) -> bool {
+        false
+    }
+
     /// A fixed label-column width, in body-text heights, shared by every tier
     /// (default: `None`, each tier sizes the column to its widest label).
     /// With `Some`, the column does not change width when the reader moves
@@ -923,6 +931,22 @@ fn comfortable_reading_width(ui: &egui::Ui) -> f32 {
 /// widgets stay narrow inside it (see [`CONTROL_WIDGET_WIDTH`]); only help
 /// text and a `Static` read-only value actually use the full column, and
 /// even help text further caps at [`comfortable_reading_width`].
+fn label_cell_ids() -> (egui::Id, egui::Id) {
+    (
+        egui::Id::new("spatial_ui_kit_settings_label_cell_seen"),
+        egui::Id::new("spatial_ui_kit_settings_label_cell_next"),
+    )
+}
+
+/// Records one drawn label cell's width for [`SettingsHost::one_value_column`].
+fn note_label_cell(ctx: &egui::Context, width: f32) {
+    let (_, next) = label_cell_ids();
+    ctx.data_mut(|d| {
+        let widest = d.get_temp::<f32>(next).unwrap_or(0.0);
+        d.insert_temp(next, widest.max(width));
+    });
+}
+
 fn measure_column_widths<A, Ctx>(
     ui: &egui::Ui,
     host: &impl SettingsHost,
@@ -955,6 +979,12 @@ fn measure_column_widths<A, Ctx>(
     let font_id = egui::TextStyle::Body.resolve(ui.style());
     let mut max_w: f32 = 0.0;
     walk(ui, &font_id, tree, &mut max_w);
+    if host.one_value_column() {
+        let (seen, _) = label_cell_ids();
+        let drawn: f32 = ui.ctx().data(|d| d.get_temp(seen)).unwrap_or(0.0);
+        // `drawn` already includes the 4-pt allowance added below.
+        max_w = max_w.max(drawn - 4.0);
+    }
     let unit = row_unit(ui);
     let label = match host.label_column_units() {
         // Half the pane at most, so a narrow window keeps room for controls.
@@ -1022,7 +1052,11 @@ pub fn render_content<A: Clone, Ctx>(
                     ui.scroll_to_rect(resp.rect, Some(egui::Align::TOP));
                 }
                 if open {
-                    let widths = measure_column_widths(ui, host, children);
+                    let widths = if host.one_value_column() {
+                        measure_column_widths(ui, host, tree)
+                    } else {
+                        measure_column_widths(ui, host, children)
+                    };
                     render_section_body(
                         ui,
                         ctx,
@@ -1056,6 +1090,15 @@ pub fn render_content<A: Clone, Ctx>(
     }
     ui.ctx()
         .memory_mut(|m| m.data.insert_temp(collapsed_key(), collapsed));
+    if host.one_value_column() {
+        // This frame's widest drawn label becomes next frame's floor.
+        let (seen, next) = label_cell_ids();
+        ui.ctx().data_mut(|d| {
+            if let Some(widest) = d.remove_temp::<f32>(next) {
+                d.insert_temp(seen, widest);
+            }
+        });
+    }
 }
 
 /// Walks one tier's subtree, rendering nested `Section`/`Group` headings
@@ -1223,6 +1266,9 @@ fn render_field_row<A: Clone, Ctx>(
         })
         .response
         .rect;
+    if host.one_value_column() {
+        note_label_cell(ui.ctx(), label_rect.width());
+    }
 
     let control_rect = ui
         .add_enabled_ui(field.enabled, |ui| {
