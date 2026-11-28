@@ -59,6 +59,8 @@ pub struct InterfaceTokens {
     pub primary: ColorToken,
     pub row_selected: ColorToken,
     pub pill_active: ColorToken,
+    pub switch_on: ColorToken,
+    pub switch_knob: ColorToken,
     pub pill: ColorToken,
     pub pill_edge: ColorToken,
     pub outline: ColorToken,
@@ -133,6 +135,11 @@ pub struct InterfaceColors {
     pub row_selected: egui::Color32,
     /// The active half of a two-state toggle (List / Thumbnails).
     pub pill_active: egui::Color32,
+    /// The track of an on/off switch that is on (the approved Properties
+    /// mock-up's bright blue).
+    pub switch_on: egui::Color32,
+    /// The knob of an on/off switch (white in the approved mock-up).
+    pub switch_knob: egui::Color32,
     /// The hover-action pill on a preview tile.
     pub pill: egui::Color32,
     /// The pill's near-black outline.
@@ -280,6 +287,8 @@ impl InterfaceColors {
             primary: Color32::from_rgb(0x55, 0x7E, 0xAF),
             row_selected: Color32::from_rgb(52, 74, 96),
             pill_active: Color32::from_rgb(61, 103, 133),
+            switch_on: Color32::from_rgb(96, 204, 254),
+            switch_knob: Color32::WHITE,
             pill: Color32::from_rgb(0x6B, 0x6B, 0x6B),
             pill_edge: Color32::from_rgb(0x05, 0x05, 0x05),
             outline: Color32::from_rgba_premultiplied(20, 20, 20, 20),
@@ -428,6 +437,8 @@ impl InterfaceTokens {
             primary: t(c.primary),
             row_selected: t(c.row_selected),
             pill_active: t(c.pill_active),
+            switch_on: t(c.switch_on),
+            switch_knob: t(c.switch_knob),
             pill: t(c.pill),
             pill_edge: t(c.pill_edge),
             outline: t(c.outline),
@@ -481,6 +492,8 @@ impl InterfaceTokens {
             primary: c(&self.primary, d.primary),
             row_selected: c(&self.row_selected, d.row_selected),
             pill_active: c(&self.pill_active, d.pill_active),
+            switch_on: c(&self.switch_on, d.switch_on),
+            switch_knob: c(&self.switch_knob, d.switch_knob),
             pill: c(&self.pill, d.pill),
             pill_edge: c(&self.pill_edge, d.pill_edge),
             outline: c(&self.outline, d.outline),

@@ -4,7 +4,7 @@
 //! On, with the active one filled, about the size of the title bar's small
 //! slider, the text at the 11 px minimum. The state reads by **position and
 //! text** (which segment is filled, and the word in it) as well as colour: On
-//! is filled with the theme's highlight, Off with a neutral chip grey.
+//! is filled with the theme's switch-on blue (`switch_on`, the same bright blue as the knob switch's track), Off with a neutral chip grey.
 //! One-shot actions ("Unhide all", "End temporary") stay buttons.
 //!
 //! Colours come from the theme ([`crate::interface_tokens::theme_colors`]);
@@ -37,7 +37,7 @@ fn palette(ui: &Ui) -> Palette {
         Some(c) => Palette {
             track: c.well,
             track_stroke: Stroke::new(1.0, c.outline),
-            on_fill: c.highlight,
+            on_fill: c.switch_on,
             // Dark ink on the bright highlight; the well is the darkest grey.
             on_ink: c.well,
             off_fill: c.chip_hover,
