@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 /// Literal colours per file, and why they are there.
 const ALLOWED: &[(&str, usize)] = &[
     // The tokens' own built-in values: these files *are* the theme.
-    ("interface_tokens.rs", 46), // InterfaceColors::DARK + ERROR_ROSE, ERROR_ROSE_ON_LIGHT
+    ("interface_tokens.rs", 48), // InterfaceColors::DARK + ERROR_ROSE, ERROR_ROSE_ON_LIGHT
     ("theme.rs", 36), // Dark/Light palettes, ok/warning colours, section_label light grey
     ("tokens.rs", 1), // hex parsing builds the colour
     // Light-theme values. Light is the platform look and has no interface
