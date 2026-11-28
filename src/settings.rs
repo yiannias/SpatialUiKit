@@ -58,6 +58,10 @@ pub enum SettingsNode<A, Ctx> {
     Custom {
         label: &'static str,
         render: Box<dyn Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync>,
+        /// TASK-489: draw at the same left edge as a `Field` label instead of
+        /// at the panel's raw left margin. `custom()` leaves this false, so
+        /// existing full-bleed rows are unchanged.
+        indented: bool,
     },
 }
 
@@ -69,6 +73,21 @@ impl<A, Ctx> SettingsNode<A, Ctx> {
         SettingsNode::Custom {
             label,
             render: Box::new(render),
+            indented: false,
+        }
+    }
+
+    /// Like [`Self::custom`], but indented to the section's field-label column
+    /// (TASK-489). Use for content subordinate to a heading -- an intro
+    /// sentence or a cluster of widgets that isn't naturally one `Field` row.
+    pub fn custom_indented(
+        label: &'static str,
+        render: impl Fn(&mut egui::Ui, &Ctx, &mut Vec<A>) + Send + Sync + 'static,
+    ) -> Self {
+        SettingsNode::Custom {
+            label,
+            render: Box::new(render),
+            indented: true,
         }
     }
     pub fn section(
@@ -641,14 +660,21 @@ const SECTION_ROW_LABEL_INDENT: f32 = OUTLINE_INDENT_UNITS * 3.5;
 /// further step beyond the normal section-row indent.
 const NESTED_ROW_LABEL_INDENT: f32 = OUTLINE_INDENT_UNITS;
 
+/// The shared section-row left edge: where every `Field` label and every
+/// indented `Custom` row starts (TASK-489). Public so hosts drawing their own
+/// composite rows can line up with the declarative ones.
+pub fn section_row_label_indent(ui: &egui::Ui) -> f32 {
+    row_unit(ui) * SECTION_ROW_LABEL_INDENT
+}
+
 fn field_label_indent(ui: &egui::Ui, field: &Field<impl Sized, impl Sized>) -> f32 {
-    row_unit(ui)
-        * (SECTION_ROW_LABEL_INDENT
-            + if field.nested {
+    section_row_label_indent(ui)
+        + row_unit(ui)
+            * if field.nested {
                 NESTED_ROW_LABEL_INDENT
             } else {
                 0.0
-            })
+            }
 }
 
 fn density_key() -> egui::Id {
@@ -1149,13 +1175,28 @@ fn render_section_body<A: Clone, Ctx>(
                 );
                 i += 1;
             }
-            SettingsNode::Custom { label, render } => {
+            SettingsNode::Custom {
+                label,
+                render,
+                indented,
+            } => {
                 let mark = host.row_mark(ui.ctx(), label);
                 let slot = mark.as_ref().map(|_| crate::search::reserve_row_band(ui));
                 let rect = ui
                     .scope(|ui| {
                         crate::search::apply_row_dim(ui, mark.as_ref());
-                        render(ui, ctx, actions)
+                        if *indented {
+                            // A child Ui shifted right keeps multi-line widget
+                            // clusters in one vertical column, at the exact
+                            // left edge a Field label uses (TASK-489).
+                            let mut child_rect = ui.available_rect_before_wrap();
+                            child_rect.min.x += section_row_label_indent(ui);
+                            let mut child =
+                                ui.new_child(egui::UiBuilder::new().max_rect(child_rect));
+                            render(&mut child, ctx, actions);
+                        } else {
+                            render(ui, ctx, actions);
+                        }
                     })
                     .response
                     .rect;
@@ -1702,6 +1743,64 @@ mod row_indent_tests {
                 "at {scale:.0}% the row label should start at least two characters after the heading; gap={gap:.1}, body={body_size:.1}"
             );
         }
+    }
+
+    /// TASK-489: content that isn't a `Field` (an intro sentence, a cluster of
+    /// widgets under its own sub-heading) can opt into the same section-row
+    /// indent, so it sits under the heading instead of at the panel's left
+    /// edge. `custom()` deliberately keeps the old full-bleed behaviour.
+    #[test]
+    fn indented_custom_rows_line_up_with_field_labels() {
+        let ctx = egui::Context::default();
+        let tree = vec![SettingsNode::section(
+            "profiles",
+            "Interaction Profiles",
+            vec![
+                Field::toggle("grid.visible", "Grid Visible", |_: &()| true, |_| ()),
+                SettingsNode::custom_indented("intro", |ui, _: &(), _| {
+                    ui.label("Choose a profile");
+                }),
+                SettingsNode::custom("note", |ui, _: &(), _| {
+                    ui.label("Full bleed note");
+                }),
+            ],
+        )];
+        let output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(1100.0, 760.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                let mut actions = Vec::new();
+                render_content(ui, &(), &Host, &tree, Some("profiles"), &mut actions);
+            },
+        );
+        let x = |target| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| text_x(&shape.shape, target))
+                .unwrap_or_else(|| panic!("{target} is rendered"))
+        };
+        let heading = x("Interaction Profiles");
+        let field = x("Grid Visible");
+        let indented = x("Choose a profile");
+        let plain = x("Full bleed note");
+        assert!(
+            (indented - field).abs() <= 1.0,
+            "indented custom {indented:.1} should line up with the field label {field:.1}"
+        );
+        assert!(
+            indented > heading,
+            "indented custom {indented:.1} should sit right of the heading {heading:.1}"
+        );
+        assert!(
+            plain < indented,
+            "plain custom rows stay full-bleed: {plain:.1} vs {indented:.1}"
+        );
     }
 }
 
