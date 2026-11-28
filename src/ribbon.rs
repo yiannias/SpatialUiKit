@@ -462,6 +462,42 @@ fn current_pod_rect_id() -> egui::Id {
     egui::Id::new("spatial_ui_kit::ribbon::current_pod_rect")
 }
 
+/// egui temp-data key for every pod drawn in the current frame.
+fn current_pod_rects_id() -> egui::Id {
+    egui::Id::new("spatial_ui_kit::ribbon::current_pod_rects")
+}
+
+/// All pod outer rects drawn in the previous frame, in draw order.
+///
+/// `current_pod_rect_id` only remembers the most recent pod (a flyout needs
+/// the one it grows out of). Hosts that paint behind the pods -- SDB's
+/// shared floating-surface backdrop, for one -- need every pod, and need
+/// them from the preceding frame so the backdrop `Area` can be registered
+/// before the ribbon `Area` paints its fills. Entries are tagged with the
+/// frame they were drawn in, so a host reading them at the start of a frame
+/// gets exactly the pods that are still on screen, not an accumulating
+/// history.
+pub fn last_frame_pod_rects(ctx: &egui::Context) -> Vec<egui::Rect> {
+    let previous = ctx.cumulative_frame_nr().saturating_sub(1);
+    ctx.data(|data| {
+        data.get_temp::<Vec<(u64, egui::Rect)>>(current_pod_rects_id())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|(drawn, rect)| (drawn == previous).then_some(rect))
+            .collect()
+    })
+}
+
+fn remember_pod_rect(ui: &egui::Ui, rect: egui::Rect) {
+    let frame = ui.ctx().cumulative_frame_nr();
+    ui.data_mut(|data| {
+        let entries =
+            data.get_temp_mut_or_default::<Vec<(u64, egui::Rect)>>(current_pod_rects_id());
+        entries.retain(|(drawn, _)| *drawn == frame);
+        entries.push((frame, rect));
+    });
+}
+
 /// egui temp-data key for that pod's fill color.
 fn current_pod_fill_id() -> egui::Id {
     egui::Id::new("spatial_ui_kit::ribbon::current_pod_fill")
@@ -543,6 +579,7 @@ fn module_frame_at(
     // can sit flush with the pod's *outer* edge, not the button's (the pod
     // has end padding past its last button).
     ui.data_mut(|d| d.insert_temp(current_pod_rect_id(), outer_rect));
+    remember_pod_rect(ui, outer_rect);
     // And its fill: the flyout paints in its own foreground `Area`, whose
     // style isn't the ribbon's themed one, so reading `window_fill()` there
     // gave a different color than the pod it grows out of.
