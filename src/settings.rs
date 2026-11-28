@@ -1191,9 +1191,12 @@ fn render_section_body<A: Clone, Ctx>(
                             // left edge a Field label uses (TASK-489).
                             let mut child_rect = ui.available_rect_before_wrap();
                             child_rect.min.x += section_row_label_indent(ui);
-                            let mut child =
-                                ui.new_child(egui::UiBuilder::new().max_rect(child_rect));
-                            render(&mut child, ctx, actions);
+                            // `scope_builder`, not a bare `new_child`: a bare
+                            // child never advances the parent cursor, so the
+                            // next row drew on top of this one.
+                            ui.scope_builder(egui::UiBuilder::new().max_rect(child_rect), |ui| {
+                                render(ui, ctx, actions);
+                            });
                         } else {
                             render(ui, ctx, actions);
                         }
@@ -1686,6 +1689,14 @@ mod row_indent_tests {
         }
     }
 
+    fn text_y(shape: &egui::Shape, target: &str) -> Option<f32> {
+        match shape {
+            egui::Shape::Text(text) if text.galley.text() == target => Some(text.pos.y),
+            egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| text_y(shape, target)),
+            _ => None,
+        }
+    }
+
     fn heading_to_row_gap(scale: f32) -> (f32, f32) {
         let ctx = egui::Context::default();
         let tree = vec![SettingsNode::section(
@@ -1785,6 +1796,17 @@ mod row_indent_tests {
                 .find_map(|shape| text_x(&shape.shape, target))
                 .unwrap_or_else(|| panic!("{target} is rendered"))
         };
+        let y = |target| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| text_y(&shape.shape, target))
+                .unwrap_or_else(|| panic!("{target} is rendered"))
+        };
+        assert!(
+            y("Full bleed note") > y("Choose a profile") + 5.0,
+            "the row after a custom_indented row must start below it"
+        );
         let heading = x("Interaction Profiles");
         let field = x("Grid Visible");
         let indented = x("Choose a profile");
